@@ -14,8 +14,9 @@
  * the factories are declarations, not promises, until their platform column is measured. Their
  * names are listed in abi/symbols-draft.txt; promotion moves a name into the promised symbol
  * list and its declaration into anira/abi/tensor.h and never renames it, while a signature may
- * still change before that. No umbrella header includes this file: include it by its own path.
- * In this pre-release every factory here is a field fill; no adapter consumes the arm.
+ * still change before that. anira/anira.h does not include this file: include it by its own
+ * path, or through anira/anira_all.h, which includes every header, the drafts among them. In
+ * this pre-release every factory here is a field fill; no adapter consumes the arm.
  */
 
 #include <stdint.h>

@@ -511,6 +511,9 @@ TEST(AbiHandlerStatic, EveryRefusalHasItsStatusAndStoresNothing) {
 }
 
 TEST(AbiHandlerStatic, ARefusalIsLoggedOncePerKind) {
+    // The records an earlier test of the binary left in the real-time queue go first: the
+    // collector counts this test's alone.
+    anira_drain_log();
     RecordCollector collector;
     const GateRig rig;
     ASSERT_TRUE(rig.ready());

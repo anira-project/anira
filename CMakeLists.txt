@@ -418,8 +418,10 @@ target_sources(anira_objects
         src/scheduler/Core.cpp
         src/scheduler/SessionElement.cpp
         src/scheduler/LatencyCalculator.cpp
+        src/scheduler/Warmup.cpp
 
         # Utils
+        src/utils/ContentHash.cpp
         src/utils/Logger.cpp
         src/utils/LogSinks.cpp
         src/utils/RtLatch.cpp

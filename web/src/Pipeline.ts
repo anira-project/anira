@@ -1,5 +1,5 @@
 import { type AniraBindings, heap } from './abi/bindings'
-import { ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST } from './abi/enums'
+import { ANIRA_PHASE_BIT, anira_phase } from './abi/enums'
 import type { InputSpec } from './staticInput'
 import { BUNDLED_ENGINE_EDGES } from './engines/ids'
 import type { ModelConfig, WithAbi } from './ModelConfig'
@@ -64,12 +64,22 @@ export type ProcessorOptions = {
    */
   phases: number
   /**
-   * `ANIRA_PROCESSOR_FLAG_*`: the processor's real-time promise, stated. Default
-   * `ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST` (a Hard contract requires it of a processor with a
-   * pre_process, post_process or reset hook, which run on the audio thread).
+   * The processor's real-time promise per phase (`anira::Processor::realtime_phases`), stated:
+   * an OR of `ANIRA_PHASE_BIT(phase)` over the hooks of pre_process, post_process,
+   * before_inference, after_inference and reset that allocate nothing, lock nothing and block on
+   * nothing. A Hard contract requires the bit of every pre_process, post_process and reset hook,
+   * which run on the audio thread. Default: those three bits (the C++ default promises nothing;
+   * the web's differs because its usual processor is a JavaScript hook on the audio thread).
    */
-  flags?: number
+  realtimePhases?: number
 }
+
+// The default promise of a JavaScript processor: the three phases a Hard contract runs on the
+// audio thread.
+const DEFAULT_REALTIME_PHASES =
+  ANIRA_PHASE_BIT(anira_phase.ANIRA_PHASE_PRE_PROCESS) |
+  ANIRA_PHASE_BIT(anira_phase.ANIRA_PHASE_POST_PROCESS) |
+  ANIRA_PHASE_BIT(anira_phase.ANIRA_PHASE_RESET)
 
 /**
  * A pipeline (`anira_pipeline`), the web twin of `anira::Pipeline`, one member per C entry:
@@ -158,7 +168,7 @@ export class Pipeline {
       this.pipeline,
       keyOf(name),
       options.phases,
-      options.flags ?? ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST
+      options.realtimePhases ?? DEFAULT_REALTIME_PHASES
     )
     return this
   }

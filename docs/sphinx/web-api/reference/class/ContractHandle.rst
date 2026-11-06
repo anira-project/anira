@@ -13,4 +13,4 @@ no limit, every edge admitted.
 
 .. js:autoclass:: ContractHandle.ContractHandle
    :short-name:
-   :members: fromUrl, fromJson, hard, hardHostBlocks, hardRingDtype, edgeCost, native, destroy
+   :members: fromUrl, fromJson, hard, hardHostBlocks, hardBudget, hardWarmup, hardRingDtype, edgeCost, native, destroy

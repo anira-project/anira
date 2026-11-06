@@ -899,9 +899,11 @@ void refuse_mixed_roots(const Json& root, std::initializer_list<const char*> v3_
     }
 }
 
+// Whether the process warned of an upgraded version 2 document (warn_upgraded_once).
+std::atomic_flag g_upgrade_warned = ATOMIC_FLAG_INIT;
+
 void warn_upgraded_once(const char* what) {
-    static std::atomic_flag warned = ATOMIC_FLAG_INIT;
-    if (!warned.test_and_set()) {
+    if (!g_upgrade_warned.test_and_set()) {
         ANIRA_LOG_WARNING(anira::log_group::k_config,
                           "version 2 configuration (%s) upgraded to version 3: max_inference_time, "
                           "warm_up and blocking_ratio moved to the contract; take it with "
@@ -1478,6 +1480,10 @@ namespace anira::capi {
 
 std::string model_config_json(const anira_model_config& model) {
     return model_to_json(model).dump();
+}
+
+void rearm_upgrade_warning() noexcept {
+    g_upgrade_warned.clear();
 }
 
 }  // namespace anira::capi

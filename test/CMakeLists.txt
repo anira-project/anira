@@ -135,6 +135,7 @@ endfunction()
 # forms, and the session runs on the 3.x configuration.
 
 anira_add_test_binary(test_utils WHITE_BOX
+	utils/test_ContentHash.cpp
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp
 	utils/test_Logger.cpp
@@ -160,6 +161,7 @@ anira_add_test_binary(test_scheduler WHITE_BOX
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
 	scheduler/test_TensorStems.cpp
+	scheduler/test_Warmup.cpp
 )
 # The C handler's body (src/capi/handler.h: the session a handler prepared, its ports) and the
 # engine room (src/engines/Adapter.h) the suites read white-box.

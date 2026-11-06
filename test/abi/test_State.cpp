@@ -52,6 +52,7 @@
 #include <vector>
 
 #include "../../extras/models/model_files.h"
+#include "../support/file_contracts.h"
 #include "../support/log_record_collector.h"
 #include "capi/handles.h"
 #include "capi/port.h"
@@ -278,8 +279,10 @@ private:
 anira::ContractHandle contract_of(anira_miss_policy policy,
                                   uint32_t host_block_max = k_hop,
                                   anira_miss_fn miss_fn = nullptr,
-                                  void* miss_user_data = nullptr) {
-    anira::ContractHandle contract = anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0);
+                                  void* miss_user_data = nullptr,
+                                  uint32_t warmup_iterations = 0) {
+    anira::ContractHandle contract =
+        anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0, warmup_iterations);
     contract.hard_host_blocks(1, host_block_max, k_rate);
     contract.hard_miss_fn(miss_fn, miss_user_data);
     return contract;
@@ -1374,7 +1377,8 @@ anira_status ANIRA_CALL ask_host_end(const anira_processor_ctx* ctx,
 void run_host_end_probe(HostEndLog& log) {
     anira_processor_desc processor = ANIRA_PROCESSOR_DESC_INIT;
     processor.user_data = &log;
-    processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
+    processor.realtime_phases =
+        ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS);
     processor.pre_process = &ask_host_end;
     processor.post_process = &ask_host_end;
     Rig rig(accumulator_model(), k_accumulator, {processor});
@@ -1985,8 +1989,9 @@ public:
     explicit RegisteredRig(const ModelConfig& model,
                            std::span<const Registration> registrations,
                            const std::vector<anira_processor_desc>& processors = {},
-                           uint32_t host_block_max = k_hop)
-        : m_context(4), m_host_block_max(host_block_max) {
+                           uint32_t host_block_max = k_hop,
+                           uint32_t warmup_iterations = 0)
+        : m_context(4), m_host_block_max(host_block_max), m_warmup_iterations(warmup_iterations) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         for (const Registration& registration : registrations) {
             const anira_engine_desc desc =
@@ -2028,7 +2033,8 @@ public:
     RegisteredRig& operator=(RegisteredRig&&) = delete;
 
     void prepare() {
-        const anira::ContractHandle contract = contract_of(ANIRA_MISS_ZEROS, m_host_block_max);
+        const anira::ContractHandle contract =
+            contract_of(ANIRA_MISS_ZEROS, m_host_block_max, nullptr, nullptr, m_warmup_iterations);
         m_err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(m_handler, contract.native(), &m_err), ANIRA_OK)
             << m_err.message;
@@ -2060,6 +2066,7 @@ public:
 private:
     Context m_context;
     uint32_t m_host_block_max;
+    uint32_t m_warmup_iterations;  ///< the contract's FIXED warm-up (0: none)
     anira_pipeline* m_pipeline = nullptr;
     anira_handler* m_handler = nullptr;
     anira_error m_err = ANIRA_ERROR_INIT;
@@ -2526,9 +2533,12 @@ uint32_t plan_engine(const anira_handler* handler) {
 /// is input slot 1 and `processed_data` output slot 0: the file's order).
 class EngineRig {
 public:
+    /// `as_written`: the contract file as it spells itself (the measured defaults), else with its
+    /// 2.x figures pinned (pinned_file_contract), what the closed-form cases need.
     explicit EngineRig(anira_engine engine,
                        uint32_t host_block_max = k_file_hop,
-                       std::vector<anira_processor_desc> processors = {})
+                       std::vector<anira_processor_desc> processors = {},
+                       bool as_written = false)
         : m_model(ModelConfig::from_file(k_stateful_accumulator_model_json))
         , m_candidates{anira_backend_id{.struct_size = sizeof(anira_backend_id),
                                         .engine = static_cast<uint32_t>(engine),
@@ -2536,7 +2546,8 @@ public:
                                         .engine_id = nullptr}}
         , m_processors(std::move(processors))
         , m_handler(m_context, m_model, m_candidates, m_processors)
-        , m_host_block_max(host_block_max) {
+        , m_host_block_max(host_block_max)
+        , m_as_written(as_written) {
         prepare();
     }
     ~EngineRig() = default;
@@ -2547,7 +2558,8 @@ public:
 
     void prepare() {
         anira::ContractHandle contract =
-            anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
+            m_as_written ? anira::ContractHandle::from_file(k_stateful_accumulator_contract_json)
+                         : anira_test::pinned_file_contract(k_stateful_accumulator_contract_json);
         contract.hard_host_blocks(1, m_host_block_max, k_file_rate);
         ASSERT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
         m_session = anira_test::session_of(m_handler.m_handler);
@@ -2592,6 +2604,7 @@ private:
     std::vector<anira_processor_desc> m_processors;
     anira_test::Handler m_handler;
     uint32_t m_host_block_max;
+    bool m_as_written;
     std::shared_ptr<anira::SessionElement> m_session;
 };
 
@@ -2667,22 +2680,27 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
     }
 }
 
-// The contract file asks for one warm-up inference. At this point of the runtime it runs
-// inside the engine's processor when the processor loads, on the processor's own buffers,
-// ahead of anira's feed and capture, so it reaches neither the state nor the stream:
-// after prepare the state is zeros, the first hop is the identity, and after n hops the
-// counter reads n, not n + 1. The case stands so that a warm-up that runs through the session
-// keeps the property.
+// The contract file runs the defaults (UNTIL_STABLE): four warm-up inferences or more, at prepare
+// through the session,
+// on the inference threads: anira feeds it the pair's read buffer and captures what it produces,
+// so the pass advances the state. The session's second sizing starts the stream over (both
+// buffers zeroed, a new generation, the exclusive engine reset at its first inference), so it
+// reaches neither the state nor the stream: after prepare the state is zeros, the first hop is
+// the identity, and after n hops the counter reads n, not n + 1.
 TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
+    ASSERT_TRUE(anira_test::fresh_core());
     for (const anira_engine engine : file_engines()) {
         SCOPED_TRACE(engine_word(engine));
-        EngineRig rig(engine);
+        EngineRig rig(engine, k_file_hop, {}, /*as_written=*/true);
         ASSERT_TRUE(rig.ready());
         const anira_handler* h = rig.get();
         const anira::capi::HardContract* hard = h->m_contract.hard();
         ASSERT_NE(hard, nullptr);
-        EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_FIXED) << "the contract file's fixed warm-up";
-        EXPECT_EQ(hard->m_warmup_iterations, 1U) << "the contract file's fixed warm-up";
+        EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_UNTIL_STABLE) << "the contract file's defaults";
+        EXPECT_EQ(hard->m_budget, ANIRA_BUDGET_MEASURED) << "the contract file's defaults";
+        const anira_plan_info& row = h->m_report.m_plans.at(anira_handler_get_plan(h));
+        EXPECT_GE(row.warmup_iterations, 4U) << "the pass ran through the session";
+        EXPECT_NE(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
         const std::vector<float> fresh = state_values(h, EngineRig::state_slot());
         ASSERT_EQ(fresh.size(), static_cast<size_t>(k_channels) * k_state_width);
         for (const float value : fresh) { EXPECT_EQ(value, 0.0F); }
@@ -2704,12 +2722,45 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
     }
 }
 
+// The registered twin: a FIXED 3 pass runs the accumulator engine through the session's pair
+// (three inferences, the counter advanced to 3), and after prepare the state is zeros again; the
+// stream's first inference reads zeros, the closed form holds from it, and after n hops the
+// counter reads n.
+TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOfARegisteredEngine) {
+    ASSERT_TRUE(anira_test::fresh_core());
+    AccumulatorEngine engine;
+    const std::array<Registration, 1> registrations{
+        {{.m_id = k_accumulator_id, .m_engine = &engine}}};
+    RegisteredRig rig(accumulator_model(k_accumulator_id), registrations, {}, k_hop, 3);
+    ASSERT_TRUE(rig.ready());
+    ASSERT_EQ(engine.m_calls.load(), 3) << "the pass ran through the registered engine";
+    anira_handler* h = rig.get();
+    const std::vector<float> fresh = state_values(h, k_accumulator.m_state_in);
+    ASSERT_EQ(fresh.size(), static_cast<size_t>(k_channels) * k_state_width);
+    for (const float value : fresh) { EXPECT_EQ(value, 0.0F); }
+
+    const size_t latency = anira_handler_get_latency(h, RegisteredRig::processed_slot());
+    const std::vector<size_t> sizes = hops(4);
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+    ASSERT_EQ(engine.m_calls.load(), 3 + 4);
+    EXPECT_EQ(engine.m_read_first.at(3).load(), 0.0F) << "the stream's first inference read zeros";
+    expect_closed_form(streams, latency);
+    const std::vector<float> state = state_values(h, k_accumulator.m_state_in);
+    for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+        EXPECT_EQ(state[(channel * k_state_width) + 1], static_cast<float>(sizes.size()))
+            << "channel " << channel;
+    }
+}
+
 // The ping-pong on every engine of this build the file names: through a processor's hooks the
 // descriptors a built-in adapter is handed alternate between the pair's two buffers exactly as
 // on the registered engine, whether the adapter binds them in place (ONNX Runtime both ways,
-// LibTorch's input) or copies them (LibTorch's output, ExecuTorch, TFLite, LiteRT); the closed
-// form holds.
+// LibTorch's input) or copies them (LibTorch's output, ExecuTorch, TFLite, LiteRT), from the
+// warm-up pass's inferences at prepare (the file's FIXED 1) on; the closed form holds.
 TEST(AbiState, TheStateAlternatesBetweenTwoBuffersOnEveryEngine) {
+    ASSERT_TRUE(anira_test::fresh_core());
     for (const anira_engine engine : file_engines()) {
         SCOPED_TRACE(engine_word(engine));
         PointerLog log;
@@ -2725,7 +2776,8 @@ TEST(AbiState, TheStateAlternatesBetweenTwoBuffersOnEveryEngine) {
         ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
         expect_closed_form(streams, latency, 0, k_file_hop);
         ASSERT_NO_FATAL_FAILURE(rig.settle());
-        ASSERT_NO_FATAL_FAILURE(expect_two_alternating_buffers(log, sizes.size()));
+        const size_t pass = h->m_contract.hard()->m_warmup_iterations;
+        ASSERT_NO_FATAL_FAILURE(expect_two_alternating_buffers(log, pass + sizes.size()));
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
     }
 }
@@ -2778,7 +2830,7 @@ public:
 
     anira_status prepare() {
         anira::ContractHandle contract =
-            anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
+            anira_test::pinned_file_contract(k_stateful_accumulator_contract_json);
         contract.hard_host_blocks(1, k_file_hop, k_file_rate);
         return m_handler.prepare(contract);
     }

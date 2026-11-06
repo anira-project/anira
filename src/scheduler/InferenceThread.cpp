@@ -7,9 +7,11 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -90,7 +92,17 @@ bool InferenceThread::start() {
     options.m_priority = thl::core::ThreadPriority::RealTime;
     options.m_name = "anira-inference";
     // False when already running or when the OS refused the thread; the caller decides.
-    return m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); });
+    if (!m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); })) {
+        return false;
+    }
+    // is_running() is set by the start itself, before the thread's body runs. Wait until the
+    // thread is inside run_loop() (or already left it): a session prepared after this returns
+    // finds a thread able to take its jobs, the warm-up pass's (Core::warm_up_plan) and the
+    // bounded waits' of new_data_request() included.
+    while (!is_in_loop() && is_running()) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+    return true;
 }
 
 void InferenceThread::request_stop() {
@@ -615,6 +627,11 @@ void InferenceThread::do_inference(
     // failed inference delivers zeros, the done signal is published below exactly as on
     // success, and the failure is ENGINE on the session's latch, logged on its first occurrence
     // since the latch's re-arm.
+    // The job's time on this thread, from the first hook to the last (the declared state's feed
+    // and capture, the processor's hooks, the engine call): what a prepare's warm-up pass reads
+    // and the latency model calls the inference time. The wait for an instance lies before it
+    // and is not in it.
+    const auto started = std::chrono::steady_clock::now();
     try {
         // The processor runner feeds the declared state inside before_inference, ahead of the
         // processor's own hook, and captures it inside after_inference, behind the processor's
@@ -678,6 +695,9 @@ void InferenceThread::do_inference(
                                session->m_session_id);
         }
     }
+    thread_safe_struct->m_inference_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                             std::chrono::steady_clock::now() - started)
+                                             .count();
     if (session->uses_semaphore()) {
         thread_safe_struct->m_done_semaphore.release();
     } else {

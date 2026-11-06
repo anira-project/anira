@@ -117,8 +117,7 @@ TEST(AdapterExecuTorch, TheMemoryPlanDecidesWhatIsBoundInPlace) {
                 "/model-pool/example-models/TypedGainNetwork/models/typed_gain_network_int16") +
                 (unplanned ? "_unplanned.pte" : ".pte"),
             {{1, 1, 512}, {1}},
-            {{1, 1, 512}, {1}},
-            1);
+            {{1, 1, 512}, {1}});
         for (auto* side : {&model.m_inputs, &model.m_outputs}) {
             for (anira::engine::TensorInfo& tensor : *side) { tensor.m_dtype = ANIRA_DTYPE_I16; }
         }
@@ -199,7 +198,6 @@ TEST(AdapterExecuTorch, BinaryModelDataLoadsFromMemory) {
                                                 "",
                                                 {{1, 1, static_cast<int64_t>(k_size)}},
                                                 {{1, 1, static_cast<int64_t>(k_size)}},
-                                                1,
                                                 "gain2"),
                                    bytes);
     ASSERT_NE(model.m_bytes, nullptr);
@@ -257,7 +255,6 @@ TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
                                        multifunction_model_path(),
                                        {{1, 1, static_cast<int64_t>(k_size)}},
                                        {{1, 1, static_cast<int64_t>(k_size)}},
-                                       1,
                                        "gain2");
     ASSERT_EQ(neutral.m_entry, "gain2");
     adapter->prepare(neutral);
@@ -310,7 +307,6 @@ TEST(AdapterExecuTorch, UnknownModelFunctionThrowsRuntimeError) {
                                       multifunction_model_path(),
                                       {{1, 1, static_cast<int64_t>(k_size)}},
                                       {{1, 1, static_cast<int64_t>(k_size)}},
-                                      0,
                                       "no_such_method"));
         FAIL() << "a missing method loaded";
     } catch (const anira::StatusError& error) {
@@ -371,6 +367,23 @@ TEST(AdapterExecuTorch, TheEngineInitSetsTheXnnpackOptionsOfTheProcess) {
         << "the registered backend answers";
     EXPECT_EQ(workspace_sharing_mode, 0) << "a workspace per delegate instance";
     EXPECT_FALSE(weight_cache_enabled);
+}
+
+// The engine object's first init shrinks the runtime's process-wide thread pool to the calling
+// thread: a kernel outside the delegate reaches it through parallel_for whatever
+// NoThreadPoolGuard says, and its workers would outlive every anira object; a statically linked
+// plugin then hangs in FreeLibrary on Windows, where the pool's static destructor joins them
+// under the loader lock (LibraryUnload.UnloadWithLiveSessionIsJoinedByHook on the static
+// Windows legs).
+TEST(AdapterExecuTorch, TheEngineInitLeavesTheRuntimesThreadPoolWithoutWorkers) {
+    const std::shared_ptr<anira::engine::BuiltinEngine> engine =
+        anira::engine::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH);
+    ASSERT_NE(engine, nullptr);
+    anira_init_info info = ANIRA_INIT_INFO_INIT;
+    info.log_level = static_cast<uint32_t>(anira::get_log_level());
+    engine->ensure_init(info);
+    EXPECT_EQ(anira::engine::executorch_thread_pool_threads(), 1U)
+        << "the calling thread alone, no worker threads";
 }
 
 #endif  // USE_EXECUTORCH

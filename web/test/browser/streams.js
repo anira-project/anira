@@ -16,6 +16,7 @@ import {
   ModelConfig,
   Pipeline,
   anira_miss_policy,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const RATE = 48000
@@ -67,6 +68,7 @@ const render = async (
     hostBlockMin: QUANTUM,
     hostRate: RATE,
     budgetMs: 2,
+    warmup: anira_warmup_mode.ANIRA_WARMUP_NONE,
   })
   anira.abi.anira_contract_hard_set_on_miss(contract.native(), onMiss)
   const handler = InferenceHandler.create(context, pipeline)

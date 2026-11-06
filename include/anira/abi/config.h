@@ -274,8 +274,11 @@ typedef struct anira_webgpu_desc {
  * 0.
  * @param name The canonical name: your name for this tensor, UTF-8, copied. Every other part of
  *        the configuration refers to the tensor by it (the per-entry name and layout
- *        records, the anchor, error messages); it is never handed to an engine. Unique
- *        across the inputs and outputs of one model config.
+ *        records, the anchor, error messages). It reaches the engine too, for a slot the
+ *        entry's tensors record does not name: a built-in engine whose side has names
+ *        binds the slot by it (anira_plan_slot.binding), and a custom engine's load record
+ *        carries it (anira_engine_load_info.input_names, output_names). Unique across the
+ *        inputs and outputs of one model config.
  * @param dtype The model's true dtype (section 1).
  * @param role STREAMED, BUFFER, STATIC or STATE (both halves of a declared state pair carry
  *        STATE).
@@ -464,16 +467,16 @@ ANIRA_API void ANIRA_CALL anira_tensor_spec_destroy(anira_tensor_spec* spec) ANI
 /**
  * @brief Creates a Hard (real-time) contract with the host blocks; the fixed-block host earns
  * the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on miss,
- * wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the host blocks left unset,
- * completed by hard_set_host_blocks or refused at prepare: 0, 0, 0 is legal here) or
- * both finite and > 0 with host_block_min <= host_block_max; host_block_min <
- * host_block_max allows every smaller block. A block need not be whole: a fractional
- * block (for a model with no stream at the host rate, e.g. a control-rate decoder at
- * samplesPerBlock / 2048.0) is taken as the rational the latency calculation recovers
- * from it (1e-6 relative, denominator at most 2^20), and the host moves an element of a
- * stream only once a whole one has accumulated: after its k-th call it has pushed and
- * popped floor(k * b) elements of a stream whose block is b, so one call carries
- * floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
+ * wait_ratio 0, no edge-cost limit (ANIRA_EDGE_UNKNOWN). The blocks are both 0 (the host
+ * blocks left unset, completed by hard_set_host_blocks or refused at prepare: 0, 0, 0 is
+ * legal here) or both finite and > 0 with host_block_min <= host_block_max;
+ * host_block_min < host_block_max allows every smaller block. A block need not be whole:
+ * a fractional block (for a model with no stream at the host rate, e.g. a control-rate
+ * decoder at samplesPerBlock / 2048.0) is taken as the rational the latency calculation
+ * recovers from it (1e-6 relative, denominator at most 2^20), and the host moves an
+ * element of a stream only once a whole one has accumulated: after its k-th call it has
+ * pushed and popped floor(k * b) elements of a stream whose block is b, so one call
+ * carries floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
  * @param host_block_min Smallest block the host callback delivers, in Time-axis elements of the
  *        anchor tensor; may be fractional (0.25: one element every fourth
  *        callback).
@@ -497,7 +500,8 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(double host_block_m
 
 /**
  * @brief Creates an Async contract: no deadline (the offline posture), FINISH on late, AUTO
- * priority, auto lanes and depth, POLLED delivery, PERMISSIVE edge cost.
+ * priority, auto lanes and depth, POLLED delivery, no edge-cost limit
+ * (ANIRA_EDGE_UNKNOWN).
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out.
@@ -529,9 +533,14 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_host_blocks(anira_cont
                                                                       double host_rate) ANIRA_NOEXCEPT;
 
 /**
- * @brief The per-inference budget of a Hard contract (v2's max_inference_time when EXPLICIT).
+ * @brief The per-inference budget of a Hard contract (v2's max_inference_time when EXPLICIT):
+ * the inference time the session's latency and entries are sized for. The warm-up pass
+ * also measures the inference time; a measured budget is the maximum of its last four
+ * inferences; under an explicit budget the timings are only reported. A MEASURED budget
+ * makes the latency depend on the machine; an explicit one gives a reproducible latency.
  * @param contract A Hard contract.
- * @param kind MEASURED (default) derives the budget during warmup; EXPLICIT reads explicit_ms.
+ * @param kind MEASURED (default) is what the warm-up pass measures at prepare; EXPLICIT reads
+ *        explicit_ms.
  * @param explicit_ms Per-inference budget in milliseconds, read for EXPLICIT only.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for an unknown kind or, with EXPLICIT, explicit_ms <= 0.
@@ -544,10 +553,13 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_budget(anira_contract*
                                                                  double explicit_ms) ANIRA_NOEXCEPT;
 
 /**
- * @brief The warmup policy of a Hard contract (v2's warm_up when FIXED).
+ * @brief The warm-up pass of a Hard contract at prepare (anira_warmup_mode; v2's warm_up when
+ * FIXED, which ran per instance at load, now per plan through the session). The warm-up
+ * pass also measures the inference time; a measured budget is the maximum of its last
+ * four inferences; under an explicit budget the timings are only reported.
  * @param contract A Hard contract.
- * @param mode UNTIL_STABLE (default), FIXED, or NONE (legal only with an EXPLICIT budget,
- *        checked at prepare).
+ * @param mode UNTIL_STABLE (default), FIXED, or NONE. A MEASURED budget needs a pass of at
+ *        least one inference: NONE and FIXED 0 are ANIRA_ERROR_CONFIG at prepare.
  * @param iterations Iterations for FIXED only.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for an unknown mode.

@@ -1,6 +1,8 @@
 #include "PluginParameters.h"
 
-juce::AudioProcessorValueTreeState::ParameterLayout PluginParameters::createParameterLayout() {
+juce::AudioProcessorValueTreeState::ParameterLayout PluginParameters::createParameterLayout(
+    const juce::StringArray& backend_types,
+    int default_backend) {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
@@ -33,11 +35,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginParameters::createPara
                                                                  latentAttributes));
 #endif
 
-    params.push_back(
-        std::make_unique<juce::AudioParameterChoice>(BACKEND_TYPE_ID,
-                                                     BACKEND_TYPE_NAME,
-                                                     backendTypes,
-                                                     backendTypes.indexOf(defaultBackend)));
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(BACKEND_TYPE_ID,
+                                                                  BACKEND_TYPE_NAME,
+                                                                  backend_types,
+                                                                  default_backend));
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(DRY_WET_ID,
                                                                  DRY_WET_NAME,

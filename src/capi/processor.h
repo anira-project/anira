@@ -86,6 +86,7 @@ public:
 
 private:
     anira_processor_desc m_desc;
+    std::string m_id;  ///< the descriptor's id, copied (m_desc.id names it; NULL for none)
     std::vector<std::string> m_kinds;
     std::vector<const char*> m_kind_pointers;
     mutable std::mutex m_init_mutex;

@@ -142,11 +142,13 @@ TEST(AbiContext, CreateAndDestroy) {
 }
 
 TEST(AbiContext, TheConfigIsCopied) {
+    // The sink outlives the context that delivers to it (a record an earlier test of the binary
+    // left in the queue reaches it at the drain below); the config does not.
+    Sink sink;
     anira_context* context = nullptr;
     {
         const Config config;
-        int user_data = 0;
-        EXPECT_EQ(anira_context_config_set_log_sink(config.m_config, &Sink::on_record, &user_data),
+        EXPECT_EQ(anira_context_config_set_log_sink(config.m_config, &Sink::on_record, &sink),
                   ANIRA_OK);
         context = create(config);
     }

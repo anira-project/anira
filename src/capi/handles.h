@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <variant>
@@ -32,6 +33,10 @@ namespace anira::capi {
 /// loaded model is pooled by beside its record (engine::Model::m_variant), since its load may
 /// read any of it.
 std::string model_config_json(const anira_model_config& model);
+
+/// Re-arms the once-per-process Warning of an upgraded version 2 document, so that the next
+/// upgrade warns again: a test's hook (a test binary that runs as one process upgrades many).
+void rearm_upgrade_warning() noexcept;
 
 /// One axis of a tensor spec; written says whether set_axis touched the slot.
 struct Axis {
@@ -57,8 +62,15 @@ public:
     const void* data() const noexcept { return m_bytes; }
     size_t size() const noexcept { return m_size; }
     anira_bytes_ownership ownership() const noexcept { return m_ownership; }
+    /// The content hash of the bytes (anira::content_hash, XXH64), computed at the first call
+    /// and kept: what the model's figure keys a bytes model by (FigureKey), so that identical
+    /// bytes are one model whoever owns them. Thread-safe; it runs at prepare, never on a
+    /// real-time path.
+    uint64_t content_hash() const;
 
 private:
+    mutable std::once_flag m_hashed;
+    mutable uint64_t m_hash = 0;
     std::vector<unsigned char> m_copy;
     const void* m_bytes = nullptr;
     size_t m_size = 0;
@@ -132,6 +144,14 @@ struct HardContract {
     /// Resolved at prepare (validate), where a name that is no Streamed output and a figure
     /// below the spec's latency are ANIRA_ERROR_CONFIG; at most INT32_MAX.
     std::map<std::string, uint32_t> m_latencies;
+
+    /// Whether the contract's warm-up runs a pass at prepare (Core::warm_up_plan):
+    /// UNTIL_STABLE, or FIXED with at least one inference. NONE and FIXED 0 run none, which a
+    /// MEASURED budget refuses (validate): the pass is what measures it.
+    bool warms_up() const noexcept {
+        return m_warmup == ANIRA_WARMUP_UNTIL_STABLE ||
+               (m_warmup == ANIRA_WARMUP_FIXED && m_warmup_iterations > 0);
+    }
 };
 
 /// The host-block rules of anira_contract_create_hard, shared by the two C setters, the JSON

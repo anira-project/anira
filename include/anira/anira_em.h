@@ -146,24 +146,24 @@ extern "C" {
  * @brief Fills a processor descriptor whose slots are the trampolines into the scope registry's
  * processor: one per bit of hook_mask, every other slot NULL, the release slot always
  * (it frees the record behind user_data, after the hook's release when
- * ANIRA_EM_PROCESSOR_HOOK_RELEASE is set), and flags processor_flags. The promise is
+ * ANIRA_EM_PROCESSOR_HOOK_RELEASE is set), and realtime_phases as given. The promise is
  * stated, never derived from the hook bits: under a Hard contract a processor with a
  * pre_process, post_process or reset hook runs it on the driving thread (the audio
- * worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG unless
- * processor_flags carries ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST. The descriptor is for
+ * worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG, naming the
+ * phase, unless realtime_phases carries that phase's bit. The descriptor is for
  * anira_pipeline_add_processor; one that is never added keeps its record, so
  * anira_em_pipeline_add_js_processor is the call JavaScript makes.
  * @param desc The caller's descriptor, overwritten from ANIRA_PROCESSOR_DESC_INIT.
  * @param js_key The key the hook receives, the processor's entry in the instance's registry.
  * @param hook_mask An OR of the ANIRA_EM_PROCESSOR_HOOK_* bits: the slots that cross into the
  *        scope registry's processor.
- * @param processor_flags The descriptor's flags, the processor's real-time promise, which
- *        JavaScript cannot write into the descriptor itself: an OR of
- *        ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST (the pre_process, post_process
- *        and reset hooks allocate nothing, lock nothing and block on nothing)
- *        and ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS (before_inference and
- *        after_inference likewise), or 0 for no promise. Stored as given: a bit
- *        the header does not define is refused by anira_pipeline_add_processor.
+ * @param realtime_phases The descriptor's realtime_phases, the processor's real-time promise
+ *        per phase, which JavaScript cannot write into the descriptor itself:
+ *        an OR of ANIRA_PHASE_BIT(phase) over the hooks that allocate nothing,
+ *        lock nothing and block on nothing (of pre_process, post_process,
+ *        before_inference, after_inference and reset), or 0 for no promise.
+ *        Stored as given: the bit of any other phase is refused by
+ *        anira_pipeline_add_processor.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask does not
  *         define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated.
  * @par Thread contract
@@ -173,7 +173,7 @@ extern "C" {
 ANIRA_API anira_status ANIRA_CALL anira_em_processor_desc_init(anira_processor_desc* desc,
                                                                uint32_t js_key,
                                                                uint32_t hook_mask,
-                                                               uint32_t processor_flags) ANIRA_NOEXCEPT;
+                                                               uint32_t realtime_phases) ANIRA_NOEXCEPT;
 
 /**
  * @brief anira_em_processor_desc_init followed by anira_pipeline_add_processor: the pipeline's
@@ -183,10 +183,11 @@ ANIRA_API anira_status ANIRA_CALL anira_em_processor_desc_init(anira_processor_d
  * @param pipeline The pipeline.
  * @param js_key As in anira_em_processor_desc_init.
  * @param hook_mask As in anira_em_processor_desc_init.
- * @param processor_flags As in anira_em_processor_desc_init: the processor's real-time promise.
+ * @param realtime_phases As in anira_em_processor_desc_init: the processor's real-time promise
+ *        per phase.
  * @param err Nullable.
  * @return As anira_em_processor_desc_init, then as anira_pipeline_add_processor
- *         (ANIRA_ERROR_INVALID_ARGUMENT for a flags bit the header does not define,
+ *         (ANIRA_ERROR_INVALID_ARGUMENT for a realtime_phases bit of no per-chunk phase,
  *         ANIRA_ERROR_INVALID_STATE when the pipeline already has a processor).
  * @par Thread contract
  * [main-thread]
@@ -195,7 +196,7 @@ ANIRA_API anira_status ANIRA_CALL anira_em_processor_desc_init(anira_processor_d
 ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipeline* pipeline,
                                                                      uint32_t js_key,
                                                                      uint32_t hook_mask,
-                                                                     uint32_t processor_flags,
+                                                                     uint32_t realtime_phases,
                                                                      anira_error* err) ANIRA_NOEXCEPT;
 
 /**

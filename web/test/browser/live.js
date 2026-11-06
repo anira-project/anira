@@ -29,6 +29,8 @@ import {
   anira_miss_policy,
   anira_status,
   measureRenderGeometry,
+  anira_budget_kind,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const MODELS = '../../extras/models/model-pool/'
@@ -112,7 +114,11 @@ const stream = async (anira, audio, geometry, { load = false } = {}) => {
       anira,
       new URL(`${MODELS}gain.contract.json`, import.meta.url)
     )
-  ).hardHostBlocks(geometry.quantum, geometry.burst, audio.sampleRate)
+  )
+    .hardHostBlocks(geometry.quantum, geometry.burst, audio.sampleRate)
+    // Pinned: the explicit budget without a warm-up (the page prepares before its Workers run).
+    .hardBudget(anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 5)
+    .hardWarmup(anira_warmup_mode.ANIRA_WARMUP_NONE)
   anira.abi.anira_contract_hard_set_on_miss(
     contract.native(),
     anira_miss_policy.ANIRA_MISS_ZEROS

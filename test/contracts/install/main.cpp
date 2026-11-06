@@ -63,11 +63,8 @@ int main() {
     pipeline.add_engine(std::make_shared<CopyEngine>());
     pipeline.add_inference(model);
     anira::InferenceHandler handler(context, pipeline);
-    handler.prepare(anira::Hard{.host_block_min = 64,
-                                .host_block_max = 64,
-                                .host_rate = 48000,
-                                .budget = std::chrono::milliseconds(5),
-                                .warmup = ANIRA_WARMUP_NONE});
+    // The library's defaults: the budget the warm-up pass measures, UNTIL_STABLE.
+    handler.prepare(anira::Hard{.host_block_min = 64, .host_block_max = 64, .host_rate = 48000});
 
     std::vector<float> data(64, 0.25F);
     float* plane = data.data();

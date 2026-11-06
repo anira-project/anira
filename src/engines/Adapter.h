@@ -142,6 +142,10 @@ struct Model {
     /// Keeps the bytes alive while the loaded model lives: an aliasing shared_ptr over the
     /// row's carrier.
     std::shared_ptr<const void> m_bytes_owner;
+    /// The content hash of the bytes (anira::content_hash) for a bytes model, else 0: what the
+    /// model's figure tells bytes models apart by. Not compared by operator==, which compares
+    /// the bytes by address (a pooled loaded model is the one over these bytes).
+    uint64_t m_bytes_hash = 0;
     std::string m_entry;  ///< the method or function of the file to run; empty for its default
     /// A custom engine's variant as canonical JSON text (anira::capi::model_config_json): its
     /// load may read the whole model config, so its loaded models are shared over an equal one
@@ -163,8 +167,6 @@ struct Model {
     /// model whose sessions are exclusive (declared stateful, or with a declared State pair),
     /// which run on what their prepare builds and never on a shared slot.
     uint32_t m_instances = 1;
-    uint32_t m_warm_up = 0;  ///< the inferences load runs on every executor before the first
-                             ///< real one
     /// The memory of the provider's device as the handler's context probed it: what the provider
     /// rule takes a device provider's class from. No part of the key: it is a fact of the
     /// machine, the same for every context that loads the record.
@@ -241,9 +243,11 @@ public:
     /// process of the first inference of a new stream (an exclusive session's executor alone
     /// is ever reset); nothing by default.
     virtual void reset(const anira_engine_ctx& ctx) noexcept { static_cast<void>(ctx); }
-    /// The FIXED warm-up of the record over this executor's own scratch, on the control thread
-    /// right after it was made; throws anira::StatusError(ANIRA_ERROR_ENGINE) with the
-    /// engine's text for an inference that fails. Nothing by default.
+    /// Inferences over this executor's own scratch (zeros in, the results discarded), on the
+    /// control thread right after it was made (ExecutorLoaded::k_creation_warm_up of them: no
+    /// executor is handed out cold); throws anira::StatusError(ANIRA_ERROR_ENGINE) with the
+    /// engine's text for an inference that fails. Nothing by default. The contract's warm-up is
+    /// not this: it runs at prepare, through the session (Core::warm_up_plan).
     virtual void warm_up(uint32_t iterations) { static_cast<void>(iterations); }
 
     /// The copies of a slot's memory this executor made since it was made, per side: an engine
@@ -599,19 +603,27 @@ public:
     /// The executor of a shared slot; the slot is below num_instances().
     Executor& executor(uint32_t instance) const noexcept { return *m_shared[instance]; }
 
+    /// The inferences every executor runs over its own scratch when it is made (Executor::
+    /// warm_up): its first-run cost (allocations, a runtime's first-call work) is paid at load or
+    /// at an exclusive session's prepare, never by a stream's first chunk, and a record whose
+    /// outputs the runtime cannot produce is refused there. A constant of the engine room, not the
+    /// contract's warm-up.
+    static constexpr uint32_t k_creation_warm_up = 1;
+
 protected:
     /// ANIRA_ERROR_INVALID_STATE naming the engine when its object was never initialised.
     void require_initialised() const override;
 
     /// One more executor over the loaded object, bound as the shared ones are, not yet warmed
-    /// up (the caller warms it): what an exclusive session's prepare takes when no spare is
-    /// left. Control thread; throws anira::StatusError with the message the caller reads.
+    /// up (the caller warms it, k_creation_warm_up): what an exclusive session's prepare takes
+    /// when no spare is left. Control thread; throws anira::StatusError with the message the
+    /// caller reads.
     virtual std::unique_ptr<Executor> make_executor() = 0;
 
     /// The end of every do_load: `probe`, the one executor do_load read the binding off (bound
     /// already), becomes the executor of shared slot 0, with one of make_executor's per further
     /// slot of the record, or, for a record without a shared slot, the spare the first exclusive
-    /// session takes; every one of them runs the record's FIXED warm-up here. Throws what
+    /// session takes; every one of them is warmed up here (k_creation_warm_up). Throws what
     /// make_executor and the warm-ups throw.
     void adopt(std::unique_ptr<Executor> probe);
 

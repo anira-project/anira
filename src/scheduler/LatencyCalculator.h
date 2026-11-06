@@ -28,7 +28,8 @@ struct HardContract;
  *   stream's samples per inference (the hop of the model config's anchor, which the
  *   validator resolves). @f$\rho@f$ is stored as a reduced fraction
  *   @f$p / q@f$ (see rationalize()).
- * - @f$\kappa = T \cdot f_s / (1000 \cdot R)@f$, the contract's budget @f$T@f$ (ms)
+ * - @f$\kappa = T \cdot f_s / (1000 \cdot R)@f$, the inference time @f$T@f$ (ms: the
+ *   contract's explicit budget, or what a warm-up pass measured under a MEASURED one)
  *   measured in hop periods (@f$f_s@f$ is the contract's host_rate, in samples of the reference
  *   stream per second).
  * - @f$\beta@f$, the contract's wait ratio: the driving thread waits @f$\beta@f$ host block
@@ -130,6 +131,24 @@ public:
                       uint32_t num_instances);
 
     /**
+     * @brief Computes every quantity for one Hard contract at a resolved inference time
+     *
+     * The constructor above with @p budget_ms in place of the contract's own budget: what a
+     * session is sized for (SessionElement::m_budget_ms), the measured figure of a warm-up pass
+     * under a MEASURED budget, which the contract does not hold.
+     *
+     * @param derived As above
+     * @param hard As above; its budget is not read
+     * @param num_instances As above
+     * @param budget_ms The inference time @f$T@f$ in ms
+     * @throws std::invalid_argument as above
+     */
+    LatencyCalculator(const capi::Derived& derived,
+                      const capi::HardContract& hard,
+                      uint32_t num_instances,
+                      double budget_ms);
+
+    /**
      * @brief The worst-case latency in hops, @f$\Lambda@f$ (fixed host block)
      *
      * @return Latency in hops, as a floating-point number
@@ -207,6 +226,38 @@ public:
      * @return True if the configuration is feasible
      */
     bool is_feasible() const;
+
+    /**
+     * @brief An inference time in hop periods of the reference stream, @f$\kappa = T \cdot f_s /
+     * (1000 \cdot R)@f$
+     *
+     * The one formula of @f$\kappa@f$: what the constructor sizes for, and the real-time factor of
+     * a plan row (anira_plan_info.rt_factor), its inference time over the anchor's hop period. A
+     * configuration keeps up while it stays below the instance count @f$n@f$ (is_feasible()).
+     *
+     * @param derived What the validator derived (the anchor and its hop)
+     * @param hard The contract's Hard half (its host_rate)
+     * @param time_ms The inference time @f$T@f$ in ms
+     * @return @f$\kappa@f$; 0 for an anchor without a stream
+     */
+    static double hop_periods(const capi::Derived& derived,
+                              const capi::HardContract& hard,
+                              double time_ms) noexcept;
+
+    /**
+     * @brief The budget a MEASURED prepare sizes the session for before its warm-up pass, in ms
+     *
+     * One clock step (clock_step_ns()), the smallest figure a pass can measure; or, when the
+     * clock steps finer, twice the largest inference time the sizing treats as an instant one
+     * (the batch delay's ceiling tolerance, 1e-6 host blocks of host_block_max: every time at
+     * or below it sizes the session as no inference time does). Every time a pass measures lies
+     * above that tolerance, so this budget sizes the session as every figure below the first
+     * struct edge does, and the sizing after the pass usually keeps the entry count.
+     *
+     * @param hard The contract's Hard half (its host_block_max and host_rate)
+     * @return The budget in ms, at least one clock step
+     */
+    static double pass_sizing_ms(const capi::HardContract& hard);
 
     /**
      * @brief The host block in hops, @f$\rho = B/R@f$ as a reduced fraction

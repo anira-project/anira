@@ -1,618 +1,126 @@
 Contributing to anira
 =====================
 
-We welcome contributions to anira! This document provides guidelines and instructions for contributing to the project.
+Bug reports, feature requests, documentation, examples and code are all welcome: open an issue
+or a pull request on `GitHub <https://github.com/anira-project/anira>`_.
 
-Ways to Contribute
-------------------
+.. toctree::
+   :maxdepth: 1
 
-There are many ways to contribute to anira:
+   contributing/testing
+   contributing/abi
 
-- **Bug reports**: Report issues you encounter
-- **Feature requests**: Suggest new features or improvements
-- **Documentation**: Help improve the documentation
-- **Code contributions**: Fix bugs or implement new features
-- **Examples**: Create example projects that use anira
-- **Testing**: Help test on different platforms and configurations
-
-Development Setup
+Development setup
 -----------------
 
-Prerequisites
-~~~~~~~~~~~~~
-
-- C++17 compatible compiler
-- CMake 3.14 or higher
-- Git
-
-Getting the Code
-~~~~~~~~~~~~~~~~
-
-1. Fork the anira repository on GitHub
-2. Clone your fork locally:
+You need a C++20 compiler (clang 20 for the real-time checks), CMake 3.18 or later (3.25 or later
+for the presets), Ninja, Python 3 with ``pyyaml`` (the ABI generator) and, for the web package,
+Node.js 20.19 or 22.12 and later.
 
 .. code-block:: bash
 
-    git clone https://github.com/YOUR-USERNAME/anira.git
-    cd anira
-    
-3. Add the original repository as an upstream remote:
-
-.. code-block:: bash
-
+    git clone https://github.com/<you>/anira.git && cd anira
     git remote add upstream https://github.com/anira-project/anira.git
 
-Building for Development
-~~~~~~~~~~~~~~~~~~~~~~~~
+    cmake --preset desktop-tests-debug              # Ninja, into build/desktop/Tests/Debug
+    cmake --build --preset desktop-tests-debug
+    ctest --preset desktop-tests-debug
 
-Build with all features enabled:
+    cmake --preset desktop-examples-debug           # the examples and the example models
+    cmake --build --preset desktop-examples-debug
 
-.. code-block:: bash
+A test-enabled configure fetches the example models into ``extras/models/``, pinned by the
+``ANIRA_MODELS_<NAME>_REF`` variables of ``extras/fetch-models.cmake``
+(``-DANIRA_MODELS_<NAME>_REF=<sha>`` overrides one). A fetched directory carries a
+``.anira-pin`` stamp and is fetched again when the stamp is missing or names another commit, so
+anything written into it is lost at the next bump. The RAVE model is checked against its pinned
+SHA256.
 
-    cmake . -B build -DCMAKE_BUILD_TYPE=Debug -DANIRA_WITH_TESTS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON -DANIRA_BUILD_DOCS=ON
-    cmake --build build
+Every configure preset writes ``compile_commands.json`` into its tree. The presets over
+``desktop-base`` and the wasm presets set ``ANIRA_LINK_COMPILE_COMMANDS=ON``, which links the tree
+configured last to ``build/compile_commands.json``, the database ``.clangd`` reads; the
+``clang-tidy``, ``docs``, ``ci-*``, sanitizer (``desktop-tests-*san``) and mobile presets leave the
+link alone. Configure ``desktop-tests-debug`` to work on the tests, ``wasm-debug`` for the
+Emscripten branches. For the wasm trees start clangd with ``--query-driver=**/em++`` (a
+command-line flag, never a ``.clangd`` key).
 
-Run tests to verify your setup:
+Code style
+----------
 
-.. code-block:: bash
-
-    cd build
-    ctest
-
-A test-enabled configure fetches the example-model fixtures into
-``extras/models/``, pinned to fixed commits by the ``ANIRA_MODELS_<NAME>_REF``
-variables in ``extras/fetch-models.cmake`` (override with
-``-DANIRA_MODELS_<NAME>_REF=<sha>``). Each fetched subdirectory carries a
-stamp (``.anira-pin``) naming the commit it was fetched at; a configure
-refetches a subdirectory whose stamp is missing or names another commit, so a
-bumped pin reaches an existing checkout too. The trees are snapshots: anything
-written into one is replaced at the next pin bump. The RAVE model is checked
-against its pinned SHA256 the same way.
-
-Coding Guidelines
------------------
-
-General
-~~~~~~~
-
-- Follow the existing code style
-- Write clear, readable, and maintainable code
-- Include appropriate documentation for public API
-- Add tests for new functionality
-
-Install tree
-~~~~~~~~~~~~
-
-``test/contracts/install`` is a minimal external project that consumes an installed anira package through ``find_package(anira)``. The ``build_install`` workflow installs anira into a fresh prefix in the merge queue (and on tags) and builds and runs it against that prefix; run the same flow locally with::
-
-    cmake --preset ci-install-shared
-    cmake --build build/ci/install-shared --target anira
-    cmake --install build/ci/install-shared --prefix $PWD/prefix
-    cmake -S test/contracts/install -B build-consumer -DCMAKE_PREFIX_PATH=$PWD/prefix
-    cmake --build build-consumer && ./build-consumer/consumer
-
-Anything a consumer needs — public headers, the exported target, tanh-lib's core component, engine runtimes — must be part of that tree.
-
-The ``ci-install-*`` presets build ONNX Runtime only. For an install tree with the default engine set, use the developer presets ``desktop-install-release`` / ``desktop-install-debug`` (``build/desktop/Install/<Config>``); without ``--prefix``, ``cmake --install`` places the tree in ``<build dir>/anira-<version>``.
-
-Code Style
-~~~~~~~~~~
-
-Formatting and linting are enforced by ``.clang-format``, ``.clang-tidy`` and ``.clangd`` in the repository root; the CMake modules under ``cmake/tanh/`` (platform detection, the symbol-export policy and its CTest check, git versioning, sanitizers, googletest/benchmark, Apple defaults, CPack, install RPATHs, the compile-database link) are the build-side counterpart. None of these files are **maintained in anira**: they are shared across the tanh-lab projects and installed verbatim from a pinned release of `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ (the canonical copies live in its ``clang/`` and ``cmake/`` directories). Do not edit them by hand and do not add files to ``cmake/tanh/`` — the ``tooling-config`` job in ``lint.yml`` (a merge-queue job) re-downloads the pinned release and fails if the committed files differ. The tanh-lib anira fetches carries its own copy of the modules, so anira and the pinned tanh-lib must move to the same tanh-tooling tag together.
-
-To update to a newer tanh-tooling release, run its installer with the new tag, commit the rewritten files, and bump the ``ref`` (and the workflow version) in ``.github/workflows/lint.yml`` to the same tag in the same commit:
+``.clang-format``, ``.clang-tidy``, ``.clangd`` and everything under ``cmake/tanh/`` are installed
+verbatim from a pinned `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ release. Never
+edit them and never add a file to ``cmake/tanh/``: the ``tooling-config`` job of ``lint.yml`` (in
+the merge queue) fails on any drift. Style changes go to tanh-tooling. To move to a new release, run its installer
+and bump the version and ``ref`` in ``.github/workflows/lint.yml`` in the same commit; the
+tanh-lib that anira fetches must pin the same tanh-tooling tag.
 
 .. code-block:: bash
 
     curl -fsSL https://raw.githubusercontent.com/tanh-lab/tanh-tooling/vX.Y.Z/install.sh | sh -s -- clang cmake
 
-Style changes themselves belong in tanh-tooling, not here.
-
-Running the format and tidy checks locally
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-CI runs both tools at LLVM 20 (``lint.yml``'s ``clang-format`` job, ``clang_tidy.yml``), and another major formats and flags differently. Where the system ships another LLVM, the PyPI wheels give the same major beside it:
+CI runs clang-format and clang-tidy at LLVM 20. Where the system has another major, the PyPI
+wheels give the same one (they match the major, not the patch: a finding of the wheel alone is
+worth a look, CI's run is the gate):
 
 .. code-block:: bash
 
-    python3 -m venv ~/.local/llvm20
-    ~/.local/llvm20/bin/pip install "clang-tidy==20.*" "clang-format==20.*"
+    python3 -m venv ~/.local/llvm20 && ~/.local/llvm20/bin/pip install "clang-tidy==20.*" "clang-format==20.*"
     export PATH="$HOME/.local/llvm20/bin:$PATH"
 
-The wheels match the major, not the patch release: PyPI's only LLVM 20 clang-tidy is 20.1.0,
-while CI installs Ubuntu's ``clang-tidy-20`` (20.1.8 at the time of writing). The static
-analyzer checks can differ between the two (20.1.0 reports a NULL dereference path that 20.1.8
-does not), so a finding the wheel alone reports is worth a look but is not a CI failure; CI's
-run is the one that gates.
-
-**clang-format.** Check mode over the tracked sources (a superset of the queue job's ``src/ include/ test/ examples/``):
-
-.. code-block:: bash
-
+    # check mode over the tracked sources
     git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs -P "$(nproc)" -n 20 clang-format --dry-run --Werror
 
-Fix only what the branch changes. ``<base>`` here and below is the branch your pull request targets: ``main``, or ``v3`` while 3.x is developed there.
-
-.. code-block:: bash
-
+    # format what the branch changes (<base>: main, or v2 for a 2.x fix); never the whole tree
     git diff --name-only --diff-filter=d origin/<base>... -- '*.h' '*.hpp' '*.c' '*.cpp' | xargs -r clang-format -i
 
-Never run ``clang-format -i`` over the whole tree. It rewrites files the branch does not own, and the generated ABI files are not clang-format's: ``tools/abi/gen.py`` is their formatter (see `The C ABI registry`_).
-
-**clang-tidy.** It reads the compile database of the ``clang-tidy`` preset's tree, which enables the tests, the benchmark examples (the fixture of ``examples/benchmark/fixture/``) and every engine so each analysed file has a compile command; build it once, since the sources include headers the build generates:
-
-.. code-block:: bash
-
-    cmake --preset clang-tidy
-    cmake --build build/clang-tidy
-
-A pull request checks the ``.cpp`` files it changes:
-
-.. code-block:: bash
-
+    # tidy the changed .cpp files against the clang-tidy preset's database
+    cmake --preset clang-tidy && cmake --build build/clang-tidy
     git diff --name-only --diff-filter=d origin/<base>... -- '*.cpp' \
         | xargs -r -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
 
-The merge queue sweeps ``SOURCES`` of ``.github/workflows/clang_tidy.yml`` (keep the list below in step with it):
+The generated ABI files are not clang-format's: ``tools/abi/gen.py`` formats them
+(:doc:`contributing/abi`). The merge queue sweeps every source of ``SOURCES`` in
+``.github/workflows/clang_tidy.yml``, so a header change can fail there on a file the pull request
+did not touch. Run that workflow by hand (``workflow_dispatch``) for a full sweep first, or locally
+over the same list:
 
 .. code-block:: bash
 
     find src/engines/ src/capi/ src/scheduler/ src/utils/ examples/benchmark/fixture/ \
-         test/engines/ test/scheduler/ test/utils/ \
-         test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp \
+         test/engines/ test/scheduler/ test/utils/ test/system/ test/support/ \
+         test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp \
          test/contracts/test_EngineLinkage.cpp test/*.cpp -name '*.cpp' -type f \
         | xargs -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
 
-The sweep is about an hour of CPU time for some 115 files: 3 minutes on 32 cores, and no core count brings it much below 2, since single files take that long. The time goes to the test files: one of ``test/abi/`` includes googletest and the whole C++ face and runs the static analyzer over dozens of test bodies, 80 to 125 s per file, where a library file takes 5 to 55 s. A pull request that changes a test file therefore spends minutes on it, not seconds.
+Keep that list in step with ``SOURCES``.
 
-Every configure preset exports ``compile_commands.json`` into its tree, and ``.clangd`` reads ``build/compile_commands.json``. The development presets (every ``desktop-*`` one and ``wasm-debug`` / ``wasm-release``) set ``ANIRA_LINK_COMPILE_COMMANDS=ON``, so each configure of one of them links its tree's database there (``tanh_link_compile_commands`` in ``cmake/tanh/compile-commands.cmake``) and clangd follows the tree configured last: configure ``desktop-tests-debug`` to work on the tests, ``wasm-debug`` to see the Emscripten branches, ``desktop-debug`` for the library alone. The ``clang-tidy``, ``docs``, ``ci-*``, sanitizer and mobile presets leave the link alone, so a tidy sweep or a sanitizer run does not move it. The wasm trees compile with ``em++``, which adds the wasm target and the emsdk sysroot itself; start clangd with ``--query-driver=**/em++`` so it asks ``em++`` for them. That is a command-line flag (it lets clangd run the compiler), never a ``.clangd`` key.
+Branches and pull requests
+--------------------------
 
-Documentation
-~~~~~~~~~~~~~
+``main`` carries the 3.x line: each change is a topic branch (``feat/<topic>``, ``fix/<topic>``)
+with a pull request against ``main``, gated by the workflows. ``v2`` carries the 2.x line (fixes
+only). On ``main`` the version comes from the ``v3*`` tags alone
+(``tanh_git_version(... MATCH "v3*")``): a checkout without a reachable v3 tag configures as
+``0.0.0`` with ABI ``0.0`` (``cmake/build-info.cmake`` derives the ABI pair from the tag).
 
-- Document all public APIs with Doxygen-compatible comments
-- Keep the documentation in sync with the code
-- Add examples to illustrate usage
+1. Branch, commit, and keep the branch current with ``git fetch upstream && git rebase
+   upstream/<base>``.
+2. Push to your fork and open the pull request against ``<base>``.
+3. Every change that adds or removes a feature or changes the API updates the Doxygen of the public
+   headers, the guides under ``docs/sphinx/`` and the ``[Unreleased]`` section of ``CHANGELOG.md``
+   (``**Breaking:**`` with the migration for a breaking change; ``AGENTS.md``).
+4. Add a test for every fix and feature (:doc:`contributing/testing`). A maintainer reviews and
+   merges through the merge queue.
 
-Testing
-~~~~~~~
-
-- Write unit tests for new functionality
-- Ensure all tests pass before submitting
-- If fixing a bug, add a test that reproduces the bug
-
-Test layout
-~~~~~~~~~~~
-
-``test/`` mirrors ``src/``: a test file lives in the directory of the unit it covers, and the
-directory decides which ``test_*`` binary compiles it (see ``test/CMakeLists.txt``).
-
-- ``test/<dir>/test_<Unit>.cpp`` covers ``src/<dir>/<Unit>.h`` — so ``scheduler/``, ``utils/``
-  and ``engines/`` (the engine adapters) each map one to one, and ``test/abi/`` covers the C ABI
-  (``include/anira/abi/``, implemented under ``src/capi/``). The core's C++ headers are private:
-  they live next to their sources under ``src/`` and are never installed; what anira installs
-  is the public header set of ``cmake/public-headers.cmake`` (the C umbrellas, ``anira/abi/``,
-  ``anira.hpp`` and ``compat/v2.hpp``), and a header under ``include/anira`` that is not listed
-  there fails the configure.
-- The ``anira.hpp`` handler (``test_InferenceHandler``) and the 2.x face
-  (``test_InferenceHandlerApi``) are covered by root-level ``test_*.cpp`` files, alongside the
-  cross-unit integration suites (``test_OneSidedStreaming``). A test file's binary follows the
-  API it targets, which the comment above the binaries in ``test/CMakeLists.txt`` partitions:
-  the struct-pool cases of ``test_OneSidedStreaming`` are
-  ``scheduler/test_OneSidedStreamingInternals.cpp``, in ``test_scheduler`` with the other
-  white-box suites.
-- ``test/contracts/`` holds checks of the build, link and packaging contracts rather
-  than of any one unit: engine linkage, the library-unload harness, the installed-package
-  consumers. The header gates, header isolation among them, live with the other ABI gates in
-  ``test/abi/``.
-- A binary is white-box or black-box (``anira_add_test_binary(<target> [WHITE_BOX] ...)``).
-  The white-box binaries (``test_utils``, ``test_scheduler``, ``test_engines``, ``test_abi``)
-  read anira's private classes, so they link the library's objects (``anira_objects``) with
-  ``src/`` on their include path and ``ANIRA_STATIC`` defined; everything else (``test_handler``,
-  the ABI gates, the unload harness, the install consumers, the examples) links ``anira::anira``
-  and sees only what a consumer sees.
-- ``test/support/`` is shared test infrastructure, not tests.
-
-CI tiers
-~~~~~~~~
-
-Which tests run when is defined in exactly four places, each the file CI itself
-consumes (or, for the last, GitHub itself) — read them there rather than in prose that
-could go stale:
-
-- **Which legs run on a pull request vs the merge queue**: the ``"pr"`` flags in
-  ``.github/*_matrix.json`` (one file per workflow; a row without ``"pr": true``
-  runs only in the queue). A one-line guard in ``build_test``'s ``result`` job
-  pins the static and tflite legs to the PR tier — the rows that carry
-  ExecuTorch and desktop-TFLite coverage.
-- **Which workflows are PR stubs**: the ``if: github.event_name != 'pull_request'``
-  guards — those workflows report their required status on a PR without running;
-  the merge queue is their real gate.
-- **What clang-tidy analyses**: ``.github/workflows/clang_tidy.yml``. A pull request
-  run checks only the ``.cpp`` files the pull request changes (``CHANGED_FILES_ONLY``);
-  the merge queue always sweeps every source, so a header or build change whose
-  finding sits in an unchanged translation unit fails there, not on the pull request.
-  A full sweep of a branch before the queue: run the workflow by hand
-  (``workflow_dispatch``).
-- **What the queue requires**: the ``<name> result`` contexts of the branch's ruleset
-  (repository settings, one ruleset per protected branch), each produced by the
-  ``result`` job at the bottom of its workflow. The ruleset is authoritative and the
-  branches' rulesets need not be identical.
-
-Branches
-~~~~~~~~
-
-``main`` carries the 2.x line. ``v3`` is the integration branch of the 3.x line (the
-versioned C ABI of ``docs/anira-v3-architecture.md``): every v3 change is a
-``feat/v3-<topic>`` branch with a pull request against ``v3``, gated by the same
-workflows and its own ruleset's required contexts (the ``pull_request`` filters name
-both branches), and ``main`` is merged into ``v3`` regularly. On ``v3`` the project
-version comes from the ``v3*`` tags only (``tanh_git_version(... MATCH "v3*")`` in the
-top-level ``CMakeLists.txt``), so a checkout without a reachable v3 tag configures as
-``0.0.0`` with ABI ``0.0``; ``cmake/build-info.cmake`` documents how the tag becomes
-``ANIRA_ABI_MAJOR``/``ANIRA_ABI_MINOR`` in the generated ``anira/abi/build_info.h``.
-
-The C ABI registry
-~~~~~~~~~~~~~~~~~~
-
-The C headers under ``include/anira/abi/`` are generated, never edited by hand. The
-single source of truth is ``abi/anira.yml``; ``python3 tools/abi/gen.py --repo . --write``
-(or the ``anira_abi_regen`` build target; needs ``pip install pyyaml``) validates the
-registry against the header conventions of ``docs/anira-v3-architecture.md`` and
-rewrites the headers, ``web/src/abi/enums.ts``, ``web/src/abi/layout.ts`` and
-``web/src/abi/bindings.ts`` (one typed method per entry point, see below), the symbol and
-wasm export lists, the tables under ``src/capi/generated/`` (the status texts, and
-``struct_sizes.inc`` behind ``anira_sizeof``) and ``test/abi/generated/``,
-``abi/layout-<major>.txt`` and the enum pages under ``docs/sphinx/api/enum/``. Commit the
-registry together with every regenerated file: the ``anira_abi_generate`` test and the
-``build_web`` workflow run ``gen.py --check`` and fail on any drift. ``gen.py --diff-against
-<git-ref>`` says whether the registry changes since a tag are appended (a minor or
-pre-release) or breaking (a major). The generated files carry a ``.clang-format`` with
-``DisableFormat`` (``include/anira/abi/``'s covers the ``draft/`` folder below it) and a
-``NOLINTBEGIN(readability-identifier-naming)`` block, so the pinned root configs stay
-untouched; ``layout.ts`` is emitted the way prettier prints it under ``web/.prettierrc``
-(check it with ``npx prettier --check src/abi/layout.ts``), and ``web/.prettierignore`` lists
-the generated ``enums.ts`` and ``bindings.ts``, so ``npm run format`` leaves them as written.
-
-``bindings.ts`` is the TypeScript face of the C ABI: the class ``AniraBindings`` over one
-module instance, one method per entry point under its C name, derived from the registry's
-types alone. The ``anira_error*`` parameter is made by the binding on the instance's stack and
-a failed ``anira_status`` throws an ``AniraError`` with the entry's message (an entry without
-one throws with the status text); a ``const char*`` argument is a JS string copied to the
-stack (with its ``size_t len`` computed when one follows); what an entry writes through a
-non-const pointer to a scalar, an enum, a handle pointer or a ``const char*`` is returned (one
-value, or an object of them by parameter name); a ``_to_json`` returns its text; an
-``anira_bool`` is a ``boolean``, a 64-bit integer a ``bigint``, a pointer or a size a
-``number``. An enumeration entry (a ``uint32_t* count`` the caller sets to its capacity) keeps
-its pointers as arguments, and a record the caller passes in (a tensor, a descriptor, a
-capability row) is a pointer. A new entry needs no TypeScript: regenerating gives it its
-method.
-
-Entity kinds are ``verbatim``, ``typedef``, ``define``, ``enum``, ``handles``, ``struct``,
-``union``, ``callback`` and ``function``. A struct field or a union arm has exactly one shape:
-``type`` (a C type, with an optional ``array``; in a Tier-1 record a fixed-width scalar or an
-earlier Tier-1 record), ``ptr`` (an ``ANIRA_PTR`` slot), ``fields`` (a named member of an
-unnamed struct type, as an arm only) or ``arms`` (a named member of an unnamed union type, in a
-Tier-1 struct only). Arms are never truly anonymous structs, which ISO C++ does not have and
-``-pedantic`` refuses. A ``union`` is a Tier-1 record (``tier: 1`` with ``size`` and
-``align``); its layout is the largest arm rounded up to the largest alignment, and the layout
-table has one row per member and, inside an unnamed struct or union, one per member of it,
-written as the C designator (``field anira_sync_token.u.vk.value offset 16 size 8``). An
-``array`` extent is 1 or more. ``struct_id: ANIRA_STRUCT_<X>`` links a record to its
-``anira_struct_id`` constant, which is what ``anira_sizeof`` answers from; every Tier-1 record
-must carry it, an id without a record is legal and answers 0. ``function_type: true`` makes a
-callback a function type (``typedef R (ANIRA_CALL name)(...)``), so that ``ANIRA_PTR(name,
-slot)`` is a function pointer (a function type sits in a pointer slot only, never in a member,
-a parameter or a return), and ``forward: true`` on the struct it names emits ``typedef struct X
-X;`` ahead of the first entity that names ``X``. ``padding_free: true`` on a Tier-2 struct
-makes ``test_layout.c`` assert that ``sizeof`` equals the sum of the member sizes on every
-target: a descriptor is copied by its setter within the caller's ``struct_size``, so padding a
-caller never wrote cannot become a slot later, and a tail slot that would leave a hole is
-followed by an explicit ``reserved``. A header with ``draft: true`` lives under
-``include/anira/abi/draft/`` (``file: draft/<name>.h``, guard ``ANIRA_ABI_DRAFT_*``) and holds
-``status: draft`` functions only, no record, enum or handle; its names go to
-``abi/symbols-draft.txt``, no umbrella includes it, and promotion moves a name between the two
-symbol lists and its declaration into a promised header without renaming it; a draft function
-is outside the promise, so ``--diff-against`` lists a changed, removed or promoted one as an
-addition, while a changed arm of a frozen union (an appended one included), a changed
-signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. A header
-with ``platform: emscripten`` is a companion of the ABI for one target (``file:
-anira_<name>.h`` with its own ``guard:``): it lands in ``include/anira/`` beside the umbrellas,
-its body sits inside ``#if defined(__EMSCRIPTEN__) || defined(DOXYGEN)`` (elsewhere it is an
-empty header, so a native consumer may include it, and the reference documents it from any
-host), it declares functions, callbacks, typedefs and defines only, and no
-header may include it. Its names go to ``abi/symbols-emscripten.txt`` and the WebAssembly
-export list, never to ``abi/symbols-<major>.txt``, ``abi/symbols-draft.txt``, the link probe
-or the layout test's include list; its defines reach ``web/src/abi/enums.ts`` like any
-other, and ``abi/anira.json`` records the key. The
-generator refuses a member name repeated within one C scope (the fields of a struct, the arms
-of a union, the fields of one arm; an ``ANIRA_PTR`` slot takes both ``name`` and
-``name_bits``), so ``--check`` exits 1 with ``duplicate field <name> in <scope>``; arms may
-reuse a name across arms, each being its own scope. Exit codes: 0 clean, 1 a registry error, 2
-drift under ``--check``, 3 usage.
-
-Every function entry of the registry carries a ``thread`` tag from the vocabulary of the
-architecture document (``main-thread``, ``driver-thread``, ``inference-thread``,
-``thread-safe``, with their state qualifiers), ``callback_safe`` where it applies and
-``nonblocking: true`` where the body is real-time; the generator refuses an entry without a
-tag, a 64-bit argument or an ``anira_error*`` on a nonblocking entry, and writes the tag as the
-``@par Thread contract`` line of the generated Doxygen. The vocabulary has one dual tag,
-``driver-thread | inference-thread``, for a callback that runs on the driving thread in some
-phases or contracts and on an inference thread in others (a processor callback, the six context
-accessors and the two default bodies it may call). For an entry under it the generator
-requires ``nonblocking: true`` exactly as it does for ``driver-thread``, since anira's side is
-real-time on both threads; for a callback typedef under it (``anira_processor_fn``) it requires
-no attribute, since whether a processor body is real-time is the processor's own promise
-(``anira_processor_desc.flags``), stated per processor and checked at prepare. An
-``inference-thread`` callback typedef (``anira_engine_process_fn``) carries no
-``nonblocking`` for the same reason: whether an engine's body is real-time is the engine's
-promise, the flag ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``. The two descriptors of the registry
-follow one naming scheme and one shape, which every later descriptor keeps: ``processor`` /
-``engine`` on every level that belongs to one side (``anira_processor_desc`` /
-``anira_engine_desc``, ``anira_processor_ctx`` / ``anira_engine_ctx``, the ``anira_processor_*_fn`` /
-``anira_engine_*_fn`` typedefs, ``anira::Processor`` / ``anira::Engine`` with ``ProcessorContext`` /
-``EngineContext``), no side on what the two lifecycles share (the records ``anira_init_info``
-and ``anira_prepare_info`` of ``anira/abi/lifecycle.h``, what the ``init`` and the ``prepare``
-slot of either descriptor receive, ``anira::InitInfo`` / ``anira::PrepareInfo``, and the enum
-``anira_phase``, which names the phases of both), the verb on
-the record of a level one side alone has (``anira_engine_load_info``,
-``anira::EngineLoadInfo``), ``FLAG`` in every flag define (``ANIRA_PROCESSOR_FLAG_*``,
-``ANIRA_ENGINE_FLAG_*``, so that no flag reads like a value of an enum), ``Prepared`` for what
-``prepare`` hands back and ``Loaded`` for what ``load`` hands back (the C ``prepared`` and
-``loaded`` pointers; the nested classes ``Processor::Prepared``, ``Engine::Loaded`` and
-``Engine::Prepared``), and one callback shape, from the outermost level in:
-``init(info, user_data)`` and ``release(user_data)`` once per carrier;
-``load(info, user_data, &loaded)`` and ``unload(loaded, user_data)`` once per loaded model,
-the engine's level alone; ``prepare(info, user_data, &prepared)`` for the processor,
-``prepare(info, loaded, user_data, &prepared)`` for the engine and
-``unprepare(prepared, user_data)`` once per handler; every per-chunk callback
-``(ctx, prepared, user_data)``, the four phases and ``reset`` of the processor, ``process`` and
-``reset`` of the engine. The provider is the engine's twin wherever the two-axis backend id
-travels: ``provider`` beside ``engine`` and ``provider_id`` beside ``engine_id``
-(``anira_backend_id``, ``anira_plan_info``, ``anira_engine_load_info``,
-``anira_provider_option_set``; on each end of ``anira_edge_info``, ``from_provider`` /
-``from_provider_id`` beside ``from_engine`` / ``from_engine_id`` and ``to_provider`` /
-``to_provider_id`` beside ``to_engine`` / ``to_engine_id``), a
-value of the enum or ``ANIRA_PROVIDER_CUSTOM`` beside a name in the engine's own vocabulary
-(the pair rule: an id if and only if the value is ``ANIRA_ENGINE_CUSTOM`` /
-``ANIRA_PROVIDER_CUSTOM``),
-and the JSON spellings of both enums live in one place, ``src/capi/words.h``, which the JSON
-reader and writer, the messages, the carriers and the adapters share. The 64-bit rule has a closed allowlist
-of six names: ``anira_now_ns`` and the factories ``anira_tensor_init_vulkan``,
-``anira_tensor_init_opaque_fd``, ``anira_tensor_init_wgpu_buffer``,
-``anira_tensor_init_dmabuf`` and ``anira_tensor_init_iosurface``, whose parameters are vendor
-handles and byte sizes at their wire width; the rationale is that nothing which produces such a
-handle runs in JavaScript, and a seventh name needs the same argument, not a convenience. The
-C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary, ``anira_abi_layout``,
-``anira_header_c11`` / ``anira_header_cxx17`` / ``anira_header_cxx20``,
-``anira_header_compat_with_hpp`` (the C umbrella, ``anira.hpp`` and the shim in one TU, both
-orders), the internal ``anira_header_scheduler_coexist`` (the private scheduler classes beside
-``anira.hpp``) and ``anira_abi_rt_contract``:
-nonblocking C functions calling every ``[callback-safe]`` tensor entry and the nonblocking
-Hard entries over host tensors, and a backup function of ``ANIRA_MISS_CALLBACK`` handed to
-its setter, compiled with ``-Werror=function-effects`` on clang 20 or later). While ``ANIRA_ABI_MAJOR`` is 0 the Tier-1
-layout table grows with the registry: ``gen.py --write`` rewrites ``abi/layout-0.txt`` with the
-headers, and ``anira_abi_layout`` proves that the compiler lays the records out as the
-generator's natural-alignment model says. From the v3.0.0 freeze on a Tier-1 layout may change
-only in a commit that changes ``ANIRA_ABI_MAJOR``. Three presence gates make sure every
-promised and draft entry point has a body on every leg: ``anira_abi_link`` (the generated
-``test/abi/generated/link_probe.c`` takes the address of every name and links ``anira::anira``
-like a consumer, on static and shared legs alike), ``anira_symbol_baseline``
-(``cmake/abi-symbols.cmake``: every name of both lists is in the shared library's real export
-table, read with ``nm`` or ``dumpbin``) and the WebAssembly link, whose
-``-sEXPORTED_FUNCTIONS`` is the generated ``web/src/abi/exports_wasm.txt``. So a registry
-entry, a draft one included, needs its body in the same pull request, on Emscripten too.
-``build_web`` builds the ``wasm-abi`` preset (``wasm-release`` plus ``ANIRA_WITH_ABI_TESTS``,
-the one test option WebAssembly allows), whose gates run under node:
-``cmake --build --preset wasm-abi --target anira_abi_wasm_gates`` runs ``anira_abi_layout``
-as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm32 column of
-the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the registry of
-``test/abi/em_smoke.pre.js``), which drives a JavaScript processor and a JavaScript engine through
-the trampolines of ``anira/anira_em.h``, ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.c``),
-a loop the host drives: a Wasm Worker the test creates runs ``anira_inference_thread_run_loop``
-(the park on the wake word, the notify, the ``has_exited`` stop), and ``anira_em_mutex`` (``test/abi/em_mutex.c``, issue #212), in which the main thread and
-a second thread of the ``-pthread`` link build, prepare and tear down handlers at the same time,
-so the core's mutexes must exclude across them, and ``anira_em_pool`` (``test/abi/em_pool.c``),
-a context of two inference threads that anira starts as Wasm Workers, each importing
-``test/abi/em_pool_module.mjs`` (a JavaScript engine on the scope's registry) before its loop,
-``anira_em_console`` (``test/abi/em_console.c``), a consumer of the archive with no export
-list that logs one warning and must see it once, through ``console.warn``, and
-``anira_em_runtime`` (``test/abi/em_runtime.c``), a library module that links the archive with
-none of AniraWeb's flags and must still run a timer callback after a first one, and
-``anira_em_oom`` (``test/abi/em_oom.c``), which fills its heap (a fixed 512 MiB of its own
-link; AniraWeb's grows) and must see a
-handler on the bundled gain config refused with ``ANIRA_ERROR_OUT_OF_MEMORY``, then prepare once
-the memory is back (it reads the model fixtures: ``cmake -P extras/fetch-models.cmake``);
-the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
-``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
-``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
-target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).
-
-The ABI gates
-~~~~~~~~~~~~~
-
-Six gates own the C ABI's contract (``docs/anira-v3-architecture.md``, section 6a); five run
-today, the sixth (an ``abidiff`` against the last tag) comes with the freeze.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 6 24 70
-
-   * - gate
-     - target
-     - what it proves
-   * - 1
-     - ``anira_symbol_baseline``
-     - The shared library's real export table (``nm`` or ``dumpbin``) is exactly
-       ``abi/symbols-0.txt`` ∪ ``abi/symbols-draft.txt``: a promised or draft name that is missing
-       fails, and so does any other exported name (a C++ symbol, an internal function, a
-       third-party one); only what the linker defines itself and, on PE, the exports the engine
-       archives force are tolerated. ``anira_abi_link`` is the presence check of the static legs,
-       the ``-sEXPORTED_FUNCTIONS`` link of AniraWeb that of WebAssembly. ``anira_exports``
-       (``test/contracts/unload``) forbids every engine runtime and every private dependency
-       (``thl``, ``moodycamel``, ``nlohmann``) in the library's and a plugin-shaped module's table.
-       ``anira_abi_namespaces`` (``cmake/abi-namespaces.cmake``) reads every symbol of the library,
-       the local ones included (a static archive's members, a shared library's full table, a
-       DLL's objects), and fails on any ``thl`` symbol outside ``thl::anira`` and on any
-       ``moodycamel`` one (anira's copies are ``thl::anira`` and ``anira_moodycamel``).
-   * - 3
-     - ``anira_abi_layout``
-     - Every Tier-1 ``sizeof`` / ``offsetof`` and enum width, natively and under node, against
-       ``abi/layout-0.txt``.
-   * - 4
-     - ``anira_header_c11``, ``anira_header_cxx17``, ``anira_header_cxx20``,
-       ``anira_header_compat``, ``anira_header_compat_with_hpp``, ``anira_header_isolation``
-     - Every public header alone and the umbrellas together, as C11 and C++17 with no anira define
-       under the strict flags, ``anira.hpp`` and the shim as C++20; ``anira_header_isolation``
-       compiles every public header with exactly the usage requirements of ``anira::anira`` and
-       fails when anything private resolves through them (``src/``, an engine, tanh-lib, the
-       queue, the JSON library, gtest, benchmark). On every preset: a build-driving CTest on
-       desktop, a member of ALL on Android, iOS and WebAssembly.
-   * - 5
-     - ``InstallConsumer`` (``test/contracts/install``), ``build_install``
-     - The installed package, shared and static: ``consumer`` (``anira.hpp``), ``consumer_c`` (pure
-       C11, the raw-C sequence of section 9 over a registered engine, plus gate 4's probes on the
-       installed include directories), ``consumer_compat`` (the 2.x shim), ``consumer_engine``
-       (an engine called through ``anira::onnxruntime``, and the negative check that its header
-       needs that target), ``consumer_tanh_first`` (every leg, shared and static: a host's own shared
-       tanh-lib, in its default namespace, linked before anira, whose logger never sees anira's
-       records; a shared libanira names no ``thl`` symbol) and the plugin-shaped module that exports no engine symbol and no
-       ``anira_*`` entry.
-   * - 6
-     - the RTSan leg, ``anira_abi_rt_contract``
-     - At run time the whole suite under RealtimeSanitizer (``desktop-tests-rtsan``; the unload
-       harness alone is left out, since an uninstrumented host cannot load an instrumented
-       module); at compile time ``-Werror=function-effects`` on the consumer-shaped C targets
-       (``anira_abi_rt_contract``, ``anira_header_c11``, ``anira_abi_link``, ``consumer_c``) and
-       on ``anira_header_cxx20`` / ``anira_header_compat``, where the compiler has the analysis
-       (upstream clang 20 or later).
-
-Reproducing CI locally
-~~~~~~~~~~~~~~~~~~~~~~
-
-Every leg runs the full test suite — a plain ``ctest`` in any test-enabled build
-reproduces what CI runs; the tiers differ only in which legs (configurations)
-build. Select a component with ``ctest -L test_scheduler`` (the label is the
-binary name).
-
-Do not re-test what tanh-lib already covers upstream: the threading primitives are thin
-aliases over ``thl::core``, which has its own suite, and ``anira::RingBuffer`` (``anira_ring``)
-holds one
-``thl::core::RingBuffer<T>`` per ring dtype. anira keeps only tests of its own contract on
-top of them (the ring's dtype tag, its refusals and its window pop; not the storage);
-coverage that belongs to the underlying container goes to tanh-lib.
-
-Sanitizers
-~~~~~~~~~~
-
-Three sanitizer presets gate the merge queue, and each reproduces locally with
-``cmake --preset <name> && cmake --build --preset <name> && ctest --preset <name>``:
-
-``desktop-tests-rtsan``
-   RealtimeSanitizer over the full engine set. Gates the ``ANIRA_NONBLOCKING``
-   (clang's ``nonblocking`` attribute) hot path — the C entries of
-   ``anira/abi/handler.h`` and the 2.x ``process``/``push_data``/``pop_data``/
-   ``reset`` — with no suppressions, so any allocation, lock, sleep, semaphore or
-   stream syscall reached from a real-time context fails. The compile-time half of the
-   same contract is ``anira_abi_rt_contract`` (``test/abi/test_rt_contract.c``): under
-   ``-Werror=function-effects`` a nonblocking body may call only entries whose declaration
-   is ``ANIRA_NONBLOCKING``, and a function converted to a nonblocking callback type
-   (``anira_miss_fn``) must be declared ``ANIRA_NONBLOCKING`` itself. Requires clang ≥ 20.
-
-``desktop-tests-asan``
-   AddressSanitizer + UndefinedBehaviorSanitizer. UndefinedBehaviorSanitizer includes
-   clang's function sanitizer: a call through a function pointer whose type is not the
-   callee's is reported, which is why the DLPack trampoline of ``src/capi/tensor.cpp``
-   carries ``no_sanitize("function")``.
-
-``desktop-tests-tsan``
-   ThreadSanitizer.
-
-The ASan and TSan presets build no engines: the prebuilt engine runtimes are
-uninstrumented, so a sanitized build linking them would report on frames it cannot
-see into. They are ``RelWithDebInfo`` with ``-DNDEBUG`` dropped from the build-type
-flags — ``-O0`` costs roughly 2.4× the test time for no extra signal, and
-``CMAKE_<LANG>_FLAGS`` cannot switch ``assert()`` back on because the build-type
-flags are appended last.
-
-Set ``UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`` when running the ASan
-preset by hand. UndefinedBehaviorSanitizer defaults to print-and-continue, so
-without it a diagnosed undefined behaviour scrolls past and ``ctest`` still passes.
-CI sets this for every leg.
-
-The individual sanitizers are also available as options on any configuration —
-``ANIRA_WITH_RTSAN``, ``ANIRA_WITH_ASAN``, ``ANIRA_WITH_UBSAN``, ``ANIRA_WITH_TSAN``,
-``ANIRA_WITH_LSAN`` — each of which also instruments the tanh-lib built alongside
-anira. ThreadSanitizer cannot be combined with AddressSanitizer or LeakSanitizer.
-
-.. note::
-
-   On macOS 26 with Apple clang, the ASan and TSan runtimes are broken: a
-   hello-world hangs under ``-fsanitize=address`` and crashes under
-   ``-fsanitize=thread``. Use a Homebrew LLVM toolchain with an explicit SDK path
-   (``-DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++``
-   ``-DCMAKE_OSX_SYSROOT=$(xcrun --show-sdk-path)``) to run these presets locally.
-   LeakSanitizer does not exist on macOS at all.
-
-Submitting Changes
-------------------
-
-Pull Request Process
-~~~~~~~~~~~~~~~~~~~~
-
-1. Create a new branch for your changes:
+Building the documentation
+--------------------------
 
 .. code-block:: bash
 
-    git checkout -b feature/your-feature-name
+    cmake --preset docs                 # -DANIRA_WITH_DOCS=ON, every engine off
+    cmake --build --preset docs         # the sphinx-docs target
 
-2. Make your changes and commit them:
-
-.. code-block:: bash
-
-    git commit -m "Description of your changes"
-
-3. Keep your branch updated with upstream:
-
-.. code-block:: bash
-
-    git fetch upstream
-    git rebase upstream/main
-
-4. Push your branch to your fork:
-
-.. code-block:: bash
-
-    git push origin feature/your-feature-name
-
-5. Create a pull request from your branch to the main repository
-
-6. Address any feedback from code reviews
-
-Code Review
-~~~~~~~~~~~
-
-All submissions require review before being merged. We use GitHub pull requests for this purpose. Consult GitHub Help for more information on using pull requests.
-
-Building Documentation
-----------------------
-
-To build the documentation locally:
-
-.. code-block:: bash
-
-    cmake . -B build -DCMAKE_BUILD_TYPE=Release -DANIRA_BUILD_DOCS=ON
-    cmake --build build --target sphinx-docs
-
-The documentation will be built in `build/docs/sphinx/html/`.
-
-Getting Help
-------------
-
-If you have questions or need help with contributing:
-
-- Open an issue on GitHub
-- Reach out to the maintainers
-- Check the troubleshooting guide
-
-Thank you for contributing to anira!
+The pages land in ``build/docs/docs/sphinx/html/``. On any other tree, ``-DANIRA_WITH_DOCS=ON`` and
+the ``sphinx-docs`` target build them into that tree's ``docs/sphinx/html/``. The build runs
+Doxygen, Breathe and TypeDoc (through sphinx-js), with the Python packages in a virtual
+environment it creates in the build tree.

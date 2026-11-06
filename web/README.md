@@ -39,7 +39,7 @@ const anira = await Anira.create()
 anira.setLogSink()
 anira.startLogPump()
 
-const context = Context.create(anira) // a pool of Wasm Workers, half the cores
+const context = Context.create(anira) // the Workers start here: half the cores
 // The same files a native host loads; the ONNX entry's model file is fetched beside the config.
 const model = await ModelConfig.fromUrl(anira, '/models/gain.model.json')
 await audioContext.resume() // the geometry is measured on a running context
@@ -48,8 +48,12 @@ const contract = (
   await ContractHandle.fromUrl(anira, '/models/gain.contract.json')
 ).hardHostBlocks(geometry.quantum, geometry.burst, audioContext.sampleRate)
 const handler = InferenceHandler.create(context, Pipeline.create(anira).addInference(model))
-const report = handler.prepare(contract) // the plans, as anira::InferenceHandler::prepare
-console.log(`${report.numPlans()} plan(s), latency ${handler.getLatency()} samples`)
+await context.ready() // the prepare's warm-up runs on the Workers: wait until they run
+const report = handler.prepare(contract) // measured budget, UNTIL_STABLE: the contract's defaults
+const row = report.plans()[handler.getPlan()]
+console.log(
+  `latency ${handler.getLatency()} samples, real-time factor ${row.rtFactor}, verdict ${row.rtVerdict}`
+)
 
 const audioNode = await handler.createAudioNode(audioContext, { params: [1] })
 audioNode.params.get(1)!.value = 0.5 // the model's Static gain

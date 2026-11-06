@@ -1,10 +1,7 @@
 Latency
 =======
 
-Overview
---------
-
-Latency is a critical factor in real-time audio processing applications. anira computes the latency of every session in closed form, together with the number of inference slots the session allocates and the sizes of its ring buffers. The calculation lives in ``anira::LatencyCalculator``; ``anira::SessionElement`` applies its result in ``prepare()`` (both private classes of the scheduler, ``src/scheduler/``).
+anira computes the latency of every session in closed form, together with the number of inference slots the session allocates and the sizes of its ring buffers. The calculation lives in ``anira::LatencyCalculator``; ``anira::SessionElement`` applies its result in ``prepare()`` (both private classes of the scheduler, ``src/scheduler/``).
 
 The model behind the formulas is the scheduler's actual worst case:
 
@@ -17,7 +14,7 @@ The model behind the formulas is the scheduler's actual worst case:
 Quantities
 ----------
 
-For a session with reference stream size :math:`R` (the hop of the model's anchor, see the usage guide, section 4.1), host block :math:`B` (the contract's ``host_block_max``) and host rate :math:`f_s` (the contract's ``host_rate``), both stated in samples of the reference stream, the calculator derives:
+For a session with reference stream size :math:`R` (the hop of the model's anchor, :ref:`usage-flexible-windows`), host block :math:`B` (the contract's ``host_block_max``) and host rate :math:`f_s` (the contract's ``host_rate``), both stated in samples of the reference stream, the calculator derives:
 
 .. list-table::
    :header-rows: 1
@@ -31,12 +28,12 @@ For a session with reference stream size :math:`R` (the hop of the model's ancho
      - the host block measured in hops, as a reduced fraction
    * - :math:`\kappa`
      - :math:`T f_s / (1000 R)`
-     - the contract's budget :math:`T` (ms) measured in hop periods
+     - the inference time :math:`T` (ms: the contract's explicit budget, or under a measured budget the slowest plan's warm-up figure) measured in hop periods
    * - :math:`\tau`
      - :math:`\kappa / \rho`
      - the inference time measured in host blocks
    * - :math:`\beta`
-     - ``wait_ratio`` (the 2.x ``blocking_ratio``)
+     - ``wait_ratio``
      - the fraction of a host block a ``_wait`` entry waits for results; the credit applies to the latency whether or not the host calls one
    * - :math:`n`
      - the session's instances
@@ -55,9 +52,9 @@ Repackaging a stream from host blocks of :math:`b` samples into model blocks of 
 
 .. math::
 
-   \Delta = P - \gcd(b, P),
+   \Delta = P - \gcd(b, P).
 
-which replaces the PortAudio-style loop over every multiple of :math:`b` below :math:`\mathrm{lcm}(b, P)` that anira used before. In hop units the adaptation is :math:`1 - 1/q` for every stream at once, because :math:`\gcd(\rho P, P) = P / q` whenever the block :math:`\rho P` is a whole number of samples. If the host block may vary in size (``host_block_min`` below ``host_block_max``) or is a fractional number of samples on a stream, the worst case is :math:`P - 1` samples [RG26]_, section 5.
+In hop units the adaptation is :math:`1 - 1/q` for every stream at once, because :math:`\gcd(\rho P, P) = P / q` whenever the block :math:`\rho P` is a whole number of samples. If the host block may vary in size (``host_block_min`` below ``host_block_max``) or is a fractional number of samples on a stream, the worst case is :math:`P - 1` samples [RG26]_, section 5.
 
 Inference-caused latency
 ------------------------
@@ -80,7 +77,7 @@ and since :math:`(k+1)\rho - \lfloor \rho (k+1-d_m) \rfloor = \rho\, d_m + \math
 
    \Lambda \;=\; \frac{q - 1}{q} \;+\; \max_{m \ge 0} \left[ \rho\, d_m - m n \right].
 
-The first term is the buffer adaptation, the second the inference queue. The maximum exists if and only if :math:`\kappa < n`: every hop of audio brings :math:`\kappa` hop periods of inference work for :math:`n` processors, and beyond that the queue grows without bound (``LatencyCalculator::is_feasible`` is false, ``prepare()`` logs a warning, and the values describe one host block processed by an idle pool). Only batches with :math:`m < \rho / (n - \kappa)` can contribute, so the search is finite; in the common case :math:`\rho \lceil \tau \rceil \le n` the maximum is the first term, :math:`\rho \lceil \tau - \beta \rceil`.
+The first term is the buffer adaptation, the second the inference queue. The maximum exists if and only if :math:`\kappa < n`: every hop of audio brings :math:`\kappa` hop periods of inference work for :math:`n` processors, and beyond that the queue grows without bound (``LatencyCalculator::is_feasible`` is false, the handler's prepare logs a Warning that the pool cannot keep up, and the values describe one host block processed by an idle pool). :math:`\kappa` is also the **real-time factor** a plan row reports (``anira_plan_info.rt_factor``, :ref:`usage-plan-report`), from the plan's own inference time, and :math:`\kappa / n` its load: below 0.75 comfortable, below 1 marginal, at 1 or more not real-time (the infeasible case here). Only batches with :math:`m < \rho / (n - \kappa)` can contribute, so the search is finite; in the common case :math:`\rho \lceil \tau \rceil \le n` the maximum is the first term, :math:`\rho \lceil \tau - \beta \rceil`.
 
 The latency of output tensor :math:`i` in its own samples is :math:`P_i \Lambda`. It is the same number of hops for every output, and it is rounded down because the host pops whole samples only (``LatencyCalculator::get_output_latencies`` returns the unrounded value).
 
@@ -105,7 +102,7 @@ When the inference does not keep up
 
 The latency holds while the inferences take at most the budget the contract states. When one runs far over it (a stalled machine, a model slower than declared), two things happen, and neither moves the stream:
 
-- A block whose inference has not been collected when the host pops it is a **miss**: the entry returns ``ANIRA_MISSED`` with a count of ``0`` and the miss policy fills the block (usage guide, section 1.3). The late result is discarded when it arrives, and so is every other late sample: a delivered block is the stream at its latency, never late.
+- A block whose inference has not been collected when the host pops it is a **miss**: the entry returns ``ANIRA_MISSED`` with a count of ``0`` and the miss policy fills the block (:ref:`usage-miss-policy`). The late result is discarded when it arrives, and so is every other late sample: a delivered block is the stream at its latency, never late.
 - A hop that finds every inference slot busy is **dropped**: it gets no inference and costs exactly one hop of the miss policy's fill at its own stream position, behind the inferences submitted before it; every other hop of the call is dropped the same way, so the input stays on its hop grid. ``rt_error`` reports ``ANIRA_ERROR_CAPACITY``.
 
 Every hop of input therefore yields exactly one hop of output, in order: the model's result, or a fill. Once the late inferences are collected, the output is the model's at exactly the reported latency again.
@@ -113,7 +110,7 @@ Every hop of input therefore yields exactly one hop of output, in order: the mod
 Adaptive buffer handling
 ------------------------
 
-For hosts that may use smaller blocks than the contract's maximum (``host_block_min`` below ``host_block_max``), the host block may be any whole number :math:`j` of samples of the finest stream, :math:`1 \le j \le \lfloor \rho H \rfloor`, i.e. :math:`\rho' = j / H` hops with :math:`\tau' = \kappa / \rho'`. The calculator takes the worst case over that grid: the flexible-host adaptation :math:`(H-1)/H` plus the maximum over :math:`j` of the inference term and of the slot count. Both are increasing in :math:`j` on every interval where :math:`\lceil (m+1)\tau' - \beta \rceil` is a constant :math:`c`, so the maximum is attained at the last grid point of each interval, :math:`j_c = \lceil (m+1)\kappa H / (c - 1 + \beta) \rceil - 1`, and the remaining intervals are bounded by :math:`(m+1)\kappa\, c / (c - 1 + \beta)`. Only these breakpoints are evaluated; the former countdown over every block size, which stalled for blocks above :math:`2^{24}` samples, is gone.
+For hosts that may use smaller blocks than the contract's maximum (``host_block_min`` below ``host_block_max``), the host block may be any whole number :math:`j` of samples of the finest stream, :math:`1 \le j \le \lfloor \rho H \rfloor`, i.e. :math:`\rho' = j / H` hops with :math:`\tau' = \kappa / \rho'`. The calculator takes the worst case over that grid: the flexible-host adaptation :math:`(H-1)/H` plus the maximum over :math:`j` of the inference term and of the slot count. Both are increasing in :math:`j` on every interval where :math:`\lceil (m+1)\tau' - \beta \rceil` is a constant :math:`c`, so the maximum is attained at the last grid point of each interval, :math:`j_c = \lceil (m+1)\kappa H / (c - 1 + \beta) \rceil - 1`, and the remaining intervals are bounded by :math:`(m+1)\kappa\, c / (c - 1 + \beta)`. Only these breakpoints are evaluated.
 
 Note that a smaller host block can require *more* latency and more slots than the maximum block: a block slightly shorter than one inference time means that results arrive two callbacks after their submission instead of one.
 
@@ -145,14 +142,34 @@ Ring buffer sizes
 
 A send ring holds one host block plus the largest leftover the adaptation can leave behind, :math:`\lceil b \rceil + P - \gcd(\lceil b \rceil, P)` for a constant whole-sample block and :math:`\lceil b \rceil + P - 1` for a fractional or variable one, plus the history a receptive-field model peeks at. A receive ring holds one result per inference slot plus the latency priming, :math:`S P_i + L_i`.
 
-These calculations count buffer sizes in samples of the *anchor tensor* of the model configuration — a streamable input for effects and analysers, the streamable output for a generator model with no streamable input (see the usage guide, section 4.1).
+These calculations count buffer sizes in samples of the *anchor tensor* of the model configuration — a streamable input for effects and analysers, the streamable output for a generator model with no streamable input (:ref:`usage-instances`).
 
-Output Behavior
----------------
+The figure is the delay, in samples of each output, between a sample entering and its result leaving: for the first :math:`L_i` samples (the zero priming) ``process`` and ``pop_data`` deliver zeros.
 
-The final latency value represents the total delay (in samples) between when input data enters the system and when the processed output data becomes available.
+.. _latency-measured:
 
-.. important::
-    Before the first valid output is produced, the :cpp:func:`anira::InferenceHandler::process` and :cpp:func:`anira::InferenceHandler::pop_data` methods will return zeroed data. This ensures real-time audio processing without introducing unexpected delays or artifacts in the output signal.
+A measured latency
+------------------
+
+Under a measured budget, the default, :math:`T` is the slowest plan's warm-up figure, so the latency depends on the machine and on its load at the prepare that measured it (a later prepare of the model reuses that figure, :ref:`usage-budget-warmup`): a DAW's delay compensation sees it differ per machine, as it already does per block size. An explicit budget gives a reproducible figure. Below the first :math:`T` at which a :math:`d_m` or :math:`S` steps, the latency and the entry count (the :math:`2S` structures, ``anira_handler_num_entries``) do not move with :math:`T`; a probe of the bundled models at 48 kHz, bisected, put those edges at:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 25 25
+
+   * - Configuration
+     - latency flat below :math:`T`
+     - entries flat below :math:`T`
+   * - blocks 1..512, the CNN family, the RNN, RAVE
+     - 5.354 ms
+     - 25.625 ms
+   * - blocks 1..512, the gain model, hybridnn
+     - 5.354 ms
+     - 7.125 ms
+   * - the web, render quantum 128, burst 1024
+     - 10.688 ms
+     - 14.229 ms
+
+The browser's clock resolution (5 µs in Chromium, 20 µs in Firefox) never moves a latency by a step: the warm-up's clock-step floor covers models that run in microseconds.
 
 .. [RG26] Matthias Rath and Matthias Geier, "Minimum required delay for realtime block size adaptation in digital audio signal processing", Proceedings of the 20th Linux Audio Conference (LAC-26), Maynooth, 2026. `hal-05697688 <https://hal.science/hal-05697688v1>`_

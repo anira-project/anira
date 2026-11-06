@@ -355,7 +355,12 @@ typedef enum anira_contract_kind {
  * @brief How a Hard contract's per-inference budget is set.
  */
 typedef enum anira_budget_kind {
-    ANIRA_BUDGET_MEASURED = 0,  /**< Derived during warmup (default). */
+    /**
+     * What the warm-up pass measures at prepare (default): the slowest plan's figure, each
+     * plan's the maximum of its last four inferences, without a margin. Needs a pass of at
+     * least one inference: ANIRA_WARMUP_NONE and FIXED 0 are ANIRA_ERROR_CONFIG at prepare.
+     */
+    ANIRA_BUDGET_MEASURED = 0,
     /**
      * The explicit_ms of anira_contract_hard_set_budget; the v2 max_inference_time.
      */
@@ -364,14 +369,94 @@ typedef enum anira_budget_kind {
 } anira_budget_kind;
 
 /**
- * @brief Warmup policy of a Hard contract.
+ * @brief The warm-up pass of a Hard contract, at anira_handler_prepare: ordinary inferences of
+ * every plan, in table order, through the handler's session on the inference threads,
+ * each timed on the thread that runs it (the declared state's feed and capture, the
+ * processor's before_inference and after_inference, the engine call; never pre_process
+ * or post_process, never the wait for a thread or an instance). The warm-up pass also
+ * measures the inference time; a measured budget is the maximum of its last four
+ * inferences; under an explicit budget the timings are only reported. The session is
+ * sized again after the pass, which starts the stream over: nothing of the pass reaches
+ * the stream or a declared state. Apart from the pass, every executor of a built-in
+ * engine runs one inference over its own scratch when it is made (at load, or at an
+ * exclusive handler's prepare).
  */
 typedef enum anira_warmup_mode {
-    ANIRA_WARMUP_NONE = 0,  /**< No warmup; legal only with an explicit budget. */
-    ANIRA_WARMUP_FIXED = 1,  /**< A fixed number of iterations; the v2 warm_up. */
-    ANIRA_WARMUP_UNTIL_STABLE = 2,  /**< Until the measured time stabilises (default). */
+    ANIRA_WARMUP_NONE = 0,  /**< No pass; legal only with an explicit budget. */
+    /**
+     * n inferences per plan at prepare (the v2 warm_up, which ran per instance at load). With
+     * fewer than four the figure is the maximum of all n, the cold start included; UNTIL_STABLE
+     * or n >= 5 leaves it out. FIXED 0 is NONE.
+     */
+    ANIRA_WARMUP_FIXED = 1,
+    /**
+     * Until the last four inference times all lie within 20 % of their median, or within one
+     * step of the clock that took them when that is more, at most 32 inferences (default).
+     */
+    ANIRA_WARMUP_UNTIL_STABLE = 2,
     ANIRA_WARMUP_MODE_FORCE32 = 0x7fffffff
 } anira_warmup_mode;
+
+/**
+ * @brief How a plan's warm-up pass ended at the prepare (anira_plan_info.warmup_outcome).
+ */
+typedef enum anira_warmup_outcome {
+    /**
+     * No pass: ANIRA_WARMUP_NONE or FIXED 0 under an explicit budget. warmup_iterations,
+     * measured_ms and median_ms are 0.
+     */
+    ANIRA_WARMUP_OUTCOME_NONE = 0,
+    ANIRA_WARMUP_OUTCOME_FIXED = 1,  /**< ANIRA_WARMUP_FIXED ran its n inferences. */
+    /**
+     * ANIRA_WARMUP_UNTIL_STABLE stopped when the last four times agreed.
+     */
+    ANIRA_WARMUP_OUTCOME_STABLE = 2,
+    /**
+     * ANIRA_WARMUP_UNTIL_STABLE stopped at its 32nd inference without that; the figure is the
+     * last four's maximum all the same, and the prepare logs a Warning.
+     */
+    ANIRA_WARMUP_OUTCOME_CAPPED = 3,
+    /**
+     * No pass at this prepare: the plan took the model's figure from an earlier prepare;
+     * warmup_iterations, measured_ms and median_ms are that measurement's.
+     */
+    ANIRA_WARMUP_OUTCOME_REUSED = 4,
+    ANIRA_WARMUP_OUTCOME_FORCE32 = 0x7fffffff
+} anira_warmup_outcome;
+
+/**
+ * @brief Whether a plan keeps up with the stream on this machine (anira_plan_info.rt_verdict),
+ * from its real-time factor over the inferences that run at once: the load, rt_factor /
+ * rt_parallel, the share of the session's parallel capacity one hop's inference takes.
+ * An estimate at prepare, measured under that moment's load: below the limit a
+ * likelihood, above it a certainty. anira owns the thresholds, so every host applies the
+ * same rule; an offline render, which does not run against the clock, is never gated by
+ * it.
+ */
+typedef enum anira_rt_verdict {
+    /**
+     * No pass and no measured figure (an explicit budget with ANIRA_WARMUP_NONE or FIXED 0):
+     * rt_factor is the declared budget's, a statement about the contract, not the machine.
+     */
+    ANIRA_RT_UNMEASURED = 0,
+    /**
+     * Load below 0.75: misses are unlikely while the machine stays as it was at the prepare.
+     */
+    ANIRA_RT_COMFORTABLE = 1,
+    /**
+     * Load from 0.75 to below 1: the stream keeps up on average, but load the measurement could
+     * not see (other handlers, other applications, the clock speed) can push it over: misses
+     * are likely under load.
+     */
+    ANIRA_RT_MARGINAL = 2,
+    /**
+     * Load 1 or more: the pool cannot finish the inferences the stream submits, so misses are
+     * certain; the miss policy fills them. The session is sized for one host block's burst; the
+     * prepare does not fail.
+     */
+    ANIRA_RT_NOT_REALTIME = 3,
+    ANIRA_RT_VERDICT_FORCE32 = 0x7fffffff
+} anira_rt_verdict;
 
 /**
  * @brief What a Hard contract delivers when an inference misses its deadline.
@@ -849,22 +934,14 @@ typedef enum anira_phase {
 } anira_phase;
 
 /**
- * @brief anira_processor_desc.flags bit: the processor promises that its pre_process and
- * post_process allocate nothing, lock nothing and block on nothing (its reset runs on
- * the same thread and is covered by the same promise). Required by anira_handler_prepare
- * for a filled pre_process, post_process or reset under a Hard contract, where the three
- * phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not
- * required under an Async contract.
+ * @brief The bit of one anira_phase in a set of phases, 1u << phase:
+ * anira_processor_desc.realtime_phases is an OR of them, the processor's real-time
+ * promise per phase (ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) |
+ * ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_RESET) for a
+ * processor whose three driving-thread phases are real-time). The index space of
+ * anira.hpp's Processor::phase_bit and its k_* phase bits.
  */
-#define ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST 1u
-
-/**
- * @brief anira_processor_desc.flags bit: the processor promises the same of its
- * before_inference and after_inference. Not required by any contract of this pre-release
- * (the hooks run on an inference thread); a later contract option that runs them on the
- * driving thread will require it together with ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST.
- */
-#define ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS 2u
+#define ANIRA_PHASE_BIT(phase) (1u << (phase))
 
 /**
  * @brief anira_engine_desc.flags bit: a model entry of this engine may have no source, neither

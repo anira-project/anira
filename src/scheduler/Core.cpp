@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -18,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -26,8 +28,10 @@
 
 #include "../utils/Logger.h"
 #include "../utils/RtLatch.h"
+#include "FigureKey.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"
+#include "Warmup.h"
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 #include <unistd.h>
@@ -177,7 +181,7 @@ struct Core::State {
      *
      * The key is the record and the carrier: two sessions whose plans describe the same
      * model for the same backend (engine and provider, and the provider options the engine
-     * reads) with the same tensors, shared slots, warm-up and entry share
+     * reads) with the same tensors, shared slots and entry share
      * the entry's loaded model (per-slot dims, dtype, the path or the bytes' identity are in
      * the record, so two handlers with different resolved windows never share), exclusive
      * sessions included (their record says no shared slot, and each keeps an executor of
@@ -202,6 +206,26 @@ struct Core::State {
         std::shared_ptr<InstanceWaitList> m_waiting;
     };
     std::vector<PoolEntry> m_loaded_models;  ///< The pool of loaded models
+
+    /**
+     * @brief The models' figures: what a warm-up pass measured, per key (FigureKey)
+     *
+     * Beside the pool, not on the loaded model: a handler's re-prepare releases its session
+     * before it builds the next, and the pool erases an entry no other session holds, so a
+     * single plugin's re-prepare loads its model anew; the figure outlives that, for the core's
+     * life (until release_core_if_idle() frees the state). An entry is `measuring` while a
+     * prepare holds its claim; m_figures_changed wakes the prepares that wait for it. Entries
+     * whose carrier or registration died are dropped at the next claim. Under m_figures_mutex,
+     * a leaf lock.
+     */
+    struct FigureEntry {
+        FigureKey m_key;
+        std::optional<ModelFigure> m_figure;
+        bool m_measuring = false;
+    };
+    std::mutex m_figures_mutex;
+    std::condition_variable m_figures_changed;
+    std::vector<FigureEntry> m_figures;
 };
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
@@ -492,6 +516,24 @@ void Core::register_context(const anira_context_config& context_config) {
     // Apply the log level before anything (including this function) logs.
     apply_log_level_locked(state, config);
     apply_or_compare_config_locked(state, config, /*builds_pool=*/false);
+#ifdef __EMSCRIPTEN__
+    // On the web the pool starts with the context and lives while a context does: a Wasm Worker
+    // enters its loop only once the main thread yields, so the Workers boot while the page awaits
+    // its next promise, and a prepare whose warm-up pass needs a running thread finds them there
+    // once it awaited Context.ready(). Natively the pool starts at a session's prepare, which
+    // waits for its threads.
+    try {
+        if (state.m_thread_pool.empty()) {
+            resize_pool_locked(state, state.m_core_config.m_num_threads);
+        }
+        start_thread_pool_locked(state);
+    } catch (...) {
+        if (state.m_sessions.empty() && state.m_num_contexts == 0) {
+            stop_and_join(state.m_thread_pool);
+        }
+        throw;
+    }
+#endif
     ++state.m_num_contexts;
 }
 
@@ -541,6 +583,12 @@ void Core::unregister_user(State& state, unsigned int& counter) {
         const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         if (counter == 0) { return; }
         --counter;
+#ifdef __EMSCRIPTEN__
+        // The web's pool lives while a context or a session does (register_context).
+        if (state.m_num_contexts == 0 && state.m_sessions.empty()) {
+            stop_and_join(state.m_thread_pool);
+        }
+#endif
         was_last_user = !has_users_locked(state);
         if (was_last_user) { log_drain_to_stop = take_log_drain_locked(state); }
     }
@@ -832,11 +880,19 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
     // why the session was removed from the registry first.
     release_loaded_locked(state, session);
 
-    // The pool policy: inference threads exist exactly while sessions exist. Stopping
+    // The pool policy: natively, inference threads exist exactly while sessions exist. Stopping
     // and joining them here, inside the critical section that emptied the registry,
     // is what lets a plugin host unload the library right after the last handler is
-    // destroyed. (Each InferenceThread's destructor stops and joins its OS thread.)
+    // destroyed. (Each InferenceThread's destructor stops and joins its OS thread.) On the web
+    // they exist while a context or a session does (register_context), so a re-prepare, which
+    // releases the session before it builds the next, keeps its booted Workers.
+#ifdef __EMSCRIPTEN__
+    if (state.m_sessions.empty() && state.m_num_contexts == 0) {
+        stop_and_join(state.m_thread_pool);
+    }
+#else
     if (state.m_sessions.empty()) { stop_and_join(state.m_thread_pool); }
+#endif
 }
 
 std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& processor,
@@ -1609,6 +1665,213 @@ void Core::post_process(
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 
+WarmupFigure Core::warm_up_plan(const std::shared_ptr<SessionElement>& session, uint32_t plan) {
+    if (plan >= session->m_plans.size()) {
+        throw StatusError(ANIRA_ERROR_INTERNAL,
+                          "the warm-up was asked for plan " + std::to_string(plan) +
+                              ", which the session does not have");
+    }
+    // The pass's jobs are ordinary jobs: some thread must be inside its loop to take them. A
+    // pool's threads are once prepare_session() started them (natively it waits for that); a
+    // context without a pool has only its host's threads.
+    if (scheduler::InferenceThread::get_num_loop_active() == 0) {
+#ifdef __EMSCRIPTEN__
+        throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                          "a warm-up needs a running inference thread, and no Worker of the "
+                          "context's pool has started yet: await context.ready() before a "
+                          "prepare that warms up (or set the warmup to ANIRA_WARMUP_NONE with an "
+                          "explicit budget)");
+#else
+        throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                          "a warm-up needs a running inference thread, and none is inside its "
+                          "loop: a context without a pool needs a host thread in "
+                          "anira_inference_thread_run_loop before a prepare that warms up (or "
+                          "set the warmup to ANIRA_WARMUP_NONE with an explicit budget)");
+#endif
+    }
+    const capi::HardContract& hard = session->m_hard;
+    WarmupEstimator estimator(hard.m_warmup, hard.m_warmup_iterations, clock_step_ns());
+    while (!estimator.done()) { estimator.add(warm_up_inference(session, plan)); }
+    return estimator.figure();
+}
+
+int64_t Core::warm_up_inference(const std::shared_ptr<SessionElement>& session, uint32_t plan) {
+    std::shared_ptr<SessionElement::ThreadSafeStruct> chunk;
+    for (const std::shared_ptr<SessionElement::ThreadSafeStruct>& candidate :
+         session->m_struct_pool) {
+        if (candidate->m_free.exchange(false)) {
+            chunk = candidate;
+            break;
+        }
+    }
+    // The pass runs one job at a time on a session no stream drives: every struct is free.
+    if (chunk == nullptr) {
+        throw StatusError(ANIRA_ERROR_INTERNAL,
+                          "the warm-up of plan " + std::to_string(plan) +
+                              " found no free struct in the session's pool");
+    }
+    // The stamps pre_process() gives a chunk, without its pre_process and its time stamp: the
+    // chunk is no position of the stream.
+    chunk->m_plan = plan;
+    chunk->m_completed_as_zeros = false;
+    chunk->m_fills_after = 0;
+    chunk->m_inference_ns = 0;
+    chunk->m_dispatch_generation = session->m_generation.load(std::memory_order::relaxed);
+    if (session->exclusive()) {
+        session->enqueue_pending_dispatch(chunk);
+        try_dispatch_stateful(session);
+    } else {
+        enqueue_inference_or_drop(session, chunk);
+    }
+    // Its done signal, which every path of the job publishes exactly once (a drop at the enqueue
+    // completes it as zeros on this thread).
+    const auto deadline = std::chrono::steady_clock::now() + k_warm_up_timeout;
+    bool done = false;
+    while (!done) {
+        // An exclusive session's job may still wait in its pending queue: this thread's enqueue
+        // and the inference thread's release of the dispatch gate can pass each other, which a
+        // stream's next submission resolves. The pass has no next submission, so it kicks the
+        // chain itself while it waits (nothing while the gate is held).
+        if (session->exclusive()) { try_dispatch_stateful(session); }
+        if (session->uses_semaphore()) {
+#ifdef __EMSCRIPTEN__
+            done = chunk->m_done_semaphore.try_acquire();
+#else
+            done = chunk->m_done_semaphore.try_acquire_until(
+                std::min(deadline, std::chrono::steady_clock::now() + k_warm_up_kick));
+#endif
+        } else {
+            done = chunk->m_done_atomic.exchange(false, std::memory_order::acquire);
+#ifndef __EMSCRIPTEN__
+            if (!done) { std::this_thread::sleep_for(std::chrono::microseconds(20)); }
+#endif
+        }
+        if (!done && std::chrono::steady_clock::now() >= deadline) {
+            // The job stays the session's: its release drains it.
+            throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                              "the warm-up inference of plan " + std::to_string(plan) +
+                                  " did not complete within " +
+                                  std::to_string(k_warm_up_timeout.count()) + " s");
+        }
+    }
+    const bool failed = chunk->m_completed_as_zeros;
+    const int64_t inference_ns = chunk->m_inference_ns;
+    chunk->m_completed_as_zeros = false;
+    chunk->m_free.store(true, std::memory_order::release);
+    if (failed) {
+        throw StatusError(ANIRA_ERROR_ENGINE,
+                          "the warm-up inference of plan " + std::to_string(plan) +
+                              " failed; the log record of the inference says why");
+    }
+    return inference_ns;
+}
+
+namespace {
+
+/// Whether two weak pointers name the same object (or both none), by owner: an expired one
+/// still answers for the object it named.
+bool same_owner(const std::weak_ptr<const void>& a, const std::weak_ptr<const void>& b) noexcept {
+    return !a.owner_before(b) && !b.owner_before(a);
+}
+
+bool same_key(const FigureKey& a, const FigureKey& b) {
+    return a.m_engine_id == b.m_engine_id && a.m_by_registration == b.m_by_registration &&
+           a.m_bytes_hash == b.m_bytes_hash &&
+           a.m_hooks_by_registration == b.m_hooks_by_registration && a.m_hook_id == b.m_hook_id &&
+           same_owner(a.m_carrier, b.m_carrier) && same_owner(a.m_hook_owner, b.m_hook_owner) &&
+           a.m_model == b.m_model;
+}
+
+/// Whether a key names an object that died (its figure can never be asked for again).
+bool dead_key(const FigureKey& key) noexcept {
+    return (key.m_by_registration && key.m_carrier.expired()) ||
+           (key.m_hooks_by_registration && key.m_hook_owner.expired());
+}
+
+/// Whether a figure answers a warm-up: UNTIL_STABLE asks for one UNTIL_STABLE measured, FIXED n
+/// for one of UNTIL_STABLE or of FIXED m >= n.
+bool answers(const ModelFigure& figure, anira_warmup_mode mode, uint32_t iterations) {
+    if (figure.m_mode == ANIRA_WARMUP_UNTIL_STABLE) { return true; }
+    return mode == ANIRA_WARMUP_FIXED && figure.m_figure.m_iterations >= iterations;
+}
+
+}  // namespace
+
+std::optional<ModelFigure> Core::find_figure(const FigureKey& key,
+                                             anira_warmup_mode mode,
+                                             uint32_t iterations) {
+    State& state = get_state();
+    const std::scoped_lock<std::mutex> lock(state.m_figures_mutex);
+    for (const State::FigureEntry& entry : state.m_figures) {
+        if (!same_key(entry.m_key, key)) { continue; }
+        if (entry.m_figure.has_value() && answers(*entry.m_figure, mode, iterations)) {
+            return entry.m_figure;
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::optional<ModelFigure> Core::claim_figure(const FigureKey& key,
+                                              anira_warmup_mode mode,
+                                              uint32_t iterations) {
+    State& state = get_state();
+    std::unique_lock<std::mutex> lock(state.m_figures_mutex);
+    std::erase_if(state.m_figures, [](const State::FigureEntry& entry) {
+        return !entry.m_measuring && dead_key(entry.m_key);
+    });
+    const auto find = [&state, &key] {
+        return std::ranges::find_if(state.m_figures, [&key](const State::FigureEntry& entry) {
+            return same_key(entry.m_key, key);
+        });
+    };
+    auto entry = find();
+    while (entry != state.m_figures.end() && entry->m_measuring) {
+        state.m_figures_changed.wait(lock);
+        entry = find();
+    }
+    if (entry == state.m_figures.end()) {
+        state.m_figures.push_back(
+            State::FigureEntry{.m_key = key, .m_figure = {}, .m_measuring = true});
+        return std::nullopt;
+    }
+    if (entry->m_figure.has_value() && answers(*entry->m_figure, mode, iterations)) {
+        return entry->m_figure;
+    }
+    entry->m_measuring = true;
+    return std::nullopt;
+}
+
+void Core::publish_figure(const FigureKey& key, const ModelFigure& figure) {
+    State& state = get_state();
+    {
+        const std::scoped_lock<std::mutex> lock(state.m_figures_mutex);
+        for (State::FigureEntry& entry : state.m_figures) {
+            if (!same_key(entry.m_key, key)) { continue; }
+            entry.m_figure = figure;
+            entry.m_measuring = false;
+            break;
+        }
+    }
+    state.m_figures_changed.notify_all();
+}
+
+void Core::abandon_figure(const FigureKey& key) {
+    State& state = get_state();
+    {
+        const std::scoped_lock<std::mutex> lock(state.m_figures_mutex);
+        for (State::FigureEntry& entry : state.m_figures) {
+            if (!same_key(entry.m_key, key)) { continue; }
+            entry.m_measuring = false;
+            break;
+        }
+        std::erase_if(state.m_figures, [](const State::FigureEntry& entry) {
+            return !entry.m_measuring && !entry.m_figure.has_value();
+        });
+    }
+    state.m_figures_changed.notify_all();
+}
+
 void Core::start_thread_pool_locked(State& state) {
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
     // Before a thread can run an inference, so the unload hook can tell an exit (see there).
@@ -1623,15 +1886,12 @@ void Core::start_thread_pool_locked(State& state) {
                 "anira: the operating system (or the browser) refused to create an "
                 "inference thread of the pool");
         }
+        // Natively start() returns once the thread is inside run_loop() (the _wait twins, the
+        // bounded waits of new_data_request() and a prepare's warm-up pass read the loop count,
+        // and a session that prepare hands back must find its pool able to signal a completion
+        // from the first call on). On WebAssembly the Worker enters its loop asynchronously,
+        // after the main instance returns.
         while (!i->is_running()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
-#ifndef __EMSCRIPTEN__
-        // is_running() is set by the start itself, before the thread's body runs. Wait until
-        // the thread is inside run_loop(): the _wait twins and the bounded waits of
-        // new_data_request() read the loop count, and a session that prepare hands back must
-        // find its pool able to signal a completion from the first call on. On WebAssembly the
-        // Worker enters its loop asynchronously, after the main instance returns.
-        while (!i->is_in_loop()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
-#endif
     }
 }
 

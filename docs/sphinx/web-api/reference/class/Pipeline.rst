@@ -6,4 +6,4 @@ scopes that run them define under the same names (:js:func:`~registry.defineProc
 
 .. js:autoclass:: Pipeline.Pipeline
    :short-name:
-   :members: create, inference, addEngine, addProcessor, native, destroy
+   :members: create, addInference, inputSpecs, addEngine, addProcessor, native, destroy

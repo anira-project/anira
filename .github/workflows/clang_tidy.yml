@@ -6,7 +6,6 @@ on:
   pull_request:
     branches:
       - main
-      - v3
     # No path filter: "clang_tidy result" reports on every pull request head, so
     # it can be a REQUIRED check (a required check that never reports blocks
     # queue entry forever, which is why the path-filtered version could not be

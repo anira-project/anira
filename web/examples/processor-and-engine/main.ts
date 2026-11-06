@@ -15,6 +15,7 @@ import {
   InferenceHandler,
   ModelConfig,
   Pipeline,
+  anira_rt_verdict,
   measureRenderGeometry,
   type AniraAudioNode,
 } from '@anira-project/anira'
@@ -25,7 +26,7 @@ import { DOUBLE_ENGINE } from './double-engine'
 import workerModule from './double-engine.ts?worker&url'
 import processorModule from './gain-processor.ts?worker&url'
 
-// The model's window: 128 samples per inference.
+// 128 samples per inference: the fixed Time extent is the model's window.
 const WINDOW = 128
 
 export type GainExample = {
@@ -42,6 +43,18 @@ export type GainExample = {
   gain: AudioParam
   /** Measure the context's geometry again and re-prepare: after the output device changed. */
   remeasure: () => Promise<void>
+  /**
+   * The real-time verdict (`anira_rt_verdict`) of the plan the handler runs, from the last
+   * prepare: an estimate at prepare, measured on this machine under its load of the moment.
+   */
+  verdict: () => number
+  /**
+   * Whether the node is held: on a live context, the plan is not real-time here and the user has
+   * not agreed to run it. A held node is silent and starts no inference; the dry path plays.
+   */
+  waitsForConsent: () => boolean
+  /** The user's "Try nonetheless": the node streams, and the verdict counts as accepted. */
+  tryNonetheless: () => void
   teardown: () => void
 }
 
@@ -70,7 +83,6 @@ export async function createGainExample(
       ['channel', 1],
       ['time', WINDOW],
     ],
-    window: { min: WINDOW, max: WINDOW },
   })
   const model = await ModelConfig.fromJson(
     anira,
@@ -99,19 +111,19 @@ export async function createGainExample(
 
   // 4. The handler and its Hard contract: one render quantum per call, at the context's rate, in
   //    bursts up to the context's (a live context renders a device callback's worth of quanta
-  //    back to back; the latency the handler reports covers it).
+  //    back to back; the latency the handler reports covers it). The library's defaults: the
+  //    budget the warm-up pass measures at prepare, on the pool's Workers, which start with the
+  //    context and enter their loops once this thread yields: wait for them first.
   const geometry = await measureRenderGeometry(audioContext)
   const contract = ContractHandle.hard(anira, {
     hostBlockMin: geometry.quantum,
     hostBlockMax: geometry.burst,
     hostRate: audioContext.sampleRate,
-    budgetMs: 2,
   })
+  await context.ready()
   const handler = InferenceHandler.create(context, pipeline)
   handler.prepare(contract)
   pipeline.destroy()
-  // An offline render waits for every inference: the Worker must be in its loop first.
-  if (waitMs > 0) await context.ready()
 
   // 5. The audio node: the processor's module loaded into the worklet, the gain an AudioParam.
   const audioNode = await handler.createAudioNode(audioContext, {
@@ -122,7 +134,46 @@ export async function createGainExample(
   const gainParam = audioNode.params.get(GAIN_SLOT)!
   gainParam.value = gain
 
-  // 6. The dry path, delayed by the handler's latency, read again after every re-prepare.
+  // 6. What each prepare measured, per plan: the budget, how the warm-up pass found it, and the
+  //    real-time verdict, an estimate at prepare on this machine under its load of the moment.
+  //    On a live context a plan that is not real-time here would drop out: the node is held
+  //    (silent, no inference; the dry path plays) until the user agrees. An offline render
+  //    (waitMs > 0) does not run against the clock and is never held. The example keeps the
+  //    worst verdict the user accepted, and asks again only when a re-prepare finds a worse one.
+  const live = waitMs === 0
+  let accepted: number = anira_rt_verdict.ANIRA_RT_UNMEASURED
+  let held = false
+  const applyVerdict = () => {
+    const plans = handler.planReport().plans()
+    plans.forEach((row, index) =>
+      console.log(
+        `plan ${index}: budget ${row.budgetMs.toPrecision(3)} ms (measured ` +
+          `${row.measuredMs.toPrecision(3)} ms, median ${row.medianMs.toPrecision(3)} ms, ` +
+          `${row.warmupIterations} warm-up inferences, outcome ${row.warmupOutcome}); ` +
+          `real-time factor ${row.rtFactor.toPrecision(3)} of ${row.rtParallel}, verdict ` +
+          `${row.rtVerdict}`
+      )
+    )
+    const row = plans[handler.getPlan()]
+    held =
+      live &&
+      row.rtVerdict === anira_rt_verdict.ANIRA_RT_NOT_REALTIME &&
+      row.rtVerdict > accepted
+    audioNode.hold(held)
+    if (held)
+      console.warn(
+        `anira: the plan runs at ${row.rtFactor.toFixed(2)}x real time on this machine ` +
+          `(${row.rtParallel} parallel inferences): the node stays held until "Try nonetheless"`
+      )
+  }
+  applyVerdict()
+  const tryNonetheless = () => {
+    accepted = handler.planReport().plans()[handler.getPlan()].rtVerdict
+    held = false
+    audioNode.hold(false)
+  }
+
+  // 7. The dry path, delayed by the handler's latency, read again after every re-prepare.
   const input = new GainNode(audioContext)
   const output = new GainNode(audioContext)
   const dry = new DelayNode(audioContext, { maxDelayTime: 1 })
@@ -143,9 +194,10 @@ export async function createGainExample(
     contract.hardHostBlocks(g.quantum, g.burst, audioContext.sampleRate)
     audioNode.prepare(contract)
     applyLatency()
+    applyVerdict() // the new figures: held again only when worse than what the user accepted
   }
 
-  // 7. The teardown: the node stops calling the handler first.
+  // 8. The teardown: the node stops calling the handler first.
   const teardown = () => {
     input.disconnect()
     audioNode.node.disconnect()
@@ -164,16 +216,40 @@ export async function createGainExample(
     getLatency: () => handler.getLatency(),
     gain: gainParam,
     remeasure,
+    verdict: () => handler.planReport().plans()[handler.getPlan()].rtVerdict,
+    waitsForConsent: () => held,
+    tryNonetheless,
     teardown,
   }
 }
 
-/** The page: a tone through the example, its gain on a slider, started and stopped by a button. */
+/**
+ * The page: a tone through the example, its gain on a slider, started and stopped by a button;
+ * the verdict line, and "Try nonetheless" while the node waits for the user's consent.
+ */
 export function mountGainExample(
   button: HTMLButtonElement,
-  slider: HTMLInputElement
+  slider: HTMLInputElement,
+  tryButton: HTMLButtonElement,
+  verdictLine: HTMLElement
 ): void {
   let running: { audioContext: AudioContext; example: GainExample } | null = null
+  const showVerdict = () => {
+    const example = running?.example
+    tryButton.hidden = !example?.waitsForConsent()
+    verdictLine.textContent = !example
+      ? ''
+      : example.waitsForConsent()
+        ? 'The model is not real-time on this machine: the node stays silent (the dry path ' +
+          'plays) until "Try nonetheless".'
+        : example.verdict() === anira_rt_verdict.ANIRA_RT_MARGINAL
+          ? 'The model is marginal on this machine: it may drop out under load.'
+          : ''
+  }
+  tryButton.onclick = () => {
+    running?.example.tryNonetheless()
+    showVerdict()
+  }
   button.onclick = async () => {
     button.disabled = true
     if (running) {
@@ -197,7 +273,10 @@ export function mountGainExample(
         gain: Number(slider.value),
       })
       // The page's call: it switches the output device and accepts the latency change.
-      audioContext.addEventListener('sinkchange', () => void example.remeasure())
+      audioContext.addEventListener(
+        'sinkchange',
+        () => void example.remeasure().then(showVerdict)
+      )
       const tone = new OscillatorNode(audioContext, { frequency: 220 })
       const level = new GainNode(audioContext, { gain: 0.1 })
       tone.connect(level).connect(example.input)
@@ -206,6 +285,7 @@ export function mountGainExample(
       running = { audioContext, example }
       button.textContent = 'Stop'
     }
+    showVerdict()
     button.disabled = false
   }
   slider.oninput = () =>

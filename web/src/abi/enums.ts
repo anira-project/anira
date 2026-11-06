@@ -191,6 +191,25 @@ export const anira_warmup_mode = {
 /** @internal */
 export type anira_warmup_mode = (typeof anira_warmup_mode)[keyof typeof anira_warmup_mode]
 
+export const anira_warmup_outcome = {
+  ANIRA_WARMUP_OUTCOME_NONE: 0,
+  ANIRA_WARMUP_OUTCOME_FIXED: 1,
+  ANIRA_WARMUP_OUTCOME_STABLE: 2,
+  ANIRA_WARMUP_OUTCOME_CAPPED: 3,
+  ANIRA_WARMUP_OUTCOME_REUSED: 4,
+} as const
+/** @internal */
+export type anira_warmup_outcome = (typeof anira_warmup_outcome)[keyof typeof anira_warmup_outcome]
+
+export const anira_rt_verdict = {
+  ANIRA_RT_UNMEASURED: 0,
+  ANIRA_RT_COMFORTABLE: 1,
+  ANIRA_RT_MARGINAL: 2,
+  ANIRA_RT_NOT_REALTIME: 3,
+} as const
+/** @internal */
+export type anira_rt_verdict = (typeof anira_rt_verdict)[keyof typeof anira_rt_verdict]
+
 export const anira_miss_policy = {
   ANIRA_MISS_BYPASS: 0,
   ANIRA_MISS_HOLD_LAST: 1,
@@ -413,8 +432,7 @@ export const ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK = 1
 export const ANIRA_LOG_FLAG_TRACE_FAILURES = 2
 export const ANIRA_AXIS_INSERT = 4294967295
 export const ANIRA_TICKET_INVALID = 0
-export const ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST = 1
-export const ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS = 2
+export const ANIRA_PHASE_BIT = (phase: number): number => (1 << phase) >>> 0
 export const ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL = 1
 export const ANIRA_ENGINE_FLAG_REALTIME_SAFE = 2
 export const ANIRA_ENGINE_FLAG_DYNAMIC_TIME = 4

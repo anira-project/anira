@@ -34,7 +34,10 @@ export type PlanInfo = {
   provider: number
   /** The registered name of a custom engine, null for a built-in one. */
   engineId: string | null
-  /** The per-inference budget of this plan, in milliseconds. */
+  /**
+   * The per-inference budget of this plan, in milliseconds: what the warm-up pass measured for it
+   * under a measured budget, the contract's figure under an explicit one.
+   */
   budgetMs: number
   /** A custom engine's `ANIRA_ENGINE_FLAG_*` promises; 0 for a built-in engine. */
   engineFlags: number
@@ -47,6 +50,30 @@ export type PlanInfo = {
    * browser exposes no memory kind), its slots `ANIRA_EDGE_UNKNOWN`.
    */
   memoryKind: number
+  /** The inferences the warm-up pass ran for this plan at this prepare; 0 without a pass. */
+  warmupIterations: number
+  /**
+   * The maximum of the pass's last four inference times in milliseconds, each timed on the
+   * Worker that ran it; 0 without a pass.
+   */
+  measuredMs: number
+  /** The median of the same times; 0 without a pass. */
+  medianMs: number
+  /** `anira_warmup_outcome`: how the pass ended (`ANIRA_WARMUP_OUTCOME_NONE` without one). */
+  warmupOutcome: number
+  /** The inferences of the session that run at once (1 for an exclusive session). */
+  rtParallel: number
+  /**
+   * The real-time factor: the plan's inference time (`measuredMs`, else `budgetMs`) over the
+   * anchor's hop period; the plan keeps up while `rtFactor / rtParallel` stays below 1.
+   */
+  rtFactor: number
+  /**
+   * `anira_rt_verdict`: comfortable below a load of 0.75, marginal below 1, else not real-time;
+   * `ANIRA_RT_UNMEASURED` without a measurement. An estimate at prepare; an offline render is
+   * never gated by it.
+   */
+  rtVerdict: number
 }
 
 /** One slot of a plan (`anira_plan_slot`): the edge its tensor takes into the engine. */
@@ -109,18 +136,30 @@ export type PlanExtension = {
 }
 
 // The wasm32 layouts of the three Tier-2 rows (anira/abi/handler.h): 4-byte pointers, the
-// double of anira_plan_info at 24, its memory_kind in the tail at 44, the two int64_t of
+// double of anira_plan_info at 24, its memory_kind in the tail at 44 and the warm-up and
+// real-time fields behind it (the doubles at 56, 64 and 80), the two int64_t of
 // anira_plan_slot's tail at 64 and 72. The rows are enumerated at these strides (the entries take
 // the caller's element size and write the fields the stride covers).
 const PLAN_INFO = {
-  size: 48,
+  size: 96,
   variant: 4,
   engine: 8,
   provider: 12,
   engineId: 16,
   budgetMs: 24,
 }
-const PLAN_INFO_TAIL = { engineFlags: 32, providerId: 40, memoryKind: 44 }
+const PLAN_INFO_TAIL = {
+  engineFlags: 32,
+  providerId: 40,
+  memoryKind: 44,
+  warmupIterations: 48,
+  measuredMs: 56,
+  medianMs: 64,
+  warmupOutcome: 72,
+  rtParallel: 76,
+  rtFactor: 80,
+  rtVerdict: 88,
+}
 const PLAN_SLOT = {
   size: 80,
   slot: 4,
@@ -182,6 +221,13 @@ export class PlanReport {
         engineFlags: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.engineFlags) >>> 2],
         providerId: this.text(heap(m).HEAPU32[(row + PLAN_INFO_TAIL.providerId) >>> 2]),
         memoryKind: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.memoryKind) >>> 2],
+        warmupIterations: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.warmupIterations) >>> 2],
+        measuredMs: heap(m).HEAPF64[(row + PLAN_INFO_TAIL.measuredMs) >>> 3],
+        medianMs: heap(m).HEAPF64[(row + PLAN_INFO_TAIL.medianMs) >>> 3],
+        warmupOutcome: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.warmupOutcome) >>> 2],
+        rtParallel: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.rtParallel) >>> 2],
+        rtFactor: heap(m).HEAPF64[(row + PLAN_INFO_TAIL.rtFactor) >>> 3],
+        rtVerdict: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.rtVerdict) >>> 2],
       })
     )
   }

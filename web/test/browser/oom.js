@@ -19,6 +19,8 @@ import {
   ModelConfig,
   Pipeline,
   anira_status,
+  anira_budget_kind,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const MODELS = '../../extras/models/model-pool/'
@@ -91,7 +93,11 @@ const run = async () => {
       anira,
       new URL(`${MODELS}gain.contract.json`, import.meta.url)
     )
-  ).hardHostBlocks(128, 128, 48000)
+  )
+    .hardHostBlocks(128, 128, 48000)
+    // Pinned: the explicit budget without a warm-up (the page prepares before its Workers run).
+    .hardBudget(anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 5)
+    .hardWarmup(anira_warmup_mode.ANIRA_WARMUP_NONE)
   const first = handlerOn(anira, context, model, contract)
   await destroyBooted(context, first)
   const withCore = fill(m)

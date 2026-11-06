@@ -221,7 +221,8 @@ typedef struct anira_engine_ctx {
     /**
      * Per-call flags: ANIRA_ENGINE_CALL_EXCLUSIVE for a call of an exclusive handler (it runs
      * on what that handler's prepare built, no shared slot was claimed, instance is 0); no
-     * other bit is defined in this pre-release (a warm-up pass is the next candidate).
+     * other bit is defined in this pre-release (the warm-up pass's calls at prepare are
+     * ordinary calls).
      */
     uint32_t flags;
     uint32_t reserved0;  /**< 0. */
@@ -310,18 +311,22 @@ typedef void (ANIRA_CALL* anira_engine_unload_fn)(void* loaded, void* user_data)
  * @brief The prepare function of an engine: called by anira_handler_prepare on its caller's
  * thread, once per handler and loaded model the handler runs on, after the plan report
  * is built and while the handler already counts as prepared (its getters answer), with
- * the record the processor's prepare receives and the loaded pointer. It may allocate:
- * this is where an engine builds what it keeps per handler, its own executor (a session,
- * an interpreter, a method) included when the record carries ANIRA_PREPARE_EXCLUSIVE,
- * since the process calls of an exclusive handler claim no shared slot of the loaded
- * model; a handler whose model is stateless needs nothing here and may hand back NULL.
- * Of anira it may call the [callback-safe] entries, the handler's getters and the two
- * Static entries, never prepare, destroy or a Hard entry. The prepares and unprepares of
- * one loaded model never overlap: anira serialises them per loaded model, so two
- * handlers prepared on two threads reach the same loaded pointer one after the other
- * (those of different loaded models may run at once, each on its handler's thread). A
- * status other than ANIRA_OK fails anira_handler_prepare with that status, the message
- * naming the engine, and leaves the handler unprepared; unprepare is not called then.
+ * the record the processor's prepare receives and the loaded pointer; before the
+ * contract's warm-up pass, whose inferences it then runs. When the session sized again
+ * after the pass has another entry count, the prepared handle is unprepared and the
+ * engine prepared once more with the final record, inside the same
+ * anira_handler_prepare. It may allocate: this is where an engine builds what it keeps
+ * per handler, its own executor (a session, an interpreter, a method) included when the
+ * record carries ANIRA_PREPARE_EXCLUSIVE, since the process calls of an exclusive
+ * handler claim no shared slot of the loaded model; a handler whose model is stateless
+ * needs nothing here and may hand back NULL. Of anira it may call the [callback-safe]
+ * entries, the handler's getters and the two Static entries, never prepare, destroy or a
+ * Hard entry. The prepares and unprepares of one loaded model never overlap: anira
+ * serialises them per loaded model, so two handlers prepared on two threads reach the
+ * same loaded pointer one after the other (those of different loaded models may run at
+ * once, each on its handler's thread). A status other than ANIRA_OK fails
+ * anira_handler_prepare with that status, the message naming the engine, and leaves the
+ * handler unprepared; unprepare is not called then.
  * @param info The record; valid until the callback returns.
  * @param loaded What the load of the model this handler runs on handed back.
  * @param user_data The descriptor's user_data.
@@ -340,11 +345,12 @@ typedef anira_status (ANIRA_CALL* anira_engine_prepare_fn)(const anira_prepare_i
  * @brief The unprepare function of an engine: called once per successful prepare, at the next
  * anira_handler_prepare of the handler (once the previous session is released, before
  * the new prepare; a later prepare that fails earlier unprepares the previous one all
- * the same) and at anira_handler_destroy, after the handler's in-flight inferences
- * drained and before the loaded model it ran on is released, so no process or reset with
- * this prepared pointer runs afterwards; it never overlaps a prepare or another
- * unprepare of the same loaded model (anira serialises them per loaded model). NULL:
- * none.
+ * the same), inside a prepare whose warm-up pass moved the entry count (before the
+ * prepare with the final record) and at anira_handler_destroy, after the handler's
+ * in-flight inferences drained and before the loaded model it ran on is released, so no
+ * process or reset with this prepared pointer runs afterwards; it never overlaps a
+ * prepare or another unprepare of the same loaded model (anira serialises them per
+ * loaded model). NULL: none.
  * @param prepared What the matching prepare handed back.
  * @param user_data The descriptor's user_data.
  * @par Thread contract

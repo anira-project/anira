@@ -412,6 +412,12 @@ public:
         // output into the receive rings, ahead of every later chunk. Driving thread only (set
         // by the submission, moved out by Core::post_process); Core::pre_process resets it.
         size_t m_fills_after{0};
+        // How long the inference thread spent on this chunk's job, in nanoseconds of
+        // steady_clock: from its before_inference to its after_inference (the declared state's
+        // feed and capture, the processor's hooks and the engine call; the wait for an instance
+        // lies before it). Written by the inference thread before the done signal, read after it
+        // (the warm-up pass of a prepare reads it); 0 until the chunk's first job ran.
+        int64_t m_inference_ns{0};
         // The struct's position in SessionElement::m_struct_pool: the chunk's entry
         // (anira_engine_ctx::entry, anira_processor_ctx::entry), set by prepare with the pool.
         uint32_t m_entry{0};
@@ -680,6 +686,12 @@ public:
     /// inferences of the session run at once (LatencyCalculator's n), and the pending dispatch
     /// queue of an exclusive session is sized by it.
     const uint32_t m_num_instances;
+    /// The inference time the next prepare() sizes the session for, in ms (LatencyCalculator's
+    /// T): the contract's explicit budget from the construction on; a 3.x handler sets it before
+    /// each prepare (one clock step for its warm-up pass under a MEASURED budget, then the
+    /// slowest plan's figure). The contract keeps what the user set. Control thread only, while
+    /// no chunk of the session exists.
+    double m_budget_ms;
 
     RtLatch m_rt_own;  ///< The session's own real-time latch: what m_rt points at when the
                        ///< constructor received no latch (a 2.x session); nothing reads its

@@ -61,6 +61,7 @@
 #pragma GCC diagnostic ignored "-Wall"
 #endif
 
+#include <ATen/Parallel.h>
 #include <ATen/core/ATen_fwd.h>
 #include <ATen/core/function_schema.h>
 #include <ATen/core/ivalue.h>
@@ -146,6 +147,22 @@ struct Argument {
     bool m_tensor = false;
     bool m_defaulted = false;
 };
+
+/// LibTorch keeps its intra-op thread count per thread where the build parallelises with
+/// OpenMP (the Linux x86_64 packages carry libgomp): the engine's init sets one thread on the
+/// thread that ran it, and an OpenMP region on any other thread (a oneDNN primitive such as an
+/// LSTM's, which sizes its team by the calling thread's count) fans out over a team of one
+/// thread per core, whose workers spin beside anira's inference threads. Every thread that runs
+/// a method takes the process's setting once, before its first call (at::init_num_threads, what
+/// LibTorch's own threads run when they start): an inference thread at its first inference, the
+/// control thread at an executor's creation warm-up. The first call on a thread may allocate
+/// (the thread's OpenMP settings), like the forward that follows it.
+void adopt_thread_count() {
+    thread_local bool adopted = false;
+    if (adopted) { return; }
+    at::init_num_threads();
+    adopted = true;
+}
 
 /// One module of the model: what one executor of the adapter runs on. Loads at construction
 /// (a file or the bytes of the record) and resolves the entry method; binds afterwards; runs
@@ -303,6 +320,7 @@ void Instance::bind(const Model& model,
 }
 
 c10::IValue Instance::execute(const anira_engine_ctx& ctx) {
+    adopt_thread_count();
     if (ctx.inputs == nullptr || ctx.outputs == nullptr ||
         ctx.num_inputs != m_argument_of_slot.size() || ctx.num_outputs != m_result_of_slot.size()) {
         throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
@@ -599,10 +617,9 @@ protected:
                                        k_engine,
                                        "output");
         probe->bind(model, m_input_bindings, m_output_bindings);
-        // The schema carries no output shapes: the first run of the warm-up checks them
-        // against the record, and a record without a warm-up gets that one run here, on the
-        // probe, so a mismatch is refused at load, not at the first chunk.
-        if (model.m_warm_up == 0) { probe->warm_up(1); }
+        // The schema carries no output shapes: the creation warm-up of the probe (adopt, below)
+        // checks them against the record, so a mismatch is refused at load, not at the first
+        // chunk.
         set_bindings(bindings_of(m_input_bindings, m_output_bindings));
         adopt(std::move(probe));
     }

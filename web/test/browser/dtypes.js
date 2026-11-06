@@ -25,6 +25,7 @@ import {
   Pipeline,
   heap,
   layout,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 import { ONNXRUNTIME_WEB_ENGINE_ID } from '../../dist/engines/onnxruntime-web.js'
 
@@ -85,6 +86,7 @@ const runThrough = async (anira, context, model, engineId) => {
     hostBlockMin: BLOCK,
     hostRate: RATE,
     budgetMs: 50,
+    warmup: anira_warmup_mode.ANIRA_WARMUP_NONE,
   })
   const handler = InferenceHandler.create(context, pipeline)
   const report = handler.prepare(contract)
@@ -94,6 +96,7 @@ const runThrough = async (anira, context, model, engineId) => {
     hostBlockMin: QUANTUM,
     hostRate: RATE,
     budgetMs: 50,
+    warmup: anira_warmup_mode.ANIRA_WARMUP_NONE,
   })
   nodeHandler.prepare(nodeContract)
   nodeContract.destroy()

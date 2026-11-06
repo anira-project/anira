@@ -559,8 +559,10 @@ ProcessorCarrier::ProcessorCarrier(const anira_processor_desc& desc) : m_desc(de
     }
     m_kind_pointers.reserve(m_kinds.size());
     for (const std::string& kind : m_kinds) { m_kind_pointers.push_back(kind.c_str()); }
+    if (desc.id != nullptr) { m_id = desc.id; }
     // The descriptor names this carrier's strings from here on: the caller's may die.
     m_desc.consumed_kinds = m_kind_pointers.empty() ? nullptr : m_kind_pointers.data();
+    m_desc.id = m_id.empty() ? nullptr : m_id.c_str();
 }
 
 ProcessorCarrier::~ProcessorCarrier() {

@@ -3771,6 +3771,14 @@ TEST(AbiEngine, FlagsRoundTripThroughThePlanReport) {
     const anira_plan_info init = ANIRA_PLAN_INFO_INIT;
     EXPECT_EQ(init.engine_flags, 0U);
     EXPECT_EQ(init.reserved, 0U);
+    EXPECT_EQ(init.warmup_iterations, 0U);
+    EXPECT_EQ(init.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_NONE));
+    EXPECT_DOUBLE_EQ(init.measured_ms, 0.0);
+    EXPECT_DOUBLE_EQ(init.median_ms, 0.0);
+    EXPECT_EQ(init.rt_parallel, 0U);
+    EXPECT_DOUBLE_EQ(init.rt_factor, 0.0);
+    EXPECT_EQ(init.rt_verdict, static_cast<uint32_t>(ANIRA_RT_UNMEASURED));
+    EXPECT_EQ(init.reserved2, 0U);
 
     const Context context;
     GainEngine gain;

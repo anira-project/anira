@@ -60,7 +60,8 @@ const run = async (): Promise<Result> => {
   )
 
   // The plan report of the prepare: one plan, the gain config's ONNX entry on the built-in
-  // ONNX Runtime engine, under the contract file's 5 ms budget.
+  // ONNX Runtime engine, under the contract file's measured budget: the plan's figure, what the
+  // warm-up pass measured on the Workers.
   const report = example.planReport()
   const plans = report.plans()
   check(
@@ -68,12 +69,20 @@ const run = async (): Promise<Result> => {
       plans.length === 1 &&
       plans[0].engine === anira_engine.ANIRA_ENGINE_ONNXRUNTIME &&
       plans[0].engineId === null &&
-      plans[0].budgetMs === 5 &&
+      plans[0].budgetMs > 0 &&
+      plans[0].budgetMs === plans[0].measuredMs &&
+      plans[0].warmupIterations >= 1 &&
       report.slots(0, true).length === 2 &&
       report.slots(0, false).length === 2,
     `the plan report: ${report.numPlans()} plan, engine ${plans[0]?.engine}, budget ` +
       `${plans[0]?.budgetMs} ms, ${report.slots(0, true).length} input and ` +
       `${report.slots(0, false).length} output slots`
+  )
+
+  // An offline render does not run against the clock: never held, whatever the verdict.
+  check(
+    !example.waitsForConsent(),
+    `an offline render is never held (verdict ${example.verdict()})`
   )
 
   const delay = example.dry.delayTime.value

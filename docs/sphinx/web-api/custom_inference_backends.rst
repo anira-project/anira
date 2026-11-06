@@ -151,10 +151,13 @@ an engine asking for another fails its ``init``. The default is 1.
    defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb({ numThreads: 2 }))
 
 ``onnxRuntimeWeb({ warmup: 3 })`` runs three inferences over zeros of the model's input shapes
-right after the engine creates its session, so the stream's first inferences do not pay
-onnxruntime-web's first-run setup. A contract's ``"warmup": { "fixed": n }`` warms anira's
-built-in engines only; a JavaScript engine warms itself. Over the model entry the session, and so
-the warm-up, comes with the entry at the first call, inside the stream. Given its own ``model``,
+right after the engine creates its session, on every Worker, so the stream's first inferences
+do not pay onnxruntime-web's first-run setup: the per-Worker cold start. A contract's warm-up pass
+(:ref:`usage-budget-warmup`) also reaches a JavaScript engine, as ordinary ``process`` calls on
+the Workers that take its jobs, and times them: it measures the engine, which its own ``warmup``
+keeps warm on every Worker. Over the model entry the session, and so its own warm-up, comes with
+the entry at a Worker's first call: a job of the prepare's pass under a contract that warms up, else
+the stream's first inference. Given its own ``model``,
 the engine creates the session in its ``init``, before the inference Worker's loop, and the
 stream starts warm; ``ModelConfig.fromUrl(anira, url, { fetchModel: () => false })`` then keeps
 the page from fetching the file a second time.

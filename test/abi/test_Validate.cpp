@@ -1305,15 +1305,30 @@ TEST(AbiValidate, AnUnknownExtensionFailsByName) {
 
 TEST(AbiValidate, ContractRules) {
     const ModelConfig model = minimal();
+    // A measured budget is what the warm-up pass measures: UNTIL_STABLE (the default) and FIXED n
+    // pass, NONE and FIXED 0 run no inference and are CONFIG naming the warm-up.
     Outcome outcome = derive(model, Hard{.budget = anira::Budget::measured()});
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(outcome.m_message, "contract: a MEASURED budget");
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    Hard measured_fixed{.budget = anira::Budget::measured()};
+    measured_fixed.warmup = ANIRA_WARMUP_FIXED;
+    measured_fixed.warmup_iterations = 3;
+    outcome = derive(model, measured_fixed);
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    measured_fixed.warmup_iterations = 0;
+    outcome = derive(model, measured_fixed);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
+    expect_contains(outcome.m_message, "contract: a MEASURED budget needs at least one warm-up");
+    Hard measured_none{.budget = anira::Budget::measured()};
+    measured_none.warmup = ANIRA_WARMUP_NONE;
+    outcome = derive(model, measured_none);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
+    expect_contains(outcome.m_message, "contract: a MEASURED budget needs at least one warm-up");
 
+    // An explicit budget takes every warm-up: its timings are only reported.
     Hard until_stable = explicit_hard();
     until_stable.warmup = ANIRA_WARMUP_UNTIL_STABLE;
     outcome = derive(model, until_stable);
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(outcome.m_message, "contract: UNTIL_STABLE warmup");
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 
     // Every miss policy passes the bridge: the policy is the scheduler's, not a 2.x limit.
     Hard zeros = explicit_hard();

@@ -175,6 +175,10 @@ struct HookRecord {
     uint32_t m_js_key = 0;
     uint32_t m_hook_mask = 0;
     std::string m_engine_id;  ///< empty for a processor
+    /// A processor's id (anira_processor_desc.id), what its inference hooks are for the model's
+    /// figure: the key of the name it is defined under, so that the handlers of every page that
+    /// defines the same processor share their figure.
+    std::string m_processor_id;
     EdgeStatement m_input_edge;
     EdgeStatement m_output_edge;
 };
@@ -354,7 +358,7 @@ anira::detail::LogSinkId s_log_hook_sink = 0;
 void fill_processor_desc(anira_processor_desc& desc,
                          uint32_t js_key,
                          uint32_t hook_mask,
-                         uint32_t processor_flags) {
+                         uint32_t realtime_phases) {
     auto record = std::make_unique<HookRecord>();
     record->m_js_key = js_key;
     record->m_hook_mask = hook_mask;
@@ -375,7 +379,9 @@ void fill_processor_desc(anira_processor_desc& desc,
     if ((hook_mask & ANIRA_EM_PROCESSOR_HOOK_INIT) != 0) { desc.init = &processor_init; }
     desc.release = &processor_release;
     // The caller's stated promise, as given: anira_pipeline_add_processor judges the bits.
-    desc.flags = processor_flags;
+    desc.realtime_phases = realtime_phases;
+    record->m_processor_id = "org.anira.web.processor." + std::to_string(js_key);
+    desc.id = record->m_processor_id.c_str();  // copied by the carrier
     desc.user_data = record.release();
 }
 
@@ -427,18 +433,18 @@ void fill_engine_desc(anira_engine_desc& desc,
 anira_status ANIRA_CALL anira_em_processor_desc_init(anira_processor_desc* desc,
                                                      uint32_t js_key,
                                                      uint32_t hook_mask,
-                                                     uint32_t processor_flags) ANIRA_NOEXCEPT try {
+                                                     uint32_t realtime_phases) ANIRA_NOEXCEPT try {
     if (desc == nullptr || (hook_mask & ~k_processor_hooks) != 0) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    fill_processor_desc(*desc, js_key, hook_mask, processor_flags);
+    fill_processor_desc(*desc, js_key, hook_mask, realtime_phases);
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipeline* pipeline,
                                                            uint32_t js_key,
                                                            uint32_t hook_mask,
-                                                           uint32_t processor_flags,
+                                                           uint32_t realtime_phases,
                                                            anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(
         (hook_mask & ~k_processor_hooks) == 0,
@@ -449,7 +455,7 @@ anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipeline* pipel
         hook_mask,
         k_processor_hooks);
     anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
-    fill_processor_desc(desc, js_key, hook_mask, processor_flags);
+    fill_processor_desc(desc, js_key, hook_mask, realtime_phases);
     // A refused addition never calls release: until it succeeds the record is ours.
     std::unique_ptr<HookRecord> record(static_cast<HookRecord*>(desc.user_data));
     const anira_status added = anira_pipeline_add_processor(pipeline, &desc, err);

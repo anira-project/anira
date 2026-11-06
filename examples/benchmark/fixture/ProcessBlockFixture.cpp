@@ -38,6 +38,29 @@ std::string engine_name(const anira_plan_info& plan) {
     }
 }
 
+/// How the plan's budget was found, for the run header.
+std::string warmup_words(const anira_plan_info& plan) {
+    const std::string over = " over " + std::to_string(plan.warmup_iterations) + " inferences";
+    switch (plan.warmup_outcome) {
+        case ANIRA_WARMUP_OUTCOME_FIXED: return "measured" + over + ", fixed";
+        case ANIRA_WARMUP_OUTCOME_STABLE: return "measured" + over + ", stable";
+        case ANIRA_WARMUP_OUTCOME_CAPPED: return "measured" + over + ", capped before stable";
+        case ANIRA_WARMUP_OUTCOME_REUSED:
+            return "the model's figure, measured at an earlier prepare";
+        default: return "explicit, no warm-up";
+    }
+}
+
+/// The plan's real-time verdict, for the run header.
+const char* verdict_words(uint32_t verdict) {
+    switch (verdict) {
+        case ANIRA_RT_COMFORTABLE: return "comfortable";
+        case ANIRA_RT_MARGINAL: return "marginal";
+        case ANIRA_RT_NOT_REALTIME: return "NOT real-time";
+        default: return "unmeasured";
+    }
+}
+
 /// The backend a plan runs on, as one string: the engine's name, the provider and a custom
 /// provider's name.
 std::string backend_key(const anira_plan_info& plan) {
@@ -133,6 +156,11 @@ void ProcessBlockFixture::initialize_repetition(const anira::ModelConfig& model,
                   << " Hz | Host Buffer Size: " << hard.host_block_max << " = " << std::fixed
                   << std::setprecision(4) << hard.host_block_max * 1000.0 / hard.host_rate << " ms"
                   << '\n';
+        // What prepare measured for the plan: an estimate at prepare, on this machine under its
+        // load of the moment. Nothing is held whatever the verdict: a benchmark measures.
+        std::cout << "Budget " << std::defaultfloat << std::setprecision(3) << info.budget_ms
+                  << " ms (" << warmup_words(info) << "); real-time factor " << info.rt_factor
+                  << " of " << info.rt_parallel << ": " << verdict_words(info.rt_verdict) << '\n';
         std::cout << "-----------------------------------------------------------------------------"
                      "-----------------------------------------------------------\n"
                   << '\n';

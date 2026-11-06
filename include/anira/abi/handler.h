@@ -264,8 +264,12 @@ typedef struct anira_plan_ext {
  * @brief One plan of the report, addressed by its dense index: the variant it runs, the backend
  * it runs on and its budget. Tier 2, struct_size first; enumerated by
  * anira_plan_report_plans at the caller's stride. budget_ms is the budget of this one
- * plan (in this pre-release the contract's explicit figure); the Hard promise is the
- * worst case across every plan.
+ * plan: under a MEASURED budget what the warm-up pass measured for it, under an EXPLICIT
+ * one the contract's figure; the Hard promise is the worst case across every plan, the
+ * session sized for the largest. The warm-up fields (warmup_iterations, warmup_outcome,
+ * measured_ms, median_ms) say what the pass measured, and the real-time fields
+ * (rt_factor, rt_parallel, rt_verdict) whether the plan keeps up on this machine, an
+ * estimate at prepare; the rows are read at any time after the prepare.
  */
 typedef struct anira_plan_info {
     uint32_t struct_size;  /**< sizeof(anira_plan_info) of the caller's header. */
@@ -286,7 +290,12 @@ typedef struct anira_plan_info {
      * report is.
      */
     const char* engine_id;
-    double budget_ms;  /**< The per-inference budget of this plan in milliseconds. */
+    /**
+     * The per-inference budget of this plan in milliseconds: its warm-up figure under a
+     * MEASURED budget (the maximum of its last four inferences), the contract's figure under an
+     * EXPLICIT one.
+     */
+    double budget_ms;
     /**
      * The flags of a custom engine's descriptor (anira_engine_desc.flags: the
      * ANIRA_ENGINE_FLAG_* promises); 0 for a built-in engine. A tail field: a caller whose
@@ -308,11 +317,59 @@ typedef struct anira_plan_info {
      * whose header ends before it gets its rows without it.
      */
     uint32_t memory_kind;
+    /**
+     * The inferences the warm-up pass ran for this plan at this prepare (those of the stored
+     * measurement under ANIRA_WARMUP_OUTCOME_REUSED); 0 without a pass. A tail field: a caller
+     * whose header ends before it gets its rows without it.
+     */
+    uint32_t warmup_iterations;
+    /**
+     * What the pass measured for this plan, in milliseconds: the maximum of its last four
+     * inference times (of all of them below four), each timed on the inference thread that ran
+     * it, never below one clock step; under an explicit budget the observation beside the
+     * declared figure; 0 without a pass. A tail field: a caller whose header ends before it
+     * gets its rows without it.
+     */
+    double measured_ms;
+    /**
+     * The median of the same times, the jitter at a glance beside measured_ms; 0 without a
+     * pass. A tail field: a caller whose header ends before it gets its rows without it.
+     */
+    double median_ms;
+    /**
+     * anira_warmup_outcome: how this plan's pass ended. A tail field: a caller whose header
+     * ends before it gets its rows without it.
+     */
+    uint32_t warmup_outcome;
+    /**
+     * The inferences of the session that run at once, n: 1 for an exclusive session (a stateful
+     * model, a declared State pair), else the model's instances as the pool clamps them; the
+     * same in every row of a session. A tail field: a caller whose header ends before it gets
+     * its rows without it.
+     */
+    uint32_t rt_parallel;
+    /**
+     * The real-time factor: the plan's inference time over the anchor's hop period (T *
+     * host_rate / (1000 * hop), the latency model's kappa), T being measured_ms, or budget_ms
+     * without a measurement (ANIRA_RT_UNMEASURED). 1.0 is an inference as long as the audio it
+     * produces; the plan keeps up while rt_factor / rt_parallel stays below 1. A tail field: a
+     * caller whose header ends before it gets its rows without it.
+     */
+    double rt_factor;
+    /**
+     * anira_rt_verdict: the thresholds applied to rt_factor / rt_parallel (below 0.75
+     * comfortable, below 1 marginal, else not real-time), or ANIRA_RT_UNMEASURED without a
+     * measurement. A host that plays live holds a NOT_REALTIME plan until its user agrees, and
+     * never gates an offline render. A tail field: a caller whose header ends before it gets
+     * its rows without it.
+     */
+    uint32_t rt_verdict;
+    uint32_t reserved2;  /**< 0. */
 } anira_plan_info;
 /**
  * @brief No plan.
  */
-#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL, ANIRA_MEMORY_UNKNOWN)
+#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL, ANIRA_MEMORY_UNKNOWN, 0u, 0.0, 0.0, ANIRA_WARMUP_OUTCOME_NONE, 0u, 0.0, ANIRA_RT_UNMEASURED, 0u)
 
 /**
  * @brief The variant of an anira_plan_query that matches every variant (0 is a variant: the
@@ -468,11 +525,12 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_processor(anira_pipeline* p
  * object, which anira_pipeline_add_engine adds to any number of pipelines. The object is
  * the engine's identity and the id its name, both fixed for the object's life: handlers
  * running the same object on an equal model configuration share one loaded model (one
- * load), whichever pipelines they come from; two objects never share, even under one id
- * over the same callbacks and user_data. The handle holds one reference and may be
- * destroyed right after the last anira_pipeline_add_engine; release fires exactly once,
- * when the last reference dies (the handle, the pipelines, their handlers, the loaded
- * models), after every unload. A refused call creates nothing and never calls release.
+ * load), whichever pipelines they come from; two objects never share one, even under one
+ * id over the same callbacks and user_data, though they share the model's figure under
+ * it (engine_id). The handle holds one reference and may be destroyed right after the
+ * last anira_pipeline_add_engine; release fires exactly once, when the last reference
+ * dies (the handle, the pipelines, their handlers, the loaded models), after every
+ * unload. A refused call creates nothing and never calls release.
  * @param engine_id The engine's id, copied: the reverse-URI name model entries name the engine
  *        by (anira_model_config_add_model_path with ANIRA_ENGINE_CUSTOM), which
  *        anira_backend_id.engine_id, the plan report and every message about the
@@ -481,7 +539,11 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_processor(anira_pipeline* p
  *        2.x custom backend under, legal like any other id (a 2.x model file's
  *        "CUSTOM" row names it). The id belongs to the engine, in every pipeline it
  *        is added to, and is unique per pipeline (anira_pipeline_add_engine), not per
- *        process: two engine objects may carry one id in two pipelines.
+ *        process: two engine objects may carry one id in two pipelines. They share
+ *        the model's figure, which a prepare's warm-up pass measures (identical
+ *        plugins report the same latency), so an id names one implementation;
+ *        "anira.v2.custom", which names every 2.x custom backend, is the exception,
+ *        its figures kept per engine object.
  * @param desc The engine; min(struct_size, sizeof(anira_engine_desc)) bytes are copied, with
  *        the consumed kinds, so the record and its strings may die when the call returns.
  *        The slots a shorter struct_size does not cover read as in ANIRA_ENGINE_DESC_INIT.
@@ -706,33 +768,69 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * registration, before any model loads), loads the model of every candidate with an
  * entry (a device provider's with the memory kind of its device, the context's kept
  * answer or its device API's asked now, which its slot classes follow:
- * anira_plan_info.memory_kind), warms up as the contract says, drops every plan with a
- * slot whose edge is above the contract's edge cost (anira_contract_set_edge_cost: an
- * ANIRA_EDGE_UNKNOWN edge is above every limit; an Info record per dropped plan names
- * the slots, their class, mover and reason), sizes the rings for the contract's block
- * range and the latency, builds the plan report, selects the plan of the variant's
- * default engine when that engine has a plan (else plan 0), logs the report (Info
- * records of the group anira.capi: the counts and the selected plan, then one record per
- * plan, per slot and per consumed extension) re-arms the real-time latches, logging the
- * count of failures suppressed since the last prepare or reset, and last calls the
- * processor's prepare function, when the pipeline has a processor with one, with an
- * anira_prepare_info (the handler, the report, the entry count, a template of the model
- * end of every slot and the canonical names) and keeps the prepared pointer it hands
- * back for this handler (a status other than ANIRA_OK fails this call with it, and
- * unprepare is not called for a refused prepare). A second prepare replaces the previous
+ * anira_plan_info.memory_kind; every executor of a built-in engine runs one inference
+ * over its own scratch when it is made), drops every plan with a slot whose edge is
+ * above the contract's edge cost (anira_contract_set_edge_cost: an ANIRA_EDGE_UNKNOWN
+ * edge is above every limit; an Info record per dropped plan names the slots, their
+ * class, mover and reason), builds the plan report, selects the plan of the variant's
+ * default engine when that engine has a plan (else plan 0), sizes the session (its
+ * entries, its rings, the latency) for the contract's block range and the budget (an
+ * explicit budget's figure; under a MEASURED one first a single clock step), calls every
+ * registered engine's prepare and then the processor's prepare function, when the
+ * pipeline has a processor with one, with an anira_prepare_info (the handler, the
+ * report, the entry count, a template of the model end of every slot and the canonical
+ * names) and keeps the prepared pointer it hands back for this handler (a status other
+ * than ANIRA_OK fails this call with it, and unprepare is not called for a refused
+ * prepare). Then the contract's warm-up pass, unless the warm-up is ANIRA_WARMUP_NONE or
+ * FIXED 0: ordinary inferences of every plan through the session on the inference
+ * threads, each timed on its thread (anira_warmup_mode); under a MEASURED budget each
+ * plan's row takes its figure and the session the slowest. The core keeps what every
+ * pass measured as the model's figure (the pooled model, a model given as bytes by a
+ * content hash of its bytes whoever owns them, a registered engine's id,
+ * anira.v2.custom's engine object, and the processor's inference hooks:
+ * anira_processor_desc.id), under either budget kind, for as long as its state lives: a
+ * plan whose model has a figure at least as thorough as the contract's warm-up
+ * (UNTIL_STABLE answers every warm-up, FIXED n a FIXED m <= n) runs no pass and reports
+ * ANIRA_WARMUP_OUTCOME_REUSED with that measurement's counts and times, so identical
+ * handlers report identical latency, and a prepare whose every plan reuses its figure
+ * sizes the session once and needs no running inference thread; two prepares of one
+ * model on two threads measure it once. ANIRA_WARMUP_NONE neither measures nor reads the
+ * figure. The warm-up pass also measures the inference time; a measured budget is the
+ * maximum of its last four inferences; under an explicit budget the timings are only
+ * reported. The session is then sized again for the budget, which drains it, starts the
+ * stream over (a new generation: every exclusive engine is reset at the stream's first
+ * inference) and zeroes every declared State pair, so nothing of the pass reaches the
+ * stream; when that changes the entry count, the registered engines and the processor
+ * are unprepared and prepared again with the final record. Each plan row then carries
+ * what the pass measured and the plan's real-time factor and verdict
+ * (anira_plan_info.warmup_outcome, measured_ms, rt_factor, rt_verdict). Last it logs the
+ * measurement (one record per plan of the group anira.capi, at Warning for a marginal or
+ * not real-time plan, a pass that did not settle and an explicit budget below its
+ * measurement, then one record for the session: its budget, the worst verdict, the
+ * latency and the entries, at Warning when the pool cannot keep up), the report (Info
+ * records: the counts and the selected plan, then one record per plan, per slot and per
+ * consumed extension) and re-arms the real-time latches, logging the count of failures
+ * suppressed since the last prepare or reset. A second prepare replaces the previous
  * session whole: the processor's unprepare of the previous prepare runs once the old
  * session is released, before the new prepare. A failed prepare leaves the handler
- * unprepared, the previous prepare's unprepare called all the same. Refused in this
- * pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE
- * (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up),
- * ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel
- * count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a
- * function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed
- * tensor, or one that differs from its spec's dtype while the processor does not fill
- * the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a processor
- * whose filled pre_process, post_process or reset carries no
- * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those
- * three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
+ * unprepared, the previous prepare's unprepare called all the same. A model too slow for
+ * the stream is not refused: the session is sized as for an infeasible explicit budget
+ * (for one host block's burst), and the plan rows carry what was measured. A prepare
+ * that warms up needs an inference thread inside its loop (a context without a pool
+ * needs a host thread in anira_inference_thread_run_loop; on WebAssembly the pool's
+ * Workers must have started) and fails with ANIRA_ERROR_INVALID_STATE without one or
+ * when an inference of the pass has not completed within 10 s; an inference of the pass
+ * that fails fails it with ANIRA_ERROR_ENGINE naming the plan. Refused in this
+ * pre-release: an Async contract (ANIRA_ERROR_NOT_SUPPORTED), a MEASURED budget whose
+ * warm-up runs no inference (ANIRA_WARMUP_NONE, FIXED 0; ANIRA_ERROR_CONFIG naming the
+ * warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's
+ * channel count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK
+ * without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no
+ * Streamed tensor, or one that differs from its spec's dtype while the processor does
+ * not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a
+ * processor with a filled pre_process, post_process or reset whose bit is missing from
+ * its realtime_phases, since under a Hard contract those three phases run on the driving
+ * thread (ANIRA_ERROR_CONFIG naming the phase and realtime_phases).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.
@@ -744,9 +842,12 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  *         ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a
  *         spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE,
  *         ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load;
- *         ANIRA_ERROR_EDGE_UNREACHABLE when no plan is within the contract's edge cost, every
- *         dropped plan's slots named in the message; the status a processor's prepare function
- *         returned; ANIRA_ERROR_INVALID_STATE while an audio node streams through the handler
+ *         ANIRA_ERROR_ENGINE when an inference of the warm-up pass fails,
+ *         ANIRA_ERROR_INVALID_STATE when a warm-up finds no inference thread inside its loop or
+ *         an inference of it does not complete within 10 s; ANIRA_ERROR_EDGE_UNREACHABLE when
+ *         no plan is within the contract's edge cost, every dropped plan's slots named in the
+ *         message; the status a processor's prepare function returned;
+ *         ANIRA_ERROR_INVALID_STATE while an audio node streams through the handler
  *         (WebAssembly: its render callback may be inside a process call; re-prepare through
  *         anira_em_audio_node_prepare).
  * @par Thread contract

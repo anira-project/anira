@@ -51,8 +51,10 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -69,11 +71,13 @@
 #include "../engines/DescriptorAdapter.h"
 #include "../platform/memory_probe.h"
 #include "../scheduler/Core.h"
+#include "../scheduler/FigureKey.h"
 #include "../scheduler/InferenceManager.h"
 #include "../scheduler/InferenceThread.h"
 #include "../scheduler/LatencyCalculator.h"
 #include "../scheduler/SessionElement.h"
 #include "../scheduler/TensorRun.h"
+#include "../scheduler/Warmup.h"
 #include "../utils/Logger.h"
 #include "../utils/RtLatch.h"
 #include "capi_internal.h"
@@ -163,9 +167,12 @@ bool matches(const anira_plan_info& plan,
 constexpr uint32_t k_processor_desc_head =
     offsetof(anira_processor_desc, user_data) + sizeof(void*);
 constexpr uint32_t k_engine_desc_head = offsetof(anira_engine_desc, user_data) + sizeof(void*);
-/// Every flags bit anira/abi/processor.h defines: a processor's real-time promise.
-constexpr uint32_t k_processor_flags =
-    ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+/// Every bit anira_processor_desc.realtime_phases may carry: the five per-chunk phases of a
+/// processor.
+constexpr uint32_t k_realtime_phases =
+    ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) |
+    ANIRA_PHASE_BIT(ANIRA_PHASE_BEFORE_INFERENCE) | ANIRA_PHASE_BIT(ANIRA_PHASE_AFTER_INFERENCE) |
+    ANIRA_PHASE_BIT(ANIRA_PHASE_RESET);
 /// Every flags bit anira/abi/engine.h defines: an engine's promises.
 constexpr uint32_t k_engine_flags = ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL |
                                     ANIRA_ENGINE_FLAG_REALTIME_SAFE |
@@ -756,6 +763,30 @@ void clear_report(anira_plan_report& report) noexcept {
     report.m_strings.clear();
 }
 
+// The processor's unprepare, once per successful prepare, when no phase call of this handler can
+// run any more: what its prepare handed back for this handler goes back to it.
+void unprepare_processor(anira_handler& handler) noexcept {
+    if (!handler.m_processor_unprepare_owed) { return; }
+    handler.m_processor_unprepare_owed = false;
+    const anira::capi::ProcessorCarrier* const processor = handler.m_pipeline.m_processor.get();
+    if (processor != nullptr && processor->desc().unprepare != nullptr) {
+        processor->desc().unprepare(handler.m_processor_prepared, processor->desc().user_data);
+    }
+    handler.m_processor_prepared = nullptr;
+    if (handler.m_pp != nullptr) { handler.m_pp->set_prepared(nullptr); }
+}
+
+// Declared state: both buffers of every pair at zeros, and the port forgets the generation it
+// was last bound under, while no chunk of the session can touch it (the Static values stay).
+void zero_state_ports(anira_handler& handler) noexcept {
+    for (anira::capi::Port& port : handler.m_input_ports) {
+        auto* state = std::get_if<anira::capi::StatePort>(&port);
+        if (state == nullptr || !state->m_value.has_value()) { continue; }
+        state->m_value->zero_both();
+        state->m_generation = anira::capi::StatePort::k_no_generation;
+    }
+}
+
 // Releases the session and everything prepare built; the handler is unprepared afterwards.
 // The session goes first (Core::release_session drains the in-flight work and joins the pool
 // with the last session), then the processor, the processor's unprepare, the report and the plan
@@ -766,16 +797,7 @@ void unprepare(anira_handler& handler) noexcept {
     handler.m_prepared.store(false, std::memory_order_release);
     handler.m_manager.reset();
     handler.m_pp.reset();
-    // The processor's unprepare, once per successful prepare, now that no phase call of this
-    // handler can run any more: what its prepare handed back for this handler goes back to it.
-    if (handler.m_processor_unprepare_owed) {
-        handler.m_processor_unprepare_owed = false;
-        const anira::capi::ProcessorCarrier* const processor = handler.m_pipeline.m_processor.get();
-        if (processor != nullptr && processor->desc().unprepare != nullptr) {
-            processor->desc().unprepare(handler.m_processor_prepared, processor->desc().user_data);
-        }
-        handler.m_processor_prepared = nullptr;
-    }
+    unprepare_processor(handler);
     clear_report(handler.m_report);
     handler.m_plans.clear();
     handler.m_num_entries = 0;
@@ -878,33 +900,48 @@ void check_buffer_specs(const anira_model_config& model) {
                           side + " under a Hard contract");
 }
 
-// The real-time rule of prepare: the processor's flags are its promise, checked against where its
-// phases run. Under a Hard contract (the only contract of this pre-release) a filled
-// pre_process, post_process or reset runs on the driving thread (the reset right before the
-// first pre_process of a new stream), so the processor must promise
-// ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST for any of the three; the two hooks run on an inference
-// thread and need no promise here (a later contract option that puts them on the driving
-// thread requires ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS too). The default bodies are real-time by
-// construction, so a NULL slot needs nothing. anira's own side stays real-time whatever the
-// flags say.
-void check_processor_flags(const anira::capi::ProcessorCarrier* processor) {
+// The real-time rule of prepare: the processor's realtime_phases are its promise, per phase,
+// checked against where its phases run. Every filled phase the contract runs on the driving
+// thread must carry its bit. Under a Hard contract (the only contract of this pre-release)
+// those are pre_process, post_process and reset (the reset right before the first pre_process
+// of a new stream); the two hooks run on an inference thread and need no promise. The default
+// bodies are real-time by construction, so a NULL slot needs nothing, and a promised phase that
+// is not filled is no error. anira's own side stays real-time whatever the bits say.
+void check_realtime_phases(const anira::capi::ProcessorCarrier* processor) {
     if (processor == nullptr) { return; }
     const anira_processor_desc& desc = processor->desc();
-    const bool on_driving_thread =
-        desc.pre_process != nullptr || desc.post_process != nullptr || desc.reset != nullptr;
-    if (!on_driving_thread || (desc.flags & ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST) != 0) {
-        return;
+    struct DrivingPhase {
+        anira_phase m_phase;
+        bool m_filled;
+        const char* m_bit;  // the bit's spelling, for the message
+    };
+    const std::array<DrivingPhase, 3> driving{{
+        {.m_phase = ANIRA_PHASE_PRE_PROCESS,
+         .m_filled = desc.pre_process != nullptr,
+         .m_bit = "ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS)"},
+        {.m_phase = ANIRA_PHASE_POST_PROCESS,
+         .m_filled = desc.post_process != nullptr,
+         .m_bit = "ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS)"},
+        {.m_phase = ANIRA_PHASE_RESET,
+         .m_filled = desc.reset != nullptr,
+         .m_bit = "ANIRA_PHASE_BIT(ANIRA_PHASE_RESET)"},
+    }};
+    for (const DrivingPhase& phase : driving) {
+        if (!phase.m_filled || (desc.realtime_phases & ANIRA_PHASE_BIT(phase.m_phase)) != 0) {
+            continue;
+        }
+        const std::string word = anira::capi::phase_word(phase.m_phase);
+        std::string message = "the processor: ";
+        message += word;
+        message +=
+            " is filled and runs on the driving thread under a Hard contract, which requires its "
+            "bit, ";
+        message += phase.m_bit;
+        message += ", in anira_processor_desc.realtime_phases (the processor's promise that ";
+        message += word;
+        message += " allocates nothing, locks nothing and blocks on nothing)";
+        throw StatusError(ANIRA_ERROR_CONFIG, message);
     }
-    const anira_phase filled = desc.pre_process != nullptr    ? ANIRA_PHASE_PRE_PROCESS
-                               : desc.post_process != nullptr ? ANIRA_PHASE_POST_PROCESS
-                                                              : ANIRA_PHASE_RESET;
-    throw StatusError(ANIRA_ERROR_CONFIG,
-                      std::string("the processor: ") + anira::capi::phase_word(filled) +
-                          " is filled and runs on the driving thread under a Hard contract, "
-                          "which requires ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in "
-                          "anira_processor_desc.flags (the processor's promise that pre_process, "
-                          "post_process and reset allocate nothing, lock nothing and block on "
-                          "nothing)");
 }
 
 // Whether a model entry is the variant's default engine (by id for a custom engine, by
@@ -1153,12 +1190,12 @@ void check_providers(const anira_context& context,
 // canonical name; the export's name where the row's tensors record names the slot, else
 // empty, so that the load binds by the canonical name where its engine has one and by
 // position otherwise; the engine's extents under the row's layout; the spec's dtype), the
-// shared slots and the contract's warm-up. Everything copied: a pooled loaded model never
-// aliases this handler's configuration.
+// shared slots. Everything copied: a pooled loaded model never aliases this handler's
+// configuration. The contract's warm-up is no part of it: it runs at prepare, through the
+// session, and every executor warms up once when it is made (ExecutorLoaded::k_creation_warm_up).
 anira::engine::Model model_of_row(const anira_model_config& model,
                                   const anira::capi::ModelEntry& row,
-                                  const anira::capi::Derived& derived,
-                                  const anira::capi::HardContract& hard) {
+                                  const anira::capi::Derived& derived) {
     anira::engine::Model record;
     record.m_engine = row.m_engine;
     record.m_engine_id = row.m_engine_id;
@@ -1166,6 +1203,7 @@ anira::engine::Model model_of_row(const anira_model_config& model,
         record.m_bytes = row.m_bytes->data();
         record.m_num_bytes = row.m_bytes->size();
         record.m_bytes_owner = std::shared_ptr<const void>(row.m_bytes, row.m_bytes->data());
+        record.m_bytes_hash = row.m_bytes->content_hash();
     } else {
         record.m_path = row.m_path;
     }
@@ -1207,7 +1245,6 @@ anira::engine::Model model_of_row(const anira_model_config& model,
     // pair), so every handler of one variant is of one kind and the pool shares one loaded
     // model between them, prepared per handler.
     record.m_instances = derived.m_exclusive ? 0U : model.m_max_instances;
-    record.m_warm_up = hard.m_warmup == ANIRA_WARMUP_FIXED ? hard.m_warmup_iterations : 0U;
     return record;
 }
 
@@ -1220,8 +1257,7 @@ anira::engine::Model model_of_row(const anira_model_config& model,
 // init. Every custom row has a registered engine by then, anira.v2.custom included (validate
 // refused one without); the engine-free roundtrip is the 2.x class's alone.
 std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handler,
-                                                      const anira::capi::Derived& derived,
-                                                      const anira::capi::HardContract& hard) {
+                                                      const anira::capi::Derived& derived) {
     const anira_model_config& model = handler.m_pipeline.m_variants[0];
     // The variant a registered engine's load reads (the load record names it): anira's own
     // copy, shared by the registered rows of this prepare and kept alive by their loaded
@@ -1234,7 +1270,7 @@ std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handl
         const size_t row_index = key.m_row;
         const anira::capi::ModelEntry& row = model.m_models[row_index];
         anira::engine::PlanRequest request;
-        request.m_model = model_of_row(model, row, derived, hard);
+        request.m_model = model_of_row(model, row, derived);
         // The provider is the plan's, part of the pool key: two providers of one row are two
         // loaded models, and so are two option sets of the context for one backend (the
         // "provider_options" extension of the handler's context config).
@@ -1684,12 +1720,13 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
         ANIRA_LOG_INFO(
             anira::log_group::k_capi,
             "anira_handler_prepare: plan %u: variant %u, engine %s, provider %s, "
-            "budget %.3f ms, memory %s",
+            "budget %.3f ms (%s), memory %s",
             i,
             info.variant,
             engine.c_str(),
             provider.c_str(),
             info.budget_ms,
+            handler.m_contract.hard()->m_budget == ANIRA_BUDGET_MEASURED ? "measured" : "explicit",
             anira::platform::memory_kind_word(static_cast<anira_memory_kind>(info.memory_kind)));
         log_slots(i, report.m_inputs[i], model.m_inputs, handler.m_derived.m_inputs, "input");
         log_slots(i, report.m_outputs[i], model.m_outputs, handler.m_derived.m_outputs, "output");
@@ -1706,6 +1743,332 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
 #else
     static_cast<void>(handler);
     static_cast<void>(model);
+#endif
+}
+
+// The load (rt_factor / rt_parallel) from which a plan is no longer comfortable: the figure is
+// the maximum of a window the criterion accepts within 20 % of its median, and the rest covers
+// what one measurement at prepare cannot see (other handlers starting later, other applications,
+// the clock speed): a quarter of headroom absorbs a third more inference time.
+constexpr double k_marginal_load = 0.75;
+
+// The verdict of a measured plan: its load over the thresholds of anira_rt_verdict.
+anira_rt_verdict rt_verdict_of(double rt_factor, uint32_t rt_parallel) noexcept {
+    const double load = rt_factor / static_cast<double>(std::max<uint32_t>(rt_parallel, 1));
+    if (load >= 1.0) { return ANIRA_RT_NOT_REALTIME; }
+    if (load >= k_marginal_load) { return ANIRA_RT_MARGINAL; }
+    return ANIRA_RT_COMFORTABLE;
+}
+
+// The warm-up and real-time fields of one plan row: what the pass measured, or the model's figure
+// an earlier prepare measured (`reused`; ANIRA_WARMUP_OUTCOME_REUSED, the stored measurement's
+// counts and times), nothing without either; the real-time factor of the plan's inference time (the
+// measurement, else the row's budget) over the anchor's hop period (LatencyCalculator::hop_periods,
+// the latency model's kappa), the session's parallel inferences and the verdict (UNMEASURED without
+// a measurement).
+void set_real_time(anira_plan_info& info,
+                   const anira::WarmupFigure* figure,
+                   bool reused,
+                   const anira::capi::Derived& derived,
+                   const anira::capi::HardContract& hard,
+                   uint32_t parallel) noexcept {
+    info.rt_parallel = std::max<uint32_t>(parallel, 1);
+    if (figure == nullptr) {
+        info.warmup_iterations = 0;
+        info.warmup_outcome = ANIRA_WARMUP_OUTCOME_NONE;
+        info.measured_ms = 0.0;
+        info.median_ms = 0.0;
+        info.rt_factor = anira::LatencyCalculator::hop_periods(derived, hard, info.budget_ms);
+        info.rt_verdict = ANIRA_RT_UNMEASURED;
+        return;
+    }
+    info.warmup_iterations = figure->m_iterations;
+    info.warmup_outcome =
+        static_cast<uint32_t>(reused ? ANIRA_WARMUP_OUTCOME_REUSED : figure->m_outcome);
+    info.measured_ms = figure->m_measured_ms;
+    info.median_ms = figure->m_median_ms;
+    info.rt_factor = anira::LatencyCalculator::hop_periods(derived, hard, figure->m_measured_ms);
+    info.rt_verdict = static_cast<uint32_t>(rt_verdict_of(info.rt_factor, info.rt_parallel));
+}
+
+// What a prepare knows of one plan's inference time: nothing (no warm-up, or not yet), what its
+// pass measured now, or the model's figure an earlier prepare measured.
+struct PlanMeasurement {
+    enum class Source : uint8_t { None, Measured, Reused };
+    Source m_source = Source::None;
+    anira::ModelFigure m_figure;
+};
+
+// A claim on one key of the figure index for the length of one plan's pass: published with what
+// the pass measured, abandoned when it does not get there (the pass threw), so that the next
+// prepare of the key measures and nobody waits for it in vain.
+class FigureClaim {
+public:
+    explicit FigureClaim(const anira::FigureKey& key) : m_key(key) {}
+    ~FigureClaim() {
+        if (m_claimed) { anira::Core::abandon_figure(m_key); }
+    }
+    FigureClaim(const FigureClaim&) = delete;
+    FigureClaim& operator=(const FigureClaim&) = delete;
+    FigureClaim(FigureClaim&&) = delete;
+    FigureClaim& operator=(FigureClaim&&) = delete;
+
+    // The figure another prepare stored meanwhile, or the claim (nothing: measure now).
+    std::optional<anira::ModelFigure> take(anira_warmup_mode mode, uint32_t iterations) {
+        std::optional<anira::ModelFigure> known =
+            anira::Core::claim_figure(m_key, mode, iterations);
+        m_claimed = !known.has_value();
+        return known;
+    }
+    void publish(const anira::ModelFigure& figure) {
+        anira::Core::publish_figure(m_key, figure);
+        m_claimed = false;
+    }
+
+private:
+    const anira::FigureKey& m_key;
+    bool m_claimed = false;
+};
+
+// The key of one plan's figure (FigureKey): its loaded model's record (a bytes model by the
+// content hash of its bytes, never their address or owner, so the index keeps no model in
+// memory), the registered engine's id where the row is a custom one (its registration under the
+// 2.x catch-all id), and the identity of the processor's inference hooks: its id, else its
+// registration, and nothing for a processor that fills neither hook.
+anira::FigureKey figure_key(const anira_handler& handler,
+                            const anira::SessionElement& session,
+                            uint32_t plan) {
+    anira::FigureKey key;
+    key.m_model = session.m_plans[plan].m_loaded->model();
+    // A bytes model by its content (hash and size, the record's m_num_bytes), never by the
+    // bytes' address or owner: two plugins that each borrow or copy the same model bytes are
+    // one model, and a buffer reused for other bytes never matches.
+    key.m_bytes_hash = key.m_model.m_bytes_hash;
+    key.m_model.m_bytes = nullptr;
+    key.m_model.m_bytes_owner.reset();
+    const anira::capi::ModelEntry& row =
+        handler.m_pipeline.m_variants[0].m_models[handler.m_plans[plan].m_row];
+    if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
+            registered_engine(handler.m_pipeline, row)) {
+        // The engine's id: every registration of one id shares the figure (identical plugins
+        // report the same latency), as a processor's id does for its hooks. The 2.x catch-all
+        // id names every 2.x custom backend, so those are told apart by their registration.
+        key.m_engine_id = engine->id();
+        if (engine->id() == anira::capi::k_v2_custom_engine) {
+            key.m_carrier = engine;
+            key.m_by_registration = true;
+        }
+    }
+    const std::shared_ptr<anira::capi::ProcessorCarrier>& processor =
+        handler.m_pipeline.m_processor;
+    if (processor != nullptr && (processor->desc().before_inference != nullptr ||
+                                 processor->desc().after_inference != nullptr)) {
+        if (processor->desc().id != nullptr && processor->desc().id[0] != '\0') {
+            key.m_hook_id = processor->desc().id;
+        } else {
+            key.m_hook_owner = processor;
+            key.m_hooks_by_registration = true;
+        }
+    }
+    return key;
+}
+
+#ifdef ENABLE_LOGGING
+const char* rt_verdict_word(uint32_t verdict) {
+    switch (verdict) {
+        case ANIRA_RT_COMFORTABLE: return "comfortable";
+        case ANIRA_RT_MARGINAL: return "marginal";
+        case ANIRA_RT_NOT_REALTIME: return "not real-time";
+        default: return "unmeasured";
+    }
+}
+
+// How much worse a verdict is: unmeasured below comfortable below marginal below not real-time.
+int verdict_rank(uint32_t verdict) {
+    switch (verdict) {
+        case ANIRA_RT_COMFORTABLE: return 1;
+        case ANIRA_RT_MARGINAL: return 2;
+        case ANIRA_RT_NOT_REALTIME: return 3;
+        default: return 0;
+    }
+}
+#endif
+
+// What prepare measured, as records of the group anira.capi, after the session's final sizing
+// and before the report's records. One per plan: the pass (its mode, its inferences, how it
+// ended), the figure and its median, the real-time factor of the session's parallel inferences,
+// its load and the verdict; Info, and Warning for a marginal or not real-time plan, so that a
+// default run (log level Warning) shows the problem without reading the report. A pass that did
+// not settle and an explicit budget below the plan's measurement are a Warning each. Then one
+// record for the session: its budget (the slowest plan's under MEASURED), the worst verdict, the
+// latency of every Streamed output and the entries; Warning when the pool cannot keep up with the
+// budget the session is sized for (one host block's burst, so the stream misses blocks).
+void log_measurement([[maybe_unused]] const anira_handler& handler,
+                     [[maybe_unused]] const std::vector<PlanMeasurement>& measurements) {
+#ifdef ENABLE_LOGGING
+    const anira::capi::HardContract& hard = *handler.m_contract.hard();
+    const bool measured = hard.m_budget == ANIRA_BUDGET_MEASURED;
+    const anira::SessionElement& session = handler.m_manager->session();
+    uint32_t worst = ANIRA_RT_UNMEASURED;
+    for (uint32_t i = 0; i < handler.m_report.m_plans.size(); ++i) {
+        const anira_plan_info& info = handler.m_report.m_plans[i];
+        if (verdict_rank(info.rt_verdict) > verdict_rank(worst)) { worst = info.rt_verdict; }
+        const std::string engine =
+            anira::capi::engine_label(static_cast<anira_engine>(info.engine),
+                                      info.engine_id != nullptr ? info.engine_id : "");
+        const std::string provider =
+            anira::capi::provider_label(static_cast<anira_provider>(info.provider),
+                                        info.provider_id != nullptr ? info.provider_id : "");
+        const double load = info.rt_factor / static_cast<double>(info.rt_parallel);
+        const char* parallel = info.rt_parallel == 1 ? "parallel inference" : "parallel inferences";
+        if (info.rt_verdict == ANIRA_RT_UNMEASURED) {
+            ANIRA_LOG_INFO(anira::log_group::k_capi,
+                           "anira_handler_prepare: plan %u (%s, %s): no warm-up; real-time factor "
+                           "%.2f of %u %s (load %.2f) from the explicit budget %.3f ms: unmeasured",
+                           i,
+                           engine.c_str(),
+                           provider.c_str(),
+                           info.rt_factor,
+                           info.rt_parallel,
+                           parallel,
+                           load,
+                           info.budget_ms);
+            continue;
+        }
+        const bool reused = info.warmup_outcome == ANIRA_WARMUP_OUTCOME_REUSED;
+        // How the measurement ended: this pass's, or the stored one's for a reused figure.
+        const anira_warmup_outcome stored =
+            i < measurements.size() ? measurements[i].m_figure.m_figure.m_outcome
+                                    : static_cast<anira_warmup_outcome>(info.warmup_outcome);
+        const bool fixed = stored == ANIRA_WARMUP_OUTCOME_FIXED;
+        const char* ended = stored == ANIRA_WARMUP_OUTCOME_CAPPED ? ", capped"
+                            : fixed                               ? ""
+                                                                  : ", stable";
+        const int headroom = static_cast<int>(std::lround(std::max(0.0, 1.0 - load) * 100.0));
+        std::string verdict = rt_verdict_word(info.rt_verdict);
+        if (info.rt_verdict == ANIRA_RT_COMFORTABLE) {
+            verdict += " (" + std::to_string(headroom) + " % headroom)";
+        } else if (info.rt_verdict == ANIRA_RT_MARGINAL) {
+            verdict += " (" + std::to_string(headroom) +
+                       " % headroom); the stream may miss blocks under load";
+        } else {
+            verdict =
+                "NOT real-time on this machine; the stream will miss blocks, which on_miss "
+                "fills";
+        }
+        const bool warn =
+            info.rt_verdict == ANIRA_RT_MARGINAL || info.rt_verdict == ANIRA_RT_NOT_REALTIME;
+        std::array<char, 512> line{};
+        if (reused) {
+            const auto age = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - measurements[i].m_figure.m_when);
+            static_cast<void>(std::snprintf(line.data(),
+                                            line.size(),
+                                            "anira_handler_prepare: plan %u (%s, %s): the model's "
+                                            "figure from an earlier prepare (%u inferences%s, %lld "
+                                            "s ago): %.3f ms (median %.3f ms); real-time factor "
+                                            "%.2f of %u %s (load %.2f): %s",
+                                            i,
+                                            engine.c_str(),
+                                            provider.c_str(),
+                                            info.warmup_iterations,
+                                            ended,
+                                            static_cast<long long>(age.count()),
+                                            info.measured_ms,
+                                            info.median_ms,
+                                            info.rt_factor,
+                                            info.rt_parallel,
+                                            parallel,
+                                            load,
+                                            verdict.c_str()));
+        } else {
+            static_cast<void>(std::snprintf(line.data(),
+                                            line.size(),
+                                            "anira_handler_prepare: plan %u (%s, %s): warm-up %s, "
+                                            "%u inferences%s; measured %.3f ms (median %.3f ms) on "
+                                            "the inference threads; real-time factor %.2f of %u %s "
+                                            "(load %.2f): %s",
+                                            i,
+                                            engine.c_str(),
+                                            provider.c_str(),
+                                            fixed ? "fixed" : "until_stable",
+                                            info.warmup_iterations,
+                                            ended,
+                                            info.measured_ms,
+                                            info.median_ms,
+                                            info.rt_factor,
+                                            info.rt_parallel,
+                                            parallel,
+                                            load,
+                                            verdict.c_str()));
+        }
+        if (warn) {
+            ANIRA_LOG_WARNING(anira::log_group::k_capi, "%s", line.data());
+        } else {
+            ANIRA_LOG_INFO(anira::log_group::k_capi, "%s", line.data());
+        }
+        // A pass that did not settle said so at the prepare that ran it; a reuse does not.
+        if (info.warmup_outcome == ANIRA_WARMUP_OUTCOME_CAPPED && i < measurements.size()) {
+            ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                              "anira_handler_prepare: plan %u (%s, %s): the warm-up did not settle "
+                              "in %u inferences (the last four %.3f-%.3f ms); %s their maximum, "
+                              "%.3f ms",
+                              i,
+                              engine.c_str(),
+                              provider.c_str(),
+                              info.warmup_iterations,
+                              measurements[i].m_figure.m_figure.m_fastest_ms,
+                              info.measured_ms,
+                              measured ? "the budget is" : "the measurement is",
+                              info.measured_ms);
+        }
+        if (!measured && info.measured_ms > info.budget_ms) {
+            ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                              "anira_handler_prepare: plan %u (%s, %s): measured %.3f ms per "
+                              "inference, above the explicit budget %.3f ms; the latency is sized "
+                              "for %.3f ms",
+                              i,
+                              engine.c_str(),
+                              provider.c_str(),
+                              info.measured_ms,
+                              info.budget_ms,
+                              info.budget_ms);
+        }
+    }
+    std::string latency;
+    for (size_t i = 0; i < session.num_outputs(); ++i) {
+        if (session.output_hop(i) == 0) { continue; }
+        latency += (latency.empty() ? "" : ", ") + std::to_string(session.m_latency[i]);
+    }
+    const std::string budget =
+        measured ? "measured (the slowest of " + std::to_string(handler.m_report.m_plans.size()) +
+                       (handler.m_report.m_plans.size() == 1 ? " plan)" : " plans)")
+                 : std::string("explicit");
+    const double kappa =
+        anira::LatencyCalculator::hop_periods(handler.m_derived, hard, session.m_budget_ms);
+    if (kappa >= static_cast<double>(std::max<uint32_t>(session.m_num_instances, 1))) {
+        ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                          "anira_handler_prepare: budget %.3f ms, %s: %s; the pool cannot keep "
+                          "up (every hop brings %.2f hop periods of inference for %u parallel "
+                          "inference%s): latency %s samples and %u entries are sized for one "
+                          "host block's burst, and the stream will miss blocks",
+                          session.m_budget_ms,
+                          budget.c_str(),
+                          rt_verdict_word(worst),
+                          kappa,
+                          session.m_num_instances,
+                          session.m_num_instances == 1 ? "" : "s",
+                          latency.c_str(),
+                          handler.m_num_entries);
+        return;
+    }
+    ANIRA_LOG_INFO(anira::log_group::k_capi,
+                   "anira_handler_prepare: budget %.3f ms, %s: %s; latency %s samples, %u entries",
+                   session.m_budget_ms,
+                   budget.c_str(),
+                   rt_verdict_word(worst),
+                   latency.c_str(),
+                   handler.m_num_entries);
 #endif
 }
 
@@ -1790,7 +2153,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                           handler.m_pipeline.m_default_set);
     const anira::capi::HardContract& hard = *snapshot.hard();  // validate refused Async
     check_buffer_specs(model);
-    check_processor_flags(processor);
+    check_realtime_phases(processor);
     const anira::RingDtypes ring_dtypes = anira::capi::ring_dtypes_of(snapshot, model);
     check_host_blocks(hard);
     check_miss_policy(hard, model, derived, ring_dtypes);
@@ -1825,19 +2188,12 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // Quiescence: the previous session is released before the new one is built, and with it
     // the last reader of the previous snapshot and derivation.
     unprepare(handler);
-    // Declared state: the port survives the re-prepare, its value does not. Both buffers of
-    // every pair start the new session at zeros, and the port forgets the generation it was
-    // last bound under (no chunk of the old session can touch it any more; the Static values
-    // stay).
-    for (anira::capi::Port& port : handler.m_input_ports) {
-        auto* state = std::get_if<anira::capi::StatePort>(&port);
-        if (state == nullptr || !state->m_value.has_value()) { continue; }
-        state->m_value->zero_both();
-        state->m_generation = anira::capi::StatePort::k_no_generation;
-    }
+    // Declared state: the port survives the re-prepare, its value does not: the new session
+    // starts at zeros (no chunk of the old session can touch it any more).
+    zero_state_ports(handler);
 
-    // The session: Core::create_session loads every surviving row's model (the FIXED warm-up
-    // runs there) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE,
+    // The session: Core::create_session loads every surviving row's model (every executor warms
+    // up once when it is made) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE,
     // which the firewall classifies. The session records into the handler's latch from its
     // construction. The one processor the session runs every chunk on is the processor runner,
     // whether the pipeline has a processor or not: without one it runs the default bodies, which
@@ -1856,14 +2212,13 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                                                                   handler.m_output_ports);
     anira::capi::ProcessorRunner* const processor_runner = handler.m_pp.get();
     const auto make_session = [&handler, &model, &prepared, &prepared_hard] {
-        return std::make_unique<anira::InferenceManager>(
-            *handler.m_pp,
-            model,
-            prepared,
-            prepared_hard,
-            plan_requests(handler, prepared, prepared_hard),
-            handler.m_context->m_config,
-            &handler.m_rt);
+        return std::make_unique<anira::InferenceManager>(*handler.m_pp,
+                                                         model,
+                                                         prepared,
+                                                         prepared_hard,
+                                                         plan_requests(handler, prepared),
+                                                         handler.m_context->m_config,
+                                                         &handler.m_rt);
     };
     handler.m_manager = make_session();
     // The contract's edge cost, checked on the loaded plans (a plan's edges are its engine's):
@@ -1885,44 +2240,99 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         &handler);
     // The report's plan rows and the initial selection, on the session before it is prepared.
     build_plans(handler, model, prepared, prepared_hard);
-    handler.m_manager->prepare(anira::capi::latencies_of(prepared_contract, model), ring_dtypes);
-    // The session's structs exist now, and its rings are sized in their stream ports, and no
-    // chunk exists: the processor binds to the session (the plan table included: what a ctx
-    // reports for a chunk is the engine and the provider of the plan it was stamped with).
-    processor_runner->bind(handler.m_manager->session());
-    // The entries of the session, what anira_processor_ctx.entry indexes and
-    // anira_handler_num_entries answers: the processor's prepare (below) sizes its scratch by it.
-    handler.m_num_entries = processor_runner->num_entries();
 
-    // What the driver thread knows per Streamed slot, on its stream port: the dtype a host
-    // block must carry (the resolved ring dtype), the channel count of a host block and the
-    // most samples it may carry (one host block of host_block_max on the slot's stream, from the
-    // block in hops the session's prepare computed); then the
-    // empty tensors of the single-tensor forms. A Static slot has no ring and no host block:
-    // its entry of either array stays the empty tensor, and its tensors are checked against the
-    // static port's value. A State slot has neither a ring nor a value: its entry is an empty
-    // tensor nothing ever replaces.
-    const anira::LatencyCalculator::Rational block_hops = handler.m_manager->session().m_block_hops;
-    const auto stream_of = [&block_hops](anira::capi::StreamPort& stream,
-                                         const anira::capi::DerivedSpec& spec,
-                                         anira_dtype ring_dtype) {
-        const auto hop = static_cast<size_t>(spec.m_hop);
-        stream.m_ring_dtype = ring_dtype;
-        stream.m_channels = hop > 0 ? static_cast<uint32_t>(spec.m_channels) : 1U;
-        stream.m_max_samples = anira::LatencyCalculator::block_samples(block_hops, hop);
+    // The session sized for an inference time: the session's prepare (its structs, its rings in
+    // their stream ports, the latency), the processor bound to it, and what the driver thread
+    // knows of it. Run once for a prepare without a warm-up, twice for one with: for the pass,
+    // then for what it measured.
+    anira::SessionElement& session = handler.m_manager->session();
+    const anira::CustomLatencies latencies = anira::capi::latencies_of(prepared_contract, model);
+    const auto size_session = [&](double budget_ms) {
+        handler.m_manager->set_budget(budget_ms);
+        handler.m_manager->prepare(latencies, ring_dtypes);
+        // The session's structs exist now, and its rings are sized in their stream ports, and no
+        // chunk exists: the processor binds to the session (the plan table included: what a ctx
+        // reports for a chunk is the engine and the provider of the plan it was stamped with).
+        processor_runner->bind(session);
+        // The entries of the session, what anira_processor_ctx.entry indexes and
+        // anira_handler_num_entries answers: the processor's prepare (below) sizes its scratch by
+        // it.
+        handler.m_num_entries = processor_runner->num_entries();
+
+        // What the driver thread knows per Streamed slot, on its stream port: the dtype a host
+        // block must carry (the resolved ring dtype), the channel count of a host block and the
+        // most samples it may carry (one host block of host_block_max on the slot's stream, from
+        // the block in hops the session's prepare computed); then the empty tensors of the
+        // single-tensor forms. A Static slot has no ring and no host block: its entry of either
+        // array stays the empty tensor, and its tensors are checked against the static port's
+        // value. A State slot has neither a ring nor a value: its entry is an empty tensor
+        // nothing ever replaces.
+        const anira::LatencyCalculator::Rational block_hops = session.m_block_hops;
+        const auto stream_of = [&block_hops](anira::capi::StreamPort& stream,
+                                             const anira::capi::DerivedSpec& spec,
+                                             anira_dtype ring_dtype) {
+            const auto hop = static_cast<size_t>(spec.m_hop);
+            stream.m_ring_dtype = ring_dtype;
+            stream.m_channels = hop > 0 ? static_cast<uint32_t>(spec.m_channels) : 1U;
+            stream.m_max_samples = anira::LatencyCalculator::block_samples(block_hops, hop);
+        };
+        for (uint32_t slot = 0; slot < handler.m_num_inputs; ++slot) {
+            auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_input_ports[slot]);
+            if (stream == nullptr) { continue; }
+            stream_of(*stream, prepared.m_inputs[slot], ring_dtypes.m_inputs[slot]);
+        }
+        for (uint32_t slot = 0; slot < handler.m_num_outputs; ++slot) {
+            auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_output_ports[slot]);
+            if (stream == nullptr) { continue; }
+            stream_of(*stream, prepared.m_outputs[slot], ring_dtypes.m_outputs[slot]);
+        }
+        handler.m_input_tensors = empty_tensors(handler.m_input_ports, ring_dtypes.m_inputs);
+        handler.m_output_tensors = empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);
     };
-    for (uint32_t slot = 0; slot < handler.m_num_inputs; ++slot) {
-        auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_input_ports[slot]);
-        if (stream == nullptr) { continue; }
-        stream_of(*stream, prepared.m_inputs[slot], ring_dtypes.m_inputs[slot]);
+
+    // The contract's warm-up (validate refused a MEASURED budget without one): what decides each
+    // plan's inference time, and with it a MEASURED budget. The model's figure comes first: the
+    // core's figure index (FigureKey) keeps what every pass measured for a model, under either
+    // budget kind, and a plan whose model has a figure at least as thorough as this contract's
+    // warm-up asks for reuses it and runs no pass. A contract without a warm-up neither measures
+    // nor reads the index (its plans stay UNMEASURED).
+    const bool warms = prepared_hard.warms_up();
+    const bool measured = prepared_hard.m_budget == ANIRA_BUDGET_MEASURED;
+    const auto num_plans = static_cast<uint32_t>(handler.m_plans.size());
+    std::vector<anira::FigureKey> keys;
+    std::vector<PlanMeasurement> measurements(num_plans);
+    if (warms) {
+        keys.reserve(num_plans);
+        for (uint32_t plan = 0; plan < num_plans; ++plan) {
+            keys.push_back(figure_key(handler, session, plan));
+            if (const std::optional<anira::ModelFigure> known =
+                    anira::Core::find_figure(keys.back(),
+                                             prepared_hard.m_warmup,
+                                             prepared_hard.m_warmup_iterations)) {
+                measurements[plan] = {.m_source = PlanMeasurement::Source::Reused,
+                                      .m_figure = *known};
+            }
+        }
     }
-    for (uint32_t slot = 0; slot < handler.m_num_outputs; ++slot) {
-        auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_output_ports[slot]);
-        if (stream == nullptr) { continue; }
-        stream_of(*stream, prepared.m_outputs[slot], ring_dtypes.m_outputs[slot]);
+    const bool pass = warms && std::ranges::any_of(measurements, [](const PlanMeasurement& m) {
+                          return m.m_source == PlanMeasurement::Source::None;
+                      });
+    // The first sizing: the explicit budget; under a MEASURED one the slowest plan's figure when
+    // every plan has one (no pass: this is the only sizing), else for the pass the smallest
+    // figure there is above the sizing's instant-inference tolerance (LatencyCalculator::
+    // pass_sizing_ms: it sizes the session as every figure below the first struct edge does, so
+    // the second sizing below usually keeps the entry count).
+    double first_budget_ms = prepared_hard.m_budget_ms;
+    if (measured) {
+        first_budget_ms = anira::LatencyCalculator::pass_sizing_ms(prepared_hard);
+        if (!pass) {
+            for (const PlanMeasurement& known : measurements) {
+                first_budget_ms = std::max(first_budget_ms, known.m_figure.m_figure.m_measured_ms);
+            }
+        }
     }
-    handler.m_input_tensors = empty_tensors(handler.m_input_ports, ring_dtypes.m_inputs);
-    handler.m_output_tensors = empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);
+    size_session(first_budget_ms);
+
     // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x host_block_max / host_rate, the block a
     // pop has no input to measure by.
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
@@ -1943,20 +2353,25 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         if (state == nullptr || !state->m_value.has_value()) { continue; }
         state->m_value->set_domain(host_domains.m_inputs[slot]);
     }
+    // The report: its plan rows carry the budget of the contract, which reads 0 under a MEASURED
+    // budget until the pass measured it, and no measurement yet (the real-time factor of the
+    // declared budget, UNMEASURED: a prepare without a warm-up keeps that); a plan that reuses the
+    // model's figure has it already.
+    for (uint32_t plan = 0; plan < num_plans; ++plan) {
+        anira_plan_info& row = handler.m_plans[plan].m_info;
+        if (measurements[plan].m_source == PlanMeasurement::Source::Reused) {
+            const anira::WarmupFigure& figure = measurements[plan].m_figure.m_figure;
+            if (measured) { row.budget_ms = figure.m_measured_ms; }
+            set_real_time(row, &figure, true, prepared, prepared_hard, session.m_num_instances);
+        } else {
+            set_real_time(row, nullptr, false, prepared, prepared_hard, session.m_num_instances);
+        }
+    }
     build_report(handler,
                  model,
                  prepared_contract,
                  anira::capi::pipeline_consumers(&processors, &engines),
                  host_domains);
-    log_report(handler, model);
-
-    const uint32_t suppressed = handler.m_rt.rearm();
-    if (suppressed > 0) {
-        ANIRA_LOG_WARNING(anira::log_group::k_capi,
-                          "anira_handler_prepare: %u real-time failures were suppressed since "
-                          "the last prepare or reset",
-                          suppressed);
-    }
     handler.m_prepared.store(true, std::memory_order_release);
 
     // The shared prepare record (anira/abi/lifecycle.h), the same for every registered engine
@@ -1983,39 +2398,112 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     info.num_outputs = static_cast<uint32_t>(output_templates.size());
     info.flags = prepared.m_exclusive ? ANIRA_PREPARE_EXCLUSIVE : 0U;
 
-    // Every registered engine's plan gets this session's prepared handle now, with the record
-    // and the loaded pointer (the core made the other plans' at the session's create): the
-    // engine's prepare, on this thread. A refused prepare (a StatusError naming the engine)
-    // fails this prepare, and the caller unprepares the handler, which gives the handles made
-    // so far back with the session.
-    anira::SessionElement& session = handler.m_manager->session();
-    for (anira::SessionElement::PlanSlot& slot : session.m_plans) {
-        if (!slot.m_registered || slot.m_prepared != nullptr) { continue; }
-        slot.m_prepared = slot.m_loaded->prepare(
-            anira::engine::PrepareRequest{.m_exclusive = prepared.m_exclusive, .m_info = &info});
+    // The user code of the prepare, in this order, with the record:
+    // - every registered engine's plan gets this session's prepared handle (the core made the
+    //   other plans' at the session's create): the engine's prepare, on this thread;
+    // - last, the processor's prepare function, when it has one (its init ran above, before the
+    //   models loaded).
+    // A refused prepare (a StatusError naming the engine; a processor's status other than
+    // ANIRA_OK) fails this prepare, and the caller unprepares the handler, which gives the
+    // handles made so far back with the session; the processor's unprepare is not owed for a
+    // refused prepare.
+    const auto prepare_user_code = [&] {
+        for (anira::SessionElement::PlanSlot& slot : session.m_plans) {
+            if (!slot.m_registered || slot.m_prepared != nullptr) { continue; }
+            slot.m_prepared = slot.m_loaded->prepare(
+                anira::engine::PrepareRequest{.m_exclusive = prepared.m_exclusive,
+                                              .m_info = &info});
+        }
+        if (processor != nullptr && processor->desc().prepare != nullptr) {
+            const anira_processor_desc& desc = processor->desc();
+            void* processor_prepared = nullptr;
+            const anira_status status = desc.prepare(&info, desc.user_data, &processor_prepared);
+            if (status != ANIRA_OK) {
+                throw StatusError(status,
+                                  std::string("the processor refused ") +
+                                      anira::capi::phase_word(ANIRA_PHASE_PREPARE) +
+                                      ": it returned " + std::to_string(static_cast<int>(status)) +
+                                      " (" + anira_status_string(status) + ")");
+            }
+            // What the processor handed back for this handler: every phase call and the reset
+            // receive it beside user_data from here on, and the unprepare gets it back once, when
+            // the session is released.
+            handler.m_processor_prepared = processor_prepared;
+            handler.m_processor_unprepare_owed = true;
+            processor_runner->set_prepared(processor_prepared);
+        }
+    };
+    prepare_user_code();
+
+    if (pass) {
+        // The pass, plan by plan in table order, for every plan without the model's figure, the
+        // selected one or not, so that a plan selected later runs at the budget the session is
+        // sized for. A plan's key is claimed for its pass alone: a prepare of the same model on
+        // another thread waits for the figure instead of measuring twice, and one that stored it
+        // meanwhile is reused. A failed inference or one that never completes fails the prepare
+        // (Core::warm_up_plan), and the claim goes back unpublished.
+        double slowest_ms = 0.0;
+        for (uint32_t plan = 0; plan < num_plans; ++plan) {
+            PlanMeasurement& measurement = measurements[plan];
+            if (measurement.m_source == PlanMeasurement::Source::None) {
+                FigureClaim claim(keys[plan]);
+                if (std::optional<anira::ModelFigure> known =
+                        claim.take(prepared_hard.m_warmup, prepared_hard.m_warmup_iterations)) {
+                    measurement = {.m_source = PlanMeasurement::Source::Reused, .m_figure = *known};
+                } else {
+                    measurement = {.m_source = PlanMeasurement::Source::Measured,
+                                   .m_figure = {.m_figure = handler.m_manager->warm_up_plan(plan),
+                                                .m_mode = prepared_hard.m_warmup,
+                                                .m_when = std::chrono::steady_clock::now()}};
+                    claim.publish(measurement.m_figure);
+                }
+            }
+            const anira::WarmupFigure& figure = measurement.m_figure.m_figure;
+            slowest_ms = std::max(slowest_ms, figure.m_measured_ms);
+            // A MEASURED plan's budget is its figure; the session runs the slowest plan's. The
+            // row takes the figure, its real-time factor and its verdict.
+            anira_plan_info& row = handler.m_plans[plan].m_info;
+            if (measured) { row.budget_ms = figure.m_measured_ms; }
+            set_real_time(row,
+                          &figure,
+                          measurement.m_source == PlanMeasurement::Source::Reused,
+                          prepared,
+                          prepared_hard,
+                          session.m_num_instances);
+            handler.m_report.m_plans[plan] = row;
+        }
+        // The session again, sized for what the pass measured (an explicit budget sizes it as
+        // before: the timings are only reported). This is the same session: its plan table and
+        // its prepared handles stay. Its prepare drains, bumps the generation (every exclusive
+        // engine is reset at the stream's first inference) and rebuilds the struct pool, so
+        // nothing of the pass survives in it; the processor binds again.
+        const uint32_t pass_entries = handler.m_num_entries;
+        size_session(measured ? slowest_ms : prepared_hard.m_budget_ms);
+        // The user code saw the record of the pass's sizing: when the entry count moved, it is
+        // unprepared and prepared again with the final one (the documented re-prepare sequence,
+        // inside this one call). Below the first struct edge nothing moves, and the first prepare
+        // stands.
+        if (handler.m_num_entries != pass_entries) {
+            for (anira::SessionElement::PlanSlot& slot : session.m_plans) {
+                if (slot.m_registered) { slot.m_prepared.reset(); }
+            }
+            unprepare_processor(handler);
+            info.num_entries = handler.m_num_entries;
+            prepare_user_code();
+        }
+        // The pass fed the declared state: both buffers of every pair start the stream at zeros
+        // again, and the port forgets the pass's generation.
+        zero_state_ports(handler);
     }
 
-    // Last, the processor's prepare function, when it has one, with the record (its init ran above,
-    // before the models loaded). A status other than ANIRA_OK fails this prepare with it, and
-    // the caller unprepares the handler; the processor's unprepare is not owed for a refused
-    // prepare.
-    if (processor != nullptr && processor->desc().prepare != nullptr) {
-        const anira_processor_desc& desc = processor->desc();
-        void* processor_prepared = nullptr;
-        const anira_status status = desc.prepare(&info, desc.user_data, &processor_prepared);
-        if (status != ANIRA_OK) {
-            throw StatusError(status,
-                              std::string("the processor refused ") +
-                                  anira::capi::phase_word(ANIRA_PHASE_PREPARE) + ": it returned " +
-                                  std::to_string(static_cast<int>(status)) + " (" +
-                                  anira_status_string(status) + ")");
-        }
-        // What the processor handed back for this handler: every phase call and the reset receive
-        // it beside user_data from here on, and the unprepare gets it back once, when the
-        // session is released.
-        handler.m_processor_prepared = processor_prepared;
-        handler.m_processor_unprepare_owed = true;
-        processor_runner->set_prepared(processor_prepared);
+    log_measurement(handler, measurements);
+    log_report(handler, model);
+    const uint32_t suppressed = handler.m_rt.rearm();
+    if (suppressed > 0) {
+        ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                          "anira_handler_prepare: %u real-time failures were suppressed since "
+                          "the last prepare or reset",
+                          suppressed);
     }
     // Every callback of this prepare returned and every plan has its prepared handle: the
     // Hard entries and reset run from here on (the getters answered since m_prepared above,
@@ -2346,14 +2834,14 @@ anira_status ANIRA_CALL anira_pipeline_add_processor(anira_pipeline* pipeline,
         "pipeline: the processor was compiled against ABI 0x%08x, which this library "
         "does not serve",
         value.abi_version);
-    ANIRA_CAPI_REQUIRE((value.flags & ~k_processor_flags) == 0,
+    ANIRA_CAPI_REQUIRE((value.realtime_phases & ~k_realtime_phases) == 0,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "pipeline: the processor's flags 0x%x carry a bit this library does not "
-                       "define (ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | "
-                       "ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS is 0x%x)",
-                       value.flags,
-                       k_processor_flags);
+                       "pipeline: the processor's realtime_phases 0x%x carry a bit of no "
+                       "per-chunk phase (ANIRA_PHASE_BIT of pre_process, post_process, "
+                       "before_inference, after_inference and reset is 0x%x)",
+                       value.realtime_phases,
+                       k_realtime_phases);
     ANIRA_CAPI_REQUIRE(value.consumed_kinds != nullptr || value.num_consumed_kinds == 0,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,

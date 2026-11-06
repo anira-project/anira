@@ -53,6 +53,10 @@ _Static_assert(sizeof(anira_budget_kind) == 4, "anira_budget_kind is a 32-bit en
 _Static_assert(ANIRA_BUDGET_KIND_FORCE32 == 0x7fffffff, "anira_budget_kind terminator");
 _Static_assert(sizeof(anira_warmup_mode) == 4, "anira_warmup_mode is a 32-bit enum");
 _Static_assert(ANIRA_WARMUP_MODE_FORCE32 == 0x7fffffff, "anira_warmup_mode terminator");
+_Static_assert(sizeof(anira_warmup_outcome) == 4, "anira_warmup_outcome is a 32-bit enum");
+_Static_assert(ANIRA_WARMUP_OUTCOME_FORCE32 == 0x7fffffff, "anira_warmup_outcome terminator");
+_Static_assert(sizeof(anira_rt_verdict) == 4, "anira_rt_verdict is a 32-bit enum");
+_Static_assert(ANIRA_RT_VERDICT_FORCE32 == 0x7fffffff, "anira_rt_verdict terminator");
 _Static_assert(sizeof(anira_miss_policy) == 4, "anira_miss_policy is a 32-bit enum");
 _Static_assert(ANIRA_MISS_POLICY_FORCE32 == 0x7fffffff, "anira_miss_policy terminator");
 _Static_assert(sizeof(anira_late_policy) == 4, "anira_late_policy is a 32-bit enum");
@@ -378,7 +382,7 @@ _Static_assert(sizeof(anira_processor_desc) ==
                    sizeof(((const anira_processor_desc*)0)->user_data) +
                    sizeof(((const anira_processor_desc*)0)->consumed_kinds) +
                    sizeof(((const anira_processor_desc*)0)->num_consumed_kinds) +
-                   sizeof(((const anira_processor_desc*)0)->flags) +
+                   sizeof(((const anira_processor_desc*)0)->realtime_phases) +
                    sizeof(((const anira_processor_desc*)0)->pre_process) +
                    sizeof(((const anira_processor_desc*)0)->post_process) +
                    sizeof(((const anira_processor_desc*)0)->before_inference) +
@@ -387,7 +391,8 @@ _Static_assert(sizeof(anira_processor_desc) ==
                    sizeof(((const anira_processor_desc*)0)->prepare) +
                    sizeof(((const anira_processor_desc*)0)->unprepare) +
                    sizeof(((const anira_processor_desc*)0)->init) +
-                   sizeof(((const anira_processor_desc*)0)->release),
+                   sizeof(((const anira_processor_desc*)0)->release) +
+                   sizeof(((const anira_processor_desc*)0)->id),
                "anira_processor_desc has no implicit padding");
 
 _Static_assert(offsetof(anira_engine_load_info, struct_size) == 0, "anira_engine_load_info.struct_size first");

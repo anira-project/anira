@@ -6,11 +6,21 @@
 // An engine the package ships is the exception: added under its id the plain way, the ONNX
 // Runtime Web engine states its copies by default (into ORT's heap for the inputs, out of it for
 // the outputs), and an explicit `edge` replaces them whole.
+// A JavaScript processor's real-time promise (addProcessor's `realtimePhases`) reaches
+// anira_em_pipeline_add_js_processor as given, the bits of pre_process, post_process and reset by
+// default.
 // A stand-in module.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { AniraBindings, type AbiModule } from '../src/abi/bindings'
-import { anira_edge_class, anira_status } from '../src/abi/enums'
+import {
+  ANIRA_EM_PROCESSOR_HOOK_BEFORE,
+  ANIRA_EM_PROCESSOR_HOOK_PRE,
+  ANIRA_PHASE_BIT,
+  anira_edge_class,
+  anira_phase,
+  anira_status,
+} from '../src/abi/enums'
 import {
   ONNXRUNTIME_WEB_ENGINE_EDGES,
   ONNXRUNTIME_WEB_ENGINE_ID,
@@ -19,6 +29,7 @@ import { Pipeline } from '../src/Pipeline'
 
 type EdgeRecord = { structSize: number; edgeClass: number; reason: string | null } | null
 type Stated = { inputs: EdgeRecord; outputs: EdgeRecord }
+type AddedProcessor = { key: number; hooks: number; realtimePhases: number }
 
 const fakes = () => {
   const buffer = new ArrayBuffer(1 << 16)
@@ -40,6 +51,7 @@ const fakes = () => {
           reason: text(u32[(edge + 8) >>> 2]),
         }
   const stated: Stated[] = []
+  const processors: AddedProcessor[] = []
   const module = {
     HEAPU8: u8,
     HEAPU32: u32,
@@ -73,13 +85,55 @@ const fakes = () => {
       stated.push({ inputs: read(inputs), outputs: read(outputs) })
       return anira_status.ANIRA_OK
     },
+    _anira_em_pipeline_add_js_processor: (
+      _pipeline: number,
+      key: number,
+      hooks: number,
+      realtimePhases: number,
+      _err: number
+    ) => {
+      processors.push({ key, hooks, realtimePhases })
+      return anira_status.ANIRA_OK
+    },
   }
   return {
     abi: new AniraBindings(module as unknown as AbiModule),
     stated,
+    processors,
     stack: () => sp,
   }
 }
+
+test("addProcessor states the processor's real-time phases, the audio thread's three by default", () => {
+  const { abi, processors } = fakes()
+  const p = anira_phase
+  Pipeline.create({ abi }).addProcessor('org.example.gain', {
+    phases: ANIRA_EM_PROCESSOR_HOOK_PRE,
+  })
+  Pipeline.create({ abi }).addProcessor('org.example.hooks', {
+    phases: ANIRA_EM_PROCESSOR_HOOK_BEFORE,
+    realtimePhases: 0,
+  })
+  Pipeline.create({ abi }).addProcessor('org.example.pre', {
+    phases: ANIRA_EM_PROCESSOR_HOOK_PRE,
+    realtimePhases: ANIRA_PHASE_BIT(p.ANIRA_PHASE_PRE_PROCESS),
+  })
+  assert.deepEqual(
+    processors.map(({ hooks, realtimePhases }) => ({ hooks, realtimePhases })),
+    [
+      {
+        hooks: ANIRA_EM_PROCESSOR_HOOK_PRE,
+        realtimePhases:
+          ANIRA_PHASE_BIT(p.ANIRA_PHASE_PRE_PROCESS) |
+          ANIRA_PHASE_BIT(p.ANIRA_PHASE_POST_PROCESS) |
+          ANIRA_PHASE_BIT(p.ANIRA_PHASE_RESET),
+      },
+      { hooks: ANIRA_EM_PROCESSOR_HOOK_BEFORE, realtimePhases: 0 },
+      { hooks: ANIRA_EM_PROCESSOR_HOOK_PRE, realtimePhases: 1 },
+    ]
+  )
+  assert.equal(processors[0].realtimePhases, 0x83, 'bits 0, 1 and 7')
+})
 
 test("addEngine states an edge record per direction, the bundled engine's by default, or NULL", () => {
   const { abi, stated, stack } = fakes()

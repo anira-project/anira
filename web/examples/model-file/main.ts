@@ -13,6 +13,7 @@ import {
   ModelConfig,
   Pipeline,
   anira_engine,
+  anira_rt_verdict,
   measureRenderGeometry,
 } from '@anira-project/anira'
 // [module]
@@ -39,6 +40,18 @@ export type ModelFileExample = {
   applyGeometry: (geometry: RenderGeometry) => void
   /** Measure the context's geometry again and re-prepare: after the output device changed. */
   remeasure: () => Promise<void>
+  /**
+   * The real-time verdict (`anira_rt_verdict`) of the plan the handler runs, from the last
+   * prepare: an estimate at prepare, measured on this machine under its load of the moment.
+   */
+  verdict: () => number
+  /**
+   * Whether the node is held: on a live context, the plan is not real-time here and the user has
+   * not agreed to run it. A held node is silent and starts no inference; the dry path plays.
+   */
+  waitsForConsent: () => boolean
+  /** The user's "Try nonetheless": the node streams, and the verdict counts as accepted. */
+  tryNonetheless: () => void
   teardown: () => void
 }
 
@@ -79,6 +92,9 @@ export async function createModelFileExample(
   // [configs]
 
   // [handler]
+  // The contract's warm-up runs at prepare on the pool's Workers, which start with the context and
+  // enter their loops once this thread yields: wait for them first.
+  await context.ready()
   const pipeline = Pipeline.create(anira).addInference(model)
   const handler = InferenceHandler.create(context, pipeline)
   // Every prepare starts the handler on the config's default plan and returns the report of the
@@ -92,8 +108,6 @@ export async function createModelFileExample(
   selectPlan(handler.prepare(contract))
   pipeline.destroy() // the handler copied it
   // [handler]
-  // An offline render waits for every inference: the Workers must be in their loops first.
-  if (waitMs > 0) await context.ready()
 
   // [node]
   const audioNode = await handler.createAudioNode(audioContext, {
@@ -103,6 +117,47 @@ export async function createModelFileExample(
   const gainParam = audioNode.params.get(GAIN_SLOT)!
   gainParam.value = gain
   // [node]
+
+  // [verdict]
+  // What each prepare measured, per plan: the budget, how the warm-up pass found it, and the
+  // real-time verdict, an estimate at prepare on this machine under its load of the moment. On a
+  // live context the plan the handler runs, when it is not real-time here, would drop out: the
+  // node is held (silent, no inference; the dry path plays) until the user agrees. An offline
+  // render (waitMs > 0) does not run against the clock and is never held. The example keeps the
+  // worst verdict the user accepted, and asks again only when a re-prepare finds a worse one.
+  const live = waitMs === 0
+  let accepted: number = anira_rt_verdict.ANIRA_RT_UNMEASURED
+  let held = false
+  const applyVerdict = () => {
+    const plans = handler.planReport().plans()
+    plans.forEach((row, index) =>
+      console.log(
+        `plan ${index}: budget ${row.budgetMs.toPrecision(3)} ms (measured ` +
+          `${row.measuredMs.toPrecision(3)} ms, median ${row.medianMs.toPrecision(3)} ms, ` +
+          `${row.warmupIterations} warm-up inferences, outcome ${row.warmupOutcome}); ` +
+          `real-time factor ${row.rtFactor.toPrecision(3)} of ${row.rtParallel}, verdict ` +
+          `${row.rtVerdict}`
+      )
+    )
+    const row = plans[handler.getPlan()]
+    held =
+      live &&
+      row.rtVerdict === anira_rt_verdict.ANIRA_RT_NOT_REALTIME &&
+      row.rtVerdict > accepted
+    audioNode.hold(held)
+    if (held)
+      console.warn(
+        `anira: the plan runs at ${row.rtFactor.toFixed(2)}x real time on this machine ` +
+          `(${row.rtParallel} parallel inferences): the node stays held until "Try nonetheless"`
+      )
+  }
+  applyVerdict()
+  const tryNonetheless = () => {
+    accepted = handler.planReport().plans()[handler.getPlan()].rtVerdict
+    held = false
+    audioNode.hold(false)
+  }
+  // [verdict]
 
   // [latency]
   // The wet path is the handler's latency late: the dry path waits as long.
@@ -133,6 +188,7 @@ export async function createModelFileExample(
     // Holds the node off (silence) while the handler re-prepares, and returns the new report.
     selectPlan(audioNode.prepare(contract))
     applyLatency()
+    applyVerdict() // the new figures: held again only when worse than what the user accepted
   }
   const remeasure = async () =>
     applyGeometry(await measureRenderGeometry(audioContext, { hold: [audioNode] }))
@@ -160,17 +216,41 @@ export async function createModelFileExample(
     gain: gainParam,
     applyGeometry,
     remeasure,
+    verdict: () => handler.planReport().plans()[handler.getPlan()].rtVerdict,
+    waitsForConsent: () => held,
+    tryNonetheless,
     teardown,
   }
 }
 
-/** The page: a tone through the model, its gain on a slider, started and stopped by a button. */
+/**
+ * The page: a tone through the model, its gain on a slider, started and stopped by a button; the
+ * verdict line, and "Try nonetheless" while the node waits for the user's consent.
+ */
 export function mountModelFileExample(
   button: HTMLButtonElement,
   slider: HTMLInputElement,
-  modelsUrl: URL
+  modelsUrl: URL,
+  tryButton: HTMLButtonElement,
+  verdictLine: HTMLElement
 ): void {
   let running: { audioContext: AudioContext; example: ModelFileExample } | null = null
+  const showVerdict = () => {
+    const example = running?.example
+    tryButton.hidden = !example?.waitsForConsent()
+    verdictLine.textContent = !example
+      ? ''
+      : example.waitsForConsent()
+        ? 'The model is not real-time on this machine: the node stays silent (the dry path ' +
+          'plays) until "Try nonetheless".'
+        : example.verdict() === anira_rt_verdict.ANIRA_RT_MARGINAL
+          ? 'The model is marginal on this machine: it may drop out under load.'
+          : ''
+  }
+  tryButton.onclick = () => {
+    running?.example.tryNonetheless()
+    showVerdict()
+  }
   button.onclick = async () => {
     button.disabled = true
     if (running) {
@@ -199,7 +279,10 @@ export function mountModelFileExample(
       // [sinkchange]
       // The page switches the output device, so the page decides when to re-measure: the
       // latency changes mid-stream, and an OS default-device change may fire no event at all.
-      audioContext.addEventListener('sinkchange', () => void example.remeasure())
+      audioContext.addEventListener(
+        'sinkchange',
+        () => void example.remeasure().then(showVerdict)
+      )
       // [sinkchange]
       const tone = new OscillatorNode(audioContext, { frequency: 220 })
       const level = new GainNode(audioContext, { gain: 0.1 })
@@ -209,6 +292,7 @@ export function mountModelFileExample(
       running = { audioContext, example }
       button.textContent = 'Stop'
     }
+    showVerdict()
     button.disabled = false
   }
   slider.oninput = () =>

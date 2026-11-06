@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "../../extras/models/model_files.h"
+#include "../support/file_contracts.h"
 #include "../support/log_record_collector.h"
 #include "capi/handler.h"
 #include "scheduler/Core.h"
@@ -293,11 +294,12 @@ inline anira::ModelConfig mono_stream_model(int64_t window = k_block, uint32_t m
     return model;
 }
 
-/// A bundled contract file with the host blocks patched in.
+/// A bundled contract file with its 2.x figures pinned (pinned_file_contract: the file itself
+/// runs the measured defaults) and the host blocks patched in.
 inline anira::ContractHandle file_contract(const char* contract_json,
                                            uint32_t block,
                                            double host_rate = k_rate) {
-    anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
+    anira::ContractHandle contract = pinned_file_contract(contract_json);
     contract.hard_host_blocks(block, block, host_rate);
     return contract;
 }
@@ -683,6 +685,22 @@ inline std::shared_ptr<anira::SessionElement> session_of(const anira_handler* ha
     }
     EXPECT_EQ(matches, 1U) << "the handler's session is not registered exactly once";
     return found;
+}
+
+/// The core freed, so the test starts with no model's figure (Core's figure index, which lives
+/// as long as the core): what a test that asserts a fresh measurement (a pass's outcome and
+/// counts, an engine's calls during its prepare) calls first. The mobile legs run every test
+/// binary as one process, so an earlier test's figure of the same model would otherwise be reused.
+/// Fails when the core cannot be freed: an earlier test left a context, a handler or a thread
+/// alive.
+inline ::testing::AssertionResult fresh_core() {
+    static_cast<void>(anira_shutdown());  // refused, and harmless, while the core has a user
+    if (anira_has_core() != 0U && anira_release_core_if_idle() == 0U) {
+        return ::testing::AssertionFailure()
+               << "the core is in use: an earlier test left a context, a handler or a thread alive";
+    }
+    if (anira_has_core() != 0U) { return ::testing::AssertionFailure() << "the core survived"; }
+    return ::testing::AssertionSuccess();
 }
 
 /// Lowers the drain summary's interval for the test's lifetime.
