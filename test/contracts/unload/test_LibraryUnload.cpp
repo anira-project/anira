@@ -512,7 +512,7 @@ TEST_F(LibraryUnload, DiagPrintTheThreads) {
     std::fprintf(stderr, "[diag] test: %s\n", "unloaded");
     std::fflush(stderr);
     expect_unmapped();
-    grace_period()
+    grace_period();
     ADD_FAILURE() << "diag: fails on purpose so that ctest prints the thread list";
 }
 
