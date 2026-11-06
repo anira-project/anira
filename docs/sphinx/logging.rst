@@ -1,46 +1,36 @@
 Errors and logging
 ==================
 
-anira reports a failure in one of two ways, and never in both for the same event on a control
-path: a call that can hand the failure back to you hands it back and stays quiet; anira logs
-only where there is nobody to hand the failure to; real-time entries do both, because nobody
-checks their return value on every block. This page says what that means for the code you
-write, what a message contains, where the records go on each platform, and what anira
-promises about exceptions.
-
-.. note::
-    The runtime half of this page is the handler of ``anira/abi/handler.h`` and its C++
-    face :cpp:class:`anira::InferenceHandler` (:doc:`usage`, sections 3 to 5):
-    ``anira_handler_rt_error`` (:cpp:func:`anira::InferenceHandler::rt_error`), the
-    per-handler latch and the drain summary are in effect there.
+anira reports a failure in one of two ways, never both for the same event on a control path: a call
+that can hand the failure back hands it back and stays quiet; anira logs only where there is nobody
+to hand it to; the real-time entries do both, because nobody checks their return on every block. The
+runtime half of this page is the handler's (:ref:`usage-status`): ``rt_error``, the per-handler latch
+and the drain summary.
 
 The rule
 --------
 
-Every fallible C entry returns an ``anira_status``: negative values are failures, ``ANIRA_OK``
-and the positive values are successes. Entries that can fail for more than one reason take a
-caller-owned ``anira_error`` as their last parameter and write the status and a message into
-it. The C++ builders of ``anira/anira.hpp`` turn that into an ``anira::Error``. Three cases:
+Every fallible C entry returns an ``anira_status``: negative values are failures, ``ANIRA_OK`` and
+the positive values successes. An entry that can fail for more than one reason takes a caller-owned
+``anira_error`` as its last parameter and writes the status and a message into it; the C++ face
+throws it as an ``anira::Error``.
 
-1. **Returned, not logged.** A control-path entry that fails (``prepare``, a loader, a setter,
-   a create) writes the diagnosis into your ``anira_error`` and returns the status; the C++
-   face throws it. anira writes no log record for it: the message is yours, and a second copy
-   in the system log would say nothing you do not already hold.
-2. **Logged, because there is no caller.** Where nothing can receive a status, anira logs one
-   Error record instead: a failure inside a destroy or a void entry, a failure on a thread anira
-   owns (the inference threads, the drain thread), a sink that misbehaves, and
-   ``ANIRA_ERROR_INTERNAL`` (below).
+1. **Returned, not logged.** A control-path entry that fails (``prepare``, a loader, a setter, a
+   create) writes the diagnosis into your ``anira_error`` and returns the status; C++ throws it. No
+   log record: the message is yours.
+2. **Logged, because there is no caller.** Where nothing can receive a status, anira logs one Error
+   record: a failure inside a destroy or a void entry, on a thread anira owns (the inference
+   threads, the drain thread), a sink that misbehaves, and ``ANIRA_ERROR_INTERNAL`` (below).
 3. **Both, on the real-time path.** An ``ANIRA_NONBLOCKING`` entry (``process``, ``push_data``,
-   ``pop_data``, ``submit``) has no ``anira_error`` and its return value is checked by nobody
-   on every block, so a refusal there returns its failure status (with a delivered count of
-   ``0``), records the status on the handler, and pushes one record into the real-time log
-   queue. A missed block is not a refusal: ``ANIRA_MISSED`` is a success, the buffers hold
-   what the miss policy chose, and nothing is recorded or logged for the handler. Section
-   :ref:`logging-realtime` has the details.
+   ``pop_data``, ``submit``) has no ``anira_error``, so a refusal returns its failure status (with a
+   delivered count of 0), records the status on the handler and pushes one record into the
+   real-time log queue (:ref:`logging-realtime`). A missed block is no refusal: ``ANIRA_MISSED`` is
+   a success, the buffers hold what the miss policy chose, and nothing is recorded or logged for the
+   handler (the operational "missing samples" Warning, once per prepare, is the site's).
 
-The C++ face: ``anira::Error`` derives from ``std::runtime_error``, ``.status`` is the
-``anira_status`` and ``what()`` is anira's message (the entry's name and the status text when
-the entry carries no error record).
+``anira::Error`` derives from ``std::runtime_error``: ``.status`` is the ``anira_status``,
+``what()`` anira's message (the entry's name and the status text when the entry carries no error
+record).
 
 .. code-block:: cpp
 
@@ -61,9 +51,10 @@ the entry carries no error record).
         return 1;
     }
 
-The C face: initialise the record with ``ANIRA_ERROR_INIT``, test with ``ANIRA_FAILED`` (never
-with ``!= ANIRA_OK``: a minor release may add positive statuses, and ``ANIRA_SUCCESS_UPGRADED``
-is one already), read ``err.status`` and ``err.message``.
+In C, initialise the record with ``ANIRA_ERROR_INIT`` and test with ``ANIRA_FAILED``, never with ``!=
+ANIRA_OK`` (a minor release may add positive statuses; ``ANIRA_SUCCESS_UPGRADED`` is one already).
+Pass ``NULL`` for the ``anira_error`` when you do not want the message; the status is returned either
+way, and out-parameters are left untouched on failure.
 
 .. code-block:: c
 
@@ -80,137 +71,114 @@ is one already), read ``err.status`` and ``err.message``.
         fprintf(stderr, "model.json is a 2.x file; write it out with anira_model_config_to_json\n");
     }
 
-Pass ``NULL`` for the ``anira_error`` when you do not want the message; the status is returned
-either way. Out-parameters are left untouched on failure.
-
 What a message contains
 -----------------------
 
-The message names the reason first and the place second, so that the reason survives
-truncation: an engine's own text, the model path or ``"memory"`` for a bytes entry, the key
-path of a JSON document.
+The reason comes first and the place second, so the reason survives truncation:
 
-- A model the engine refused: ``"<engine>: <path>: <engine text>"`` with
-  ``ANIRA_ERROR_MODEL_LOAD``; an engine that failed at run time or at warm-up,
-  ``ANIRA_ERROR_ENGINE``, same shape; an engine that is not in the build,
-  ``ANIRA_ERROR_NOT_SUPPORTED``.
-- A model file that does not resolve to a readable file: ``ANIRA_ERROR_NO_SUCH_FILE`` with the
-  resolved absolute path and the engine name; anira checks this itself before any engine sees
-  the path, so the message is the same on every engine.
-- A JSON document: ``ANIRA_ERROR_JSON`` with the key path and the offending value
-  (``models[0].engine: "foo" is not one of ...``).
-- Prepare-time legality: ``ANIRA_ERROR_CONFIG`` with the tensor's canonical name and what
-  disagrees (window against axis, a tensor name the export does not have, an extension kind
-  nobody consumes).
+- a model the engine refused: ``"<engine>: <path>: <engine text>"`` (``memory`` in place of the path
+  for a model loaded from bytes), ``ANIRA_ERROR_MODEL_LOAD``; an
+  engine that failed at run time or in the warm-up, ``ANIRA_ERROR_ENGINE``, the same shape; an engine
+  not in the build, ``ANIRA_ERROR_NOT_SUPPORTED``;
+- a model file that does not resolve to a readable file: ``ANIRA_ERROR_NO_SUCH_FILE`` with the
+  resolved absolute path and the engine, checked by anira before any engine sees the path, so the
+  message is the same on every engine;
+- a JSON document: ``ANIRA_ERROR_JSON`` with the key path and the value (``models[0].engine: "foo"
+  is not one of ...``);
+- prepare-time legality: ``ANIRA_ERROR_CONFIG`` with the tensor's canonical name and what disagrees
+  (a window against its axis, a name the export lacks, an extension kind nobody consumes).
 
-``anira_error::message`` holds 512 bytes (``ANIRA_ERROR_MESSAGE_CAPACITY``), UTF-8,
-NUL-terminated; a longer message is cut at the end, which is why the reason comes first. The
-record is 520 bytes on every target, so it can live on the stack, in a struct, or in a
-WebAssembly heap allocation of ``anira_sizeof(ANIRA_STRUCT_ERROR)``.
+``anira_error::message`` holds 512 bytes (``ANIRA_ERROR_MESSAGE_CAPACITY``), UTF-8, NUL-terminated,
+cut at the end; the record is 520 bytes on every target, so it lives on the stack, in a struct or in a
+WebAssembly allocation of ``anira_sizeof(ANIRA_STRUCT_ERROR)``.
 
-``ANIRA_ERROR_INTERNAL`` means a bug in anira: an exception the firewall could not classify.
-It is the one returned failure anira also logs, once, at Error, with the entry's name, because
-the message is not anira's, you cannot act on it, and nothing below the firewall reported it.
-Report it with the log line.
+``ANIRA_ERROR_INTERNAL`` is a bug in anira, an exception the firewall could not classify: the one
+returned failure anira also logs, once, at Error, with the entry's name. Report it with the log line.
 
-**The trace flag.** ``ANIRA_LOG_FLAG_TRACE_FAILURES`` on the context config
-(``context.log_flags(ANIRA_LOG_FLAG_TRACE_FAILURES)``, ``anira_context_config_set_log_flags``,
-or the ``flags`` field of ``anira_log_desc``) makes every failed status also an Error record
-whose text is the ``anira_error`` message prefixed by the entry and the status. It is off by
-default on every platform and exists for one situation: the application swallowed the status
-and the only thing you have is the device log. It is in effect while a context that set it
-lives (counted across contexts, so a second context's destroy does not switch it off for the
-first).
+**The trace flag.** ``ANIRA_LOG_FLAG_TRACE_FAILURES`` (``context.log_flags(...)``,
+``anira_context_config_set_log_flags``, the ``flags`` of ``anira_log_desc``) makes every failed status
+also an Error record, the ``anira_error`` message prefixed by the entry and the status: for an
+application that swallowed the status when all you have is the device log. Off by default; in effect
+while a context that set it lives (counted across contexts).
 
 .. _logging-realtime:
 
 The real-time path
 ------------------
 
-An ``ANIRA_NONBLOCKING`` entry does at most three things when it refuses:
+An ``ANIRA_NONBLOCKING`` entry that refuses does at most three things:
 
-1. It returns the failure ``anira_status``; a form with a count out-parameter writes ``0``
-   (the multi forms zero their ``delivered`` array). ``ANIRA_MISSED`` is not a refusal and
-   does none of the three.
-2. It stores the status into the handler's ``rt_error``, a relaxed atomic readable through
-   ``anira_handler_rt_error(h)`` from any thread and from inside any callback, when the refusal
-   is a contract violation: ``ANIRA_ERROR_WRONG_CONTRACT`` (a Hard entry on an Async handler or
-   the reverse), ``ANIRA_ERROR_NOT_PREPARED``, ``ANIRA_ERROR_CONFIG`` (a submitted tensor's
-   dtype or axis tags, a ring accessor's dtype, a float entry on a non-float32 ring, a host
-   tensor whose dtype is not its slot's, a plan index out of range), ``ANIRA_ERROR_INVALID_STATE`` (a ``_wait`` entry without an inference
-   thread inside its loop), ``ANIRA_ERROR_INVALID_ARGUMENT`` (a NULL buffer, a slot or channel
-   out of range, a malformed host tensor), ``ANIRA_ERROR_NOT_SUPPORTED`` (a host tensor with a
-   flag bit this library does not know) — and, from the inference thread, ``ANIRA_ERROR_ENGINE`` after a failed
-   inference, whose output is zeros. ``rt_error`` is last-wins and is cleared by ``prepare``
-   and ``reset``; it is a plain word in the handler, readable from a crash handler and from a
-   core dump, which is why it exists beside the best-effort record.
+1. It returns the failure status; a form with a count writes 0 (the multi forms zero their
+   ``delivered`` array).
+2. For a contract violation, it stores the status into the handler's ``rt_error``, a relaxed atomic
+   readable through ``anira_handler_rt_error(h)`` from any thread and any callback, last-wins, cleared
+   by ``prepare`` and ``reset``; a plain word in the handler, readable from a crash handler and a core
+   dump:
+
+   ``ANIRA_ERROR_WRONG_CONTRACT`` (a Hard entry on an Async handler, or the reverse),
+   ``ANIRA_ERROR_NOT_PREPARED``, ``ANIRA_ERROR_CONFIG`` (a submitted tensor's dtype or axis tags, a
+   ring accessor's dtype, a float entry on a non-float32 ring, a host tensor whose dtype is not its
+   slot's, a plan index out of range), ``ANIRA_ERROR_INVALID_STATE`` (a ``_wait`` entry without an
+   inference thread inside its loop, an accessor asked outside its phase),
+   ``ANIRA_ERROR_INVALID_ARGUMENT`` (a NULL buffer, a slot or channel out of range, a malformed host
+   tensor), ``ANIRA_ERROR_NOT_SUPPORTED`` (a host tensor with a flag bit this library does not know).
+
 3. It pushes one fixed-size record into the core's lock-free log queue, at Error, flagged
-   ``ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION`` in the
-   ``anira_log_record`` a sink receives.
+   ``ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION``.
 
-``ANIRA_ERROR_CAPACITY`` (no free ticket slot, a full ring) returned by an entry is
-back-pressure, not a violation: return value only, no ``rt_error``, no record. A hop the
-scheduler drops because every inference slot of the handler is busy is recorded, though: it
-sets ``rt_error`` to ``ANIRA_ERROR_CAPACITY`` (the hop is filled under the miss policy at its
-stream position), latched under its own kind, and the operational site "no free inference
-queue" logs it once per prepare. So does a chunk that a queue of the core has no room for (its
-output is zeros at its stream position, and its site logs it once per prepare): a handler's
-prepare reserves the room for every chunk of its pool, so that takes an inference thread stalled
-inside its dequeue while the handler's other chunks go round that room, or no memory for a
-drain's requeue.
+Two statuses reach ``rt_error`` from elsewhere, each logged by its own latched record rather than
+as a violation: ``ANIRA_ERROR_ENGINE`` from the inference thread (a failed inference, whose output is
+zeros), and ``ANIRA_ERROR_CAPACITY`` from the scheduler, for a hop it drops because every inference
+slot is busy (the entry still returns its own status, the hop is filled under the miss policy at its
+position, and the site "no free inference queue" logs one Warning per prepare). The same status
+*returned* by an entry (no free ticket slot, a full ring) is back-pressure: the return value only. A
+chunk a queue of the core has no room for is recorded too (zeros at its position, logged once per prepare): a prepare reserves room for
+every chunk of its pool, so that takes an inference thread stalled inside its dequeue while the
+handler's other chunks go round, or no memory for a drain's requeue.
 
-The record is **latched** per handler and per kind of status: the first occurrence after
-``prepare`` or ``reset`` is logged, later ones increment a suppressed counter with one relaxed
-add and nothing else. No clock is read on the real-time thread. Two things keep the latch
-honest about a condition that persists: the drain thread, which is not real-time, reports
-counters that grew since its last summary at most every 10 seconds ("still failing, N more
-suppressed", with the handler or the condition), without re-arming anything, and the re-arm
-(``prepare`` and ``reset`` for a handler, ``prepare`` for the operational sites) logs the final
-count. The same latch, per site, covers the operational real-time conditions that would
-otherwise fire on every block: missing samples, an output stream nobody pops, an engine
-without a model, an inference dropped because a queue was full, a host tensor whose dtype is
-not its slot's (nothing converts: the input is not pushed, the output is zero-filled and
-reports 0 samples), a failed inference. A failed
-inference — an engine exception, a throwing custom processor or hook — zero-fills its output
-(never the previous job's data), sets ``rt_error`` to ``ANIRA_ERROR_ENGINE`` and is one
-latched record; the inference thread survives it. A processor of the C handler fails differently:
-a phase callback that returns a status other than ``ANIRA_OK`` latches *that* status and its
-chunk delivers zeros, the hop-count guard after ``pre_process`` and
-``post_process`` latches ``ANIRA_ERROR_CONFIG``, and a ring or context accessor refused inside
-a callback latches ``ANIRA_ERROR_CONFIG`` (a dtype that is not the ring's) or
-``ANIRA_ERROR_INVALID_ARGUMENT`` (a slot or a channel out of range), each with one record
-naming the entry and the slot or channel (section 2 of the :doc:`usage` guide). The summary runs on the drain thread and,
-under ``ANIRA_LOG_DRAIN_MANUAL`` and on WebAssembly, in ``anira_drain_log``.
+**The latch.** A record is latched per handler and per kind of status: the first occurrence after
+``prepare`` or ``reset`` is logged, later ones increment a suppressed counter with one relaxed add.
+No clock is read on the real-time thread. The drain thread reports counters that grew since its last
+summary at most every 10 seconds ("still failing, N more suppressed", naming the handler or the
+condition) without re-arming anything, and the re-arm (``prepare`` and ``reset`` for a handler,
+``prepare`` for the operational sites) logs the final count; the summary runs on the drain thread, or
+in ``anira_drain_log`` under ``ANIRA_LOG_DRAIN_MANUAL`` and on WebAssembly. The same latch, per site,
+covers the operational conditions that would otherwise fire on every block: missing samples, an output
+stream nobody pops, an engine without a model, an inference dropped for a full queue, a host tensor
+whose dtype is not its slot's (the input is not pushed, the output is zero-filled and reports 0), a
+failed inference. A failed inference (an engine exception, or an engine call that returns a
+failure) zero-fills its output, never the previous job's data, sets ``ANIRA_ERROR_ENGINE`` and is one
+latched record; the inference thread survives it. A processor's phase that returns a status other
+than ``ANIRA_OK`` latches *that* status and its chunk delivers zeros; the hop rule latches
+``ANIRA_ERROR_CONFIG``; a refused accessor latches ``ANIRA_ERROR_CONFIG`` (a dtype not the ring's),
+``ANIRA_ERROR_INVALID_STATE`` (asked outside its phase) or ``ANIRA_ERROR_INVALID_ARGUMENT`` (a slot
+or channel out of range), each with one record naming the entry and the slot or channel
+(:ref:`processor-accessors`).
 
 Levels
 ------
 
-anira's four levels are ``ANIRA_LOG_DEBUG`` (0) to ``ANIRA_LOG_ERROR`` (3). Every failure
-record anira writes is Error; Warning is a condition the call survived (a clamped value, a
-process-global setting a later context could not change); Info is lifecycle (the pool started,
-a session prepared); Debug additionally switches the engines' verbose output on. The runtime
-level of the context config (``log_level``; default ``ANIRA_LOG_WARNING``; the most verbose
-request across the contexts of a process wins) is applied to anira's own logger and forwarded
-to the engines' runtimes (ONNX Runtime, LiteRT, LibTorch/c10; TFLite and ExecuTorch expose no
-runtime level), each at its engine's init: once per process, when the first model of the engine
-loads, with the level in effect then.
-
-The platform sink maps the levels onto the platform's own vocabulary, which decides what the
-platform keeps:
+The four levels are ``ANIRA_LOG_DEBUG`` (0) to ``ANIRA_LOG_ERROR`` (3). Every failure record is
+Error; Warning is a condition the call survived (a clamped value, a process-global setting a later
+context could not change, a slow plan); Info is lifecycle (the pool started, a session prepared);
+Debug additionally switches the engines' verbose output on. The context config's ``log_level``
+(default ``ANIRA_LOG_WARNING``; across contexts the most verbose wins) applies to anira's logger and is
+forwarded to the engines' runtimes that take one (ONNX Runtime, LiteRT, LibTorch's c10; TFLite and
+ExecuTorch expose none) at each engine's init, when its first model loads, with the level in effect
+then (:ref:`engines-lifecycle`).
 
 .. list-table::
    :header-rows: 1
-   :widths: 14 22 30 34
+   :widths: 12 22 24 42
 
    * - anira
-     - Android (logcat priority)
-     - Apple (``os_log`` type)
-     - What the platform does with it
+     - Android (logcat)
+     - Apple (``os_log``)
+     - What the platform keeps
    * - Error
      - ``ANDROID_LOG_ERROR``
      - ``OS_LOG_TYPE_ERROR``
-     - Apple persists it to the log store and, with it, the process's recent in-memory Info
-       records; every failure record anira writes is this level.
+     - Apple persists it to the log store, and with it the process's recent in-memory Info records.
    * - Warning
      - ``ANDROID_LOG_WARN``
      - ``OS_LOG_TYPE_DEFAULT``
@@ -218,103 +186,118 @@ platform keeps:
    * - Info
      - ``ANDROID_LOG_INFO``
      - ``OS_LOG_TYPE_INFO``
-     - Apple keeps it in memory only, purged as the buffer fills, unless an Error follows or
-       a configuration change persists it.
+     - Apple keeps it in memory only, purged as the buffer fills, unless an Error follows or a
+       configuration change persists it.
    * - Debug
      - ``ANDROID_LOG_DEBUG``
      - ``OS_LOG_TYPE_DEBUG``
-     - Apple captures it only while it is being streamed (``log stream --level debug``,
-       Console.app with debug messages enabled).
+     - Apple captures it only while it is streamed (``log stream --level debug``, Console.app with
+       debug messages on).
 
-logcat's buffers are ring buffers in memory; all four priorities reach them by default, and
-the ``log.tag.<tag>`` system property raises the minimum priority for one tag
-(``adb shell setprop log.tag.anira ERROR``). On Linux, Windows and in the terminal on macOS the
-platform sink is stdout/stderr, Error and Warning on stderr, Info and Debug on stdout.
+logcat's buffers are rings in memory; all four priorities reach them, and ``log.tag.<tag>`` raises
+one tag's minimum (``adb shell setprop log.tag.anira ERROR``). On Linux, Windows and the macOS terminal
+the platform sink is stdout/stderr: Error and Warning on stderr, Info and Debug on stdout.
 
-**Release builds.** tanh-lib, whose logger anira uses, compiles Warning, Info and Debug out of
-its own ``Release`` builds (``THL_LOG_COMPILED_MAX_LEVEL=1``). anira sets tanh-lib's
-``TANH_LOG_COMPILED_MAX_LEVEL`` option to 4 for its private copy in every build type, so the
-runtime level of the context config is the only filter and a warning the call survives exists
-in a shipped build.
+**Release builds.** tanh-lib, whose logger anira uses, compiles Warning, Info and Debug out of its
+own ``Release`` builds (``THL_LOG_COMPILED_MAX_LEVEL=1``). anira sets ``TANH_LOG_COMPILED_MAX_LEVEL``
+to 4 for its private copy in every build type, so the runtime level is the only filter and a warning
+exists in a shipped build.
+
+.. _logging-prepare:
+
+What a prepare logs
+-------------------
+
+Every successful prepare logs its measurement and then its plan report, in the group ``anira.capi``
+(:ref:`usage-plan-report`): one record per plan (Info; Warning for a marginal or not real-time plan),
+a Warning for a pass that did not settle and for an explicit budget below its measurement, one record
+for the session (its budget, the worst verdict, the latency and the entries; a Warning when the pool
+cannot keep up), then the report at Info:
+
+.. code-block:: text
+
+    anira_handler_prepare: plan 0 (onnxruntime, cpu): warm-up until_stable, 6 inferences, stable; measured 1.842 ms (median 1.701 ms) on the inference threads; real-time factor 0.17 of 4 parallel inferences (load 0.04): comfortable (96 % headroom)
+    anira_handler_prepare: plan 0 (onnxruntime, cpu): the model's figure from an earlier prepare (6 inferences, stable, 21 s ago): 1.842 ms (median 1.701 ms); real-time factor 0.17 of 4 parallel inferences (load 0.04): comfortable (96 % headroom)
+    anira_handler_prepare: plan 1 (libtorch, cpu): warm-up until_stable, 5 inferences, stable; measured 9.100 ms (median 8.870 ms) on the inference threads; real-time factor 0.85 of 1 parallel inference (load 0.85): marginal (15 % headroom); the stream may miss blocks under load
+    anira_handler_prepare: plan 0 (onnxruntime, cpu): the warm-up did not settle in 32 inferences (the last four 1.701-2.380 ms); the budget is their maximum, 2.380 ms
+    anira_handler_prepare: plan 0 (onnxruntime, cpu): measured 1.842 ms per inference, above the explicit budget 1.500 ms; the latency is sized for 1.500 ms
+    anira_handler_prepare: plan 0 (onnxruntime, cpu): no warm-up; real-time factor 0.47 of 4 parallel inferences (load 0.12) from the explicit budget 5.000 ms: unmeasured
+    anira_handler_prepare: plan 1 (libtorch, cpu): warm-up until_stable, 5 inferences, stable; measured 48.120 ms (median 47.990 ms) on the inference threads; real-time factor 4.51 of 4 parallel inferences (load 1.13): NOT real-time on this machine; the stream will miss blocks, which on_miss fills
+    anira_handler_prepare: budget 48.120 ms, measured (the slowest of 2 plans): not real-time; the pool cannot keep up (every hop brings 4.51 hop periods of inference for 4 parallel inferences): latency 3072 samples and 12 entries are sized for one host block's burst, and the stream will miss blocks
+    anira_handler_prepare: budget 1.842 ms, measured (the slowest of 1 plan): comfortable; latency 512 samples, 4 entries
+    anira_handler_prepare: plan report: plans 1, input slots 1, output slots 1, selected plan 0
+    anira_handler_prepare: plan 0: variant 0, engine onnxruntime, provider cpu, budget 1.842 ms (measured), memory unified
+
+These lines come from different prepares; one prepare writes one measurement record per plan, then
+its Warnings, the session record and the report. Set the context's
+level to ``ANIRA_LOG_INFO`` to see the Info records; a default run (Warning) shows the problems alone.
 
 Delivery
 --------
 
-**Control path.** The sinks run synchronously on the thread that logs, before the entry
-returns: the platform sink (one ``__android_log_print`` / ``os_log`` / ``fprintf`` plus
-``fflush`` per record), the file sink (flushed per record) and the host callback. A record
-emitted before a status is returned is therefore at the sink before you see the status: in
-logd's queue on Android, in the log store's shared memory on Apple, in the kernel on stdio
-(stderr is unbuffered; stdout is flushed per record even when redirected, so a
-non-flushing ``abort()`` loses nothing). "Flush" is not a knob on the control path.
+**Control path.** The sinks run synchronously on the thread that logs, before the entry returns: the
+platform sink (one ``__android_log_print`` / ``os_log`` / ``fprintf`` plus ``fflush`` per record), the
+file sink (flushed per record) and the host callback. A record emitted before a status is returned is
+at the sink before you see the status: in logd's queue on Android, in the log store's shared memory on
+Apple, in the kernel on stdio (stderr is unbuffered, stdout flushed per record even when redirected,
+so a non-flushing ``abort()`` loses nothing).
 
-**Real-time path.** A real-time record sits in the queue until it is drained: by anira's
-drain thread every ``drain_interval_ms`` (default 10 ms; a low-priority thread named
-``anira-log``, so that under heavy CPU contention delivery is delayed rather than competing
-with the audio path; the core starts it with the first context and stops and joins it when the
-last context and handler are destroyed, flushing the queue on the destroying thread), or by the
-host through ``anira_drain_log()`` under
-``ANIRA_LOG_DRAIN_MANUAL``. That window is the only place where a record can be lost, and it
-is closed where it matters: **when a** ``[main-thread]`` **entry fails, the firewall drains
-the real-time queue on the failing caller's thread before returning the negative status**, so
-the real-time records that preceded the failure are in front of you before you act on it.
-(Not for ``[callback-safe]`` entries, and not when the entry runs inside a sink.) The drain is
-lock-free and the queue is multi-consumer, so this is safe beside the running drain thread; it
-means a real-time record may arrive on the failing caller's thread as well as on the drain
-thread, which the sink contract states. Releasing the last handler and ``anira_shutdown`` (``anira::shutdown()``)
-drain the queue as well.
+**Real-time path.** A real-time record waits in the queue until it is drained: by the drain thread
+every ``drain_interval_ms`` (default 10 ms; a low-priority thread named ``anira-log``, so that under
+contention delivery is delayed rather than competing with the audio; the core starts it with the
+first context and stops and joins it when the last context and handler are destroyed, flushing the
+queue on the destroying thread), or by the host through ``anira_drain_log()`` under
+``ANIRA_LOG_DRAIN_MANUAL``. That window is the only place a record can be lost, and it is closed where
+it matters: **when a** ``[main-thread]`` **entry fails, it drains the real-time queue on the failing
+caller's thread before it returns**, so the records that preceded the failure are in front of you
+before you act on it (not for ``[callback-safe]`` entries, and not inside a sink). The drain is
+lock-free and the queue multi-consumer, so a real-time record may arrive on the failing caller's thread
+as well as on the drain thread. Releasing the last handler and ``anira_shutdown`` (``anira::shutdown()``)
+drain it too.
 
-**Manual mode and WebAssembly.** With ``ANIRA_LOG_DRAIN_MANUAL`` there is no thread; the host
-pumps ``anira_drain_log`` (``anira::drain_log()`` in C++,
-``anira.drainLog()`` or ``anira.startLogPump()`` on the web) from a timer, and once more after any failed call.
-The queue is shared by every handler in the process, so pumping any one of them drains
-everything. WebAssembly has no drain thread at all: ``ANIRA_LOG_DRAIN_THREAD`` is coerced to
-manual with a warning, and a page that never pumps never sees a real-time record.
+**Manual mode and WebAssembly.** Under ``ANIRA_LOG_DRAIN_MANUAL`` there is no thread: the host pumps
+``anira_drain_log`` (``anira::drain_log()``; ``anira.drainLog()`` or ``anira.startLogPump()`` on the
+web) from a timer and once more after any failed call. The queue is the process's, so one pump drains
+every handler. WebAssembly has no drain thread: ``ANIRA_LOG_DRAIN_THREAD`` is coerced to manual with a
+warning, and a page that never pumps never sees a real-time record.
 
-**A full queue** drops and counts further records until the next drain, which then reports how
-many were lost. ``queue_capacity`` (``log_queue_capacity``, rounded up to a power of two and
-clamped to [64, 65536], fixed once the first context created the core) against the burst rate
-times the drain interval is the rule of thumb.
+**A full queue** drops and counts records until the next drain, which reports how many were lost.
+``queue_capacity`` (``log_queue_capacity``, rounded up to a power of two and clamped to [64, 65536],
+fixed once the first context created the core) against the burst rate times the drain interval is the
+rule of thumb.
 
-**On a crash.** Everything a control-path call logged is already at its sink. What is in the
-real-time queue at the moment of the crash is lost, and so is whatever a host sink buffered
-without flushing. anira installs no signal, crash or terminate handler and makes no
-async-signal-safety promise for ``anira_drain_log``; if the last records before a crash matter
-to you, keep them on the host side, as in the next section.
+**On a crash** everything a control-path call logged is at its sink; what is in the real-time queue,
+and whatever a host sink buffered, is lost. anira installs no signal, crash or terminate handler and
+makes no async-signal-safety promise for ``anira_drain_log``: keep the last records on the host side
+(below).
 
 Sinks
 -----
 
-The host owns the sinks. anira never decides where a record ends up; the context config says
-which sinks run.
+The host owns the sinks; the context config says which run.
 
-**The platform sink** is on by default: logcat on Android, ``os_log`` on macOS and iOS
-(on macOS additionally stdout/stderr, and stdout/stderr *only* while a debugger is attached),
-stdout/stderr on Linux and Windows, the browser console on WebAssembly.
-``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK`` in ``log_flags`` switches it off while that context
-lives (counted across contexts), for a host that shows its own log or a DAW that mirrors
-stderr. On WebAssembly the platform sink is the browser console by level (``console.debug``,
-``console.info``, ``console.warn``, ``console.error``; tanh-lib's own platform sink, stderr, which
-the module's glue would print as ``console.error`` for every level, stays off there), and the
-JavaScript log hook (``anira.setLogSink()``, ``anira_em_set_log_hook``) takes the same hold on it
-while it is set: a record reaches the console once, at its level.
+**The platform sink** is on by default: logcat on Android, ``os_log`` on macOS and iOS (on macOS also
+stdout/stderr, and stdout/stderr *only* while a debugger is attached), stdout/stderr on Linux and
+Windows, the browser console by level on WebAssembly (``console.debug`` … ``console.error``; tanh-lib's
+own stderr sink, which the glue would print as ``console.error`` for every level, stays off there).
+``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK`` switches it off while that context lives (counted across
+contexts), for a host that shows its own log or a DAW that mirrors stderr; the JavaScript log hook
+(``anira.setLogSink()``, ``anira_em_set_log_hook``) takes the same hold while it is set, so a record
+reaches the console once, at its level.
 
-**The host sink.** ``log_sink(callback, user_data)`` (``anira_context_config_set_log_sink``, or
-the ``callback`` field of ``anira_log_desc``) registers an ``anira_log_fn`` that receives
-**every** record the platform sink would, as an ``anira_log_record``: ``level``, ``flags``
-(``ANIRA_LOG_RECORD_REALTIME`` when the record came through the queue,
-``ANIRA_LOG_RECORD_CONTRACT_VIOLATION`` when the C layer or the wrapper raised it),
-``dropped_before`` (records the queue lost before this one), ``sequence``, ``timestamp_ms``
-(UTC), ``monotonic_ns``, ``group`` (``"anira.<component>"``) and ``message``, valid until the
-callback returns. The sink runs on whichever thread logs, never on the driver thread, possibly
-with anira's lifecycle lock held, and must not call anira. Each context's sink is called only
-while that context lives: destroying the context unregisters it and waits for a call in
-flight.
+**The host sink.** ``log_sink(callback, user_data)`` (``anira_context_config_set_log_sink``, the
+``callback`` of ``anira_log_desc``) receives **every** record the platform sink would, as an
+``anira_log_record``: ``level``, ``flags`` (``ANIRA_LOG_RECORD_REALTIME`` through the queue,
+``ANIRA_LOG_RECORD_CONTRACT_VIOLATION`` when the C layer or the wrapper raised it), ``dropped_before``
+(records the queue lost before this one), ``sequence``, ``timestamp_ms`` (UTC), ``monotonic_ns``,
+``group`` (``"anira.<component>"``) and ``message``, valid until the callback returns. The sink runs on
+whichever thread logs, never on the driver thread, possibly under anira's lifecycle lock, and must not
+call anira. A context's sink is called only while that context lives: destroying it unregisters the
+sink and waits for a call in flight.
 
-A sink that must survive a crash keeps a ring and lets the host's own crash handler write it
-out. The sink side may allocate and lock; the crash-handler side may not, so the ring is fixed
-storage, each slot is written completely before it is published, and the handler uses
-``write(2)`` only:
+A sink that must survive a crash keeps a ring the host's own crash handler writes out. The sink side
+may allocate and lock, the crash handler may not, so the ring is fixed storage, each slot written
+completely before it is published, and the handler uses ``write(2)`` only:
 
 .. code-block:: c
 
@@ -344,69 +327,60 @@ storage, each slot is written completely before it is published, and the handler
 
     /* context.log_sink(ring_sink) or anira_context_config_set_log_sink(config, ring_sink, NULL) */
 
-One slot may be torn when the crash lands in the middle of a ``snprintf``; that is the price
-of a lock-free ring and the reason the handler writes the slot's recorded length rather than
-scanning for a terminator.
+One slot may be torn when the crash lands inside a ``snprintf``: the price of a lock-free ring, and
+why the handler writes the slot's recorded length rather than scanning for a terminator.
 
-**Where to look.** anira's private logger files every record under anira's own identity: the
-Android tag and the Apple subsystem and category are ``anira``, and every line reads
-``[<source>][<group>] <message>`` with ``source`` = ``native`` or ``rt`` and ``group`` =
-``anira.<component>`` (``anira.core``, ``anira.scheduler``, ``anira.config``,
-``anira.system``, ``anira.engine.<engine>``, ``anira.web``, ``anira.capi``; a prepare's
-measurement, one record per plan and one for the session, is ``anira.capi``'s, at Warning for a
-marginal or not real-time plan, a warm-up that did not settle, an explicit budget below the
-measurement and a pool that cannot keep up). A host that also
-uses tanh-lib has a second logger under ``thl``, which anira never touches, with a shared or a
-static anira on every platform (anira's own copy lives in ``thl::anira``: :ref:`host-tanh-lib`).
+Where to look
+-------------
 
-- Android: ``adb logcat -s anira:W`` for anira's warnings and errors, ``adb logcat -s anira``
-  for everything at the runtime level; add the engines' own tags for a combined view,
-  ``adb logcat -s anira onnxruntime tflite ExecuTorch``. ``adb shell setprop log.tag.anira DEBUG``
-  lowers the tag's minimum for the session.
-- macOS and iOS: ``log stream --predicate 'subsystem == "anira"' --level info`` while the app
-  runs (``--level debug`` for Debug records), ``log show --predicate 'subsystem == "anira"'
-  --last 1h`` afterwards, or Console.app with the subsystem in the search field and *Include
-  Info Messages* / *Include Debug Messages* in the Action menu. Under a debugger on macOS the
-  lines are on stdout/stderr (the Xcode console) instead, not in ``log``.
-- Linux and Windows: stderr for Error and Warning, stdout for Info and Debug; a plugin host
-  shows them where it shows its own stderr, or not at all, which is what the host sink is for.
-- WebAssembly: the browser console by level, through the log hook (``anira.setLogSink()``) or,
-  without one, the platform sink; the page must pump ``anira.drainLog()`` (``startLogPump``) for real-time
-  records.
-- The engines keep their own tags and channels: ONNX Runtime's ``onnxruntime`` logger, LiteRT's
-  and TFLite's ``tflite``, ExecuTorch's ``ExecuTorch``, LibTorch's c10 warnings on stderr;
-  anira forwards its level to the ones that take one and never re-logs their output.
+anira files every record under its own identity: the Android tag and the Apple subsystem and category
+are ``anira``, and every line reads ``[<source>][<group>] <message>``, ``source`` being ``native`` or
+``rt`` and ``group`` ``anira.<component>`` (``anira.core``, ``anira.scheduler``, ``anira.config``,
+``anira.system``, ``anira.engine.<engine>``, ``anira.web``, ``anira.capi``). A host that also uses
+tanh-lib has a second logger under ``thl``, which anira never touches, with a shared or a static anira
+(anira's own copy lives in ``thl::anira``: :ref:`host-tanh-lib`).
 
-**Privacy.** Every argument of anira's ``os_log`` calls is ``%{public}s``, and logcat has no
-private mode: what anira logs is visible to anyone with the device log, including a customer's
-sysdiagnose. Model paths, tensor names and engine messages are part of the records; do not put
-personal data in a model path you would not want in the system log.
+- **Android:** ``adb logcat -s anira:W`` for anira's warnings and errors, ``adb logcat -s anira`` for
+  everything at the runtime level, ``adb logcat -s anira onnxruntime tflite ExecuTorch`` with the
+  engines; ``adb shell setprop log.tag.anira DEBUG`` lowers the tag's minimum for the session.
+- **macOS and iOS:** ``log stream --predicate 'subsystem == "anira"' --level info`` while the app runs
+  (``--level debug`` for Debug), ``log show --predicate 'subsystem == "anira"' --last 1h`` afterwards,
+  or Console.app with the subsystem in the search field and *Include Info Messages* / *Include Debug
+  Messages*. Under a debugger on macOS the lines are on stdout/stderr (the Xcode console), not in
+  ``log``.
+- **Linux and Windows:** stderr for Error and Warning, stdout for Info and Debug; a plugin host shows
+  them where it shows its own stderr, or not at all, which is what the host sink is for.
+- **WebAssembly:** the browser console by level, through the log hook or the platform sink; the page
+  pumps ``anira.drainLog()`` (``startLogPump``) for real-time records.
+- **The engines** keep their own tags: ONNX Runtime's ``onnxruntime``, LiteRT's and TFLite's
+  ``tflite``, ExecuTorch's ``ExecuTorch``, LibTorch's c10 warnings on stderr; anira forwards its level
+  to those that take one and never re-logs their output.
 
-Exceptions
-----------
+**Privacy.** Every argument of anira's ``os_log`` calls is ``%{public}s``, and logcat has no private
+mode: anyone with the device log (a customer's sysdiagnose included) sees model paths, tensor names
+and engine messages. Keep personal data out of model paths.
 
-- ``anira/anira.hpp`` throws ``anira::Error`` and nothing else for a failed call (an
-  allocation failure is ``std::bad_alloc``, as everywhere). Constructors throw, so that a handle
-  is never half-built; destructors, moves and ``native()`` are ``noexcept``; nothing is caught
-  or logged in the wrapper. An exception-free mode that returns ``anira::Result<T>`` instead
-  (``ANIRA_CXX_NO_EXCEPTIONS``) comes with a later pre-release; ``anira.hpp`` refuses the macro
-  until then.
-- The C entries never let an exception out: every control-path entry is a function-try-block
-  whose handler is the firewall, which turns ``std::bad_alloc`` into
-  ``ANIRA_ERROR_OUT_OF_MEMORY``, anira's own status-carrying exception into its status, an
-  engine's exception into ``ANIRA_ERROR_MODEL_LOAD`` / ``ANIRA_ERROR_ENGINE``, and anything it
-  cannot classify into ``ANIRA_ERROR_INTERNAL`` (logged once, see above). Every entry is
-  ``noexcept`` (``ANIRA_NOEXCEPT``), so an exception that did escape would be a deterministic
-  ``std::terminate`` on every compiler rather than undefined behaviour in an ``extern "C"``
-  frame. Exception types never leave ``libanira``. Destroy and void entries have no status to
-  return; a failure inside one is logged, once, and swallowed.
-- Real-time entries are ``noexcept`` and ``ANIRA_NONBLOCKING``, and nothing inside them throws
-  by contract: throwing allocates, and unwinding may take a global lock. Never throw in an
-  audio callback of your own either: a plugin host (CLAP, VST3, AU, LV2) does not catch, and a
-  throw out of a callback is ``std::terminate`` or undefined behaviour. The wrapper's throwing
-  methods are configuration-time only; the Hard entries cannot throw by construction.
-- **App boundaries.** A C++ exception must not cross into Java, Objective-C or JavaScript; the
-  glue checks the status and translates. JNI, with the C entries (no ``try`` needed):
+Exceptions and app boundaries
+-----------------------------
+
+- ``anira/anira.hpp`` throws ``anira::Error`` and nothing else for a failed call (an allocation
+  failure is ``std::bad_alloc``). Constructors throw, so a handle is never half-built; destructors,
+  moves and ``native()`` are ``noexcept``; the wrapper catches and logs nothing. An exception-free mode
+  (``ANIRA_CXX_NO_EXCEPTIONS``, ``anira::Result<T>``) comes with a later pre-release, and
+  ``anira.hpp`` refuses the macro until then.
+- The C entries never let an exception out: every control-path entry's function-try-block handler is
+  the firewall, which turns ``std::bad_alloc`` into ``ANIRA_ERROR_OUT_OF_MEMORY``, anira's own
+  exception into its status, an engine's into ``ANIRA_ERROR_MODEL_LOAD`` / ``ANIRA_ERROR_ENGINE``, and
+  anything else into ``ANIRA_ERROR_INTERNAL``. Every entry is ``ANIRA_NOEXCEPT``, so an exception that
+  escaped would be a deterministic ``std::terminate``, not undefined behaviour in an ``extern "C"``
+  frame; exception types never leave ``libanira``. A failure inside a destroy or a void entry is
+  logged once and swallowed.
+- Real-time entries are ``noexcept`` and ``ANIRA_NONBLOCKING``, and nothing inside them throws by
+  contract (throwing allocates; unwinding may take a global lock). Never throw in an audio callback of
+  your own either: a plugin host (CLAP, VST3, AU, LV2) does not catch it. The wrapper's throwing methods
+  are configuration-time only; the Hard entries cannot throw by construction.
+- **App boundaries.** A C++ exception must not cross into Java, Objective-C or JavaScript: the glue
+  checks the status and translates. JNI, with the C entries:
 
   .. code-block:: cpp
 
@@ -424,8 +398,8 @@ Exceptions
           return reinterpret_cast<jlong>(cfg);
       }
 
-  Objective-C++, with the C++ face: catch ``anira::Error`` at the method boundary and return
-  an ``NSError``, never an ``NSException``:
+  Objective-C++, with the C++ face: catch ``anira::Error`` at the method boundary and return an
+  ``NSError``, never an ``NSException``:
 
   .. code-block:: objc
 
@@ -444,8 +418,8 @@ Exceptions
           }
       }
 
-  Both may log at their boundary as well; that is the platform's idiom for an app-level error
-  and not anira's duplicate.
+  Both may log at their boundary; that is the platform's idiom for an app-level error, not anira's
+  duplicate.
 
-The design record behind this page is ``docs/anira-v3-error-and-log-strategy.md`` in the
-repository; the per-platform recipes for a log that stays empty are in :doc:`troubleshooting`.
+The design record behind this page is ``docs/anira-v3-error-and-log-strategy.md``; recipes for a log
+that stays empty are in :doc:`troubleshooting`.
