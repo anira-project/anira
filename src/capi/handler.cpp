@@ -916,27 +916,31 @@ void check_realtime_phases(const anira::capi::ProcessorCarrier* processor) {
         const char* m_bit;  // the bit's spelling, for the message
     };
     const std::array<DrivingPhase, 3> driving{{
-        {ANIRA_PHASE_PRE_PROCESS,
-         desc.pre_process != nullptr,
-         "ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS)"},
-        {ANIRA_PHASE_POST_PROCESS,
-         desc.post_process != nullptr,
-         "ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS)"},
-        {ANIRA_PHASE_RESET, desc.reset != nullptr, "ANIRA_PHASE_BIT(ANIRA_PHASE_RESET)"},
+        {.m_phase = ANIRA_PHASE_PRE_PROCESS,
+         .m_filled = desc.pre_process != nullptr,
+         .m_bit = "ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS)"},
+        {.m_phase = ANIRA_PHASE_POST_PROCESS,
+         .m_filled = desc.post_process != nullptr,
+         .m_bit = "ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS)"},
+        {.m_phase = ANIRA_PHASE_RESET,
+         .m_filled = desc.reset != nullptr,
+         .m_bit = "ANIRA_PHASE_BIT(ANIRA_PHASE_RESET)"},
     }};
     for (const DrivingPhase& phase : driving) {
         if (!phase.m_filled || (desc.realtime_phases & ANIRA_PHASE_BIT(phase.m_phase)) != 0) {
             continue;
         }
         const std::string word = anira::capi::phase_word(phase.m_phase);
-        throw StatusError(ANIRA_ERROR_CONFIG,
-                          "the processor: " + word +
-                              " is filled and runs on the driving thread under a Hard contract, "
-                              "which requires its bit, " +
-                              phase.m_bit +
-                              ", in anira_processor_desc.realtime_phases (the processor's "
-                              "promise that " +
-                              word + " allocates nothing, locks nothing and blocks on nothing)");
+        std::string message = "the processor: ";
+        message += word;
+        message +=
+            " is filled and runs on the driving thread under a Hard contract, which requires its "
+            "bit, ";
+        message += phase.m_bit;
+        message += ", in anira_processor_desc.realtime_phases (the processor's promise that ";
+        message += word;
+        message += " allocates nothing, locks nothing and blocks on nothing)";
+        throw StatusError(ANIRA_ERROR_CONFIG, message);
     }
 }
 
