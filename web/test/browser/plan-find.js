@@ -21,6 +21,8 @@ import {
   anira_memory_kind,
   anira_provider,
   anira_status,
+  anira_budget_kind,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const RATE = 48000
@@ -54,7 +56,11 @@ const run = async () => {
   })
   const contract = (
     await ContractHandle.fromUrl(anira, new URL('gain.contract.json', MODELS))
-  ).hardHostBlocks(QUANTUM, QUANTUM, RATE)
+  )
+    .hardHostBlocks(QUANTUM, QUANTUM, RATE)
+    // Pinned: the explicit budget without a warm-up (the page prepares before its Workers run).
+    .hardBudget(anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 5)
+    .hardWarmup(anira_warmup_mode.ANIRA_WARMUP_NONE)
 
   const context = Context.create(anira, {
     threads: 1,

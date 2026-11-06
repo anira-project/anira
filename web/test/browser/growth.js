@@ -29,6 +29,7 @@ import {
   Pipeline,
   anira_status,
   measureRenderGeometry,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const MIB = 1024 * 1024
@@ -112,6 +113,7 @@ const run = async () => {
       hostBlockMax,
       hostRate: RATE,
       budgetMs: 2,
+      warmup: anira_warmup_mode.ANIRA_WARMUP_NONE,
     })
   const jsHandler = (contract) => {
     const pipeline = Pipeline.create(anira)

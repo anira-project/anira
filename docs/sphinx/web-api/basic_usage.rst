@@ -63,9 +63,12 @@ need it, ``{ memory: { initial, maximum } }`` to size it, equal sizes to fix it
    :end-before: // [context]
    :dedent:
 
-The context's inference threads are Wasm Workers anira starts from C: as many as the context
-config says, by default ``ANIRA_THREADS_AUTO`` (half the cores, at least one) as on a native
-host; ``threads`` sets a count. A page with JavaScript engines names the module every Worker
+The context's inference threads are Wasm Workers anira starts from C when the context is
+created: as many as the context config says, by default ``ANIRA_THREADS_AUTO`` (half the cores, at
+least one) as on a native host; ``threads`` sets a count. A Worker enters its loop only once the
+page's thread yields, so the Workers boot while the page awaits its next promise, and
+:js:meth:`Context.ready` resolves once every one of them is in its loop (without a pool, once one
+of the page's own threads is). A page with JavaScript engines names the module every Worker
 imports first, ``workerModule`` (:doc:`custom_inference_backends`); the built-in engines need
 none.
 
@@ -104,6 +107,16 @@ must run when it is measured (:doc:`audio_nodes`).
    :end-before: // [handler]
    :dedent:
 
+``await context.ready()`` comes before the prepare: a contract warms up by default (a measured
+budget, ``UNTIL_STABLE``), and its warm-up pass runs every plan through the session on the
+Workers, so a prepare before they run is refused with ``ANIRA_ERROR_INVALID_STATE`` naming
+``context.ready()``. :js:meth:`ContractHandle.hard` takes the same defaults as ``anira::Hard``:
+``budgetMs`` left out is the budget the pass measures, ``warmup`` left out is ``UNTIL_STABLE``;
+``budgetMs`` with ``warmup: ANIRA_WARMUP_NONE`` is an explicit budget without a pass, which needs no
+running Worker. The report's rows carry what the pass measured and the plan's real-time factor and
+verdict (``warmupIterations``, ``measuredMs``, ``rtFactor``, ``rtVerdict``; :doc:`../usage`
+section 3.2); a re-prepare of the same model reuses its figure and runs no pass.
+
 Every prepare starts the handler on the config's default plan. A host that runs another one
 looks its index up in the report with :js:meth:`PlanReport.find`, which takes the fields of
 ``anira::PlanQuery`` (``variant``, ``engine``, ``engineId``, ``provider``, ``providerId``; a field
@@ -137,8 +150,8 @@ The node is a Wasm Audio Worklet node whose render callback is C: per quantum it
 node's buffers to ``anira_handler_process`` as tensors and applies the miss rule
 (:doc:`audio_nodes`). Connect ``audioNode.node`` into the graph. ``params`` serves float32 Static scalars as AudioParams of the node;
 ``staticInputs`` serves Static inputs of any shape through ``audioNode.setStaticInput``. For an
-``OfflineAudioContext`` render that waits for every inference, pass ``waitMs`` and
-``await context.ready()`` first (a Worker starts once the page's thread yields).
+``OfflineAudioContext`` render that waits for every inference, pass ``waitMs`` (the Workers
+are running already: the prepare awaited ``context.ready()``).
 
 6. Teardown
 -----------

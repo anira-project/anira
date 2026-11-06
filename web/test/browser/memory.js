@@ -14,6 +14,7 @@ import {
   InferenceHandler,
   ModelConfig,
   Pipeline,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const MIB = 1024 * 1024
@@ -55,6 +56,7 @@ const run = async () => {
     hostBlockMin: 512,
     hostRate: 48000,
     budgetMs: 5,
+    warmup: anira_warmup_mode.ANIRA_WARMUP_NONE,
   })
   const handler = InferenceHandler.create(context, pipeline)
   handler.prepare(contract)

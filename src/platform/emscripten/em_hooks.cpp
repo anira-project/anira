@@ -175,6 +175,10 @@ struct HookRecord {
     uint32_t m_js_key = 0;
     uint32_t m_hook_mask = 0;
     std::string m_engine_id;  ///< empty for a processor
+    /// A processor's id (anira_processor_desc.id), what its inference hooks are for the model's
+    /// figure: the key of the name it is defined under, so that the handlers of every page that
+    /// defines the same processor share their figure.
+    std::string m_processor_id;
     EdgeStatement m_input_edge;
     EdgeStatement m_output_edge;
 };
@@ -376,6 +380,8 @@ void fill_processor_desc(anira_processor_desc& desc,
     desc.release = &processor_release;
     // The caller's stated promise, as given: anira_pipeline_add_processor judges the bits.
     desc.flags = processor_flags;
+    record->m_processor_id = "org.anira.web.processor." + std::to_string(js_key);
+    desc.id = record->m_processor_id.c_str();  // copied by the carrier
     desc.user_data = record.release();
 }
 

@@ -99,19 +99,19 @@ export async function createGainExample(
 
   // 4. The handler and its Hard contract: one render quantum per call, at the context's rate, in
   //    bursts up to the context's (a live context renders a device callback's worth of quanta
-  //    back to back; the latency the handler reports covers it).
+  //    back to back; the latency the handler reports covers it). The library's defaults: the
+  //    budget the warm-up pass measures at prepare, on the pool's Workers, which start with the
+  //    context and enter their loops once this thread yields: wait for them first.
   const geometry = await measureRenderGeometry(audioContext)
   const contract = ContractHandle.hard(anira, {
     hostBlockMin: geometry.quantum,
     hostBlockMax: geometry.burst,
     hostRate: audioContext.sampleRate,
-    budgetMs: 2,
   })
+  await context.ready()
   const handler = InferenceHandler.create(context, pipeline)
   handler.prepare(contract)
   pipeline.destroy()
-  // An offline render waits for every inference: the Worker must be in its loop first.
-  if (waitMs > 0) await context.ready()
 
   // 5. The audio node: the processor's module loaded into the worklet, the gain an AudioParam.
   const audioNode = await handler.createAudioNode(audioContext, {

@@ -4112,9 +4112,12 @@ export class AniraBindings {
    * here on, applies the config's ANIRA_LOG_FLAG_* switches while the context lives, and
    * probes the capabilities. A device block on the config is refused in this pre-release.
    * On WebAssembly the pool's threads are Wasm Workers
-   * (anira_em_context_config_set_worker_module names the module they import);
-   * ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD are coerced to SPIN_BACKOFF and MANUAL
-   * with a warning.
+   * (anira_em_context_config_set_worker_module names the module they import), started
+   * here and kept while a context or a handler's session lives (natively the pool starts
+   * at a session's prepare); a Worker enters its loop only once the main thread yields,
+   * which a prepare that warms up needs (anira_em_inference_threads_in_loop,
+   * Context.ready() of the web package); ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD
+   * are coerced to SPIN_BACKOFF and MANUAL with a warning.
    *
    * @param config The context config; copied, destroyable right after.
    * @returns What the entry writes to out. A failed status throws an AniraError with the

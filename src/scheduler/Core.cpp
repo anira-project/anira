@@ -516,6 +516,24 @@ void Core::register_context(const anira_context_config& context_config) {
     // Apply the log level before anything (including this function) logs.
     apply_log_level_locked(state, config);
     apply_or_compare_config_locked(state, config, /*builds_pool=*/false);
+#ifdef __EMSCRIPTEN__
+    // On the web the pool starts with the context and lives while a context does: a Wasm Worker
+    // enters its loop only once the main thread yields, so the Workers boot while the page awaits
+    // its next promise, and a prepare whose warm-up pass needs a running thread finds them there
+    // once it awaited Context.ready(). Natively the pool starts at a session's prepare, which
+    // waits for its threads.
+    try {
+        if (state.m_thread_pool.empty()) {
+            resize_pool_locked(state, state.m_core_config.m_num_threads);
+        }
+        start_thread_pool_locked(state);
+    } catch (...) {
+        if (state.m_sessions.empty() && state.m_num_contexts == 0) {
+            stop_and_join(state.m_thread_pool);
+        }
+        throw;
+    }
+#endif
     ++state.m_num_contexts;
 }
 
@@ -565,6 +583,12 @@ void Core::unregister_user(State& state, unsigned int& counter) {
         const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         if (counter == 0) { return; }
         --counter;
+#ifdef __EMSCRIPTEN__
+        // The web's pool lives while a context or a session does (register_context).
+        if (state.m_num_contexts == 0 && state.m_sessions.empty()) {
+            stop_and_join(state.m_thread_pool);
+        }
+#endif
         was_last_user = !has_users_locked(state);
         if (was_last_user) { log_drain_to_stop = take_log_drain_locked(state); }
     }
@@ -856,11 +880,19 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
     // why the session was removed from the registry first.
     release_loaded_locked(state, session);
 
-    // The pool policy: inference threads exist exactly while sessions exist. Stopping
+    // The pool policy: natively, inference threads exist exactly while sessions exist. Stopping
     // and joining them here, inside the critical section that emptied the registry,
     // is what lets a plugin host unload the library right after the last handler is
-    // destroyed. (Each InferenceThread's destructor stops and joins its OS thread.)
+    // destroyed. (Each InferenceThread's destructor stops and joins its OS thread.) On the web
+    // they exist while a context or a session does (register_context), so a re-prepare, which
+    // releases the session before it builds the next, keeps its booted Workers.
+#ifdef __EMSCRIPTEN__
+    if (state.m_sessions.empty() && state.m_num_contexts == 0) {
+        stop_and_join(state.m_thread_pool);
+    }
+#else
     if (state.m_sessions.empty()) { stop_and_join(state.m_thread_pool); }
+#endif
 }
 
 std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& processor,

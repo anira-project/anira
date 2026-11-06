@@ -79,6 +79,9 @@ export async function createModelFileExample(
   // [configs]
 
   // [handler]
+  // The contract's warm-up runs at prepare on the pool's Workers, which start with the context and
+  // enter their loops once this thread yields: wait for them first.
+  await context.ready()
   const pipeline = Pipeline.create(anira).addInference(model)
   const handler = InferenceHandler.create(context, pipeline)
   // Every prepare starts the handler on the config's default plan and returns the report of the
@@ -92,8 +95,6 @@ export async function createModelFileExample(
   selectPlan(handler.prepare(contract))
   pipeline.destroy() // the handler copied it
   // [handler]
-  // An offline render waits for every inference: the Workers must be in their loops first.
-  if (waitMs > 0) await context.ready()
 
   // [node]
   const audioNode = await handler.createAudioNode(audioContext, {

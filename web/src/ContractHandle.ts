@@ -4,8 +4,8 @@ import type { Fetcher, WithAbi } from './ModelConfig'
 
 /**
  * The fields of a Hard contract `ContractHandle.hard` sets, the web's `anira::Hard`: the same
- * fields (camelCase), with the budget in milliseconds (`std::chrono` on the C++ side) and
- * required, the warm-up fixed or none; the rest keep the library's defaults.
+ * fields (camelCase) and the same defaults (a measured budget, the `UNTIL_STABLE` warm-up), with
+ * the budget in milliseconds (`std::chrono` on the C++ side).
  */
 export type HardContractOptions = {
   /**
@@ -21,14 +21,22 @@ export type HardContractOptions = {
    */
   hostRate: number
   /**
-   * The inference budget in milliseconds (`ANIRA_BUDGET_EXPLICIT`): how long an inference may
-   * take before its block is late.
+   * The inference budget in milliseconds (`ANIRA_BUDGET_EXPLICIT`, `anira::Hard::budget` from a
+   * duration): how long an inference may take before its block is late, a reproducible latency.
+   * Left out (the default), the budget the warm-up pass measures (`ANIRA_BUDGET_MEASURED`): the
+   * slowest plan's figure, a latency that depends on the machine. The warm-up pass also measures
+   * the inference time; a measured budget is the maximum of its last four inferences; under an
+   * explicit budget the timings are only reported.
    */
-  budgetMs: number
+  budgetMs?: number
   /**
-   * Fixed warm-up iterations at prepare (`ANIRA_WARMUP_FIXED`, `anira::Hard::warmup_iterations`:
-   * that many inferences of every plan through the session, timed); default 0, none.
+   * The warm-up pass at prepare (`anira_warmup_mode`, `anira::Hard::warmup`): `ANIRA_WARMUP_UNTIL_STABLE`
+   * (the default) until the last four inference times agree, `ANIRA_WARMUP_FIXED` with
+   * `warmupIterations`, `ANIRA_WARMUP_NONE` (an explicit budget only). A prepare that warms up needs
+   * the pool's Workers running: `await context.ready()` first.
    */
+  warmup?: number
+  /** `ANIRA_WARMUP_FIXED`'s count (`anira::Hard::warmup_iterations`); default 0. */
   warmupIterations?: number
   /**
    * The ring dtype per Streamed tensor by canonical name (`anira::Hard::ring_dtypes`,
@@ -102,18 +110,15 @@ export class ContractHandle {
       )
     )
     try {
-      abi.anira_contract_hard_set_budget(
-        contract.contract,
-        anira_budget_kind.ANIRA_BUDGET_EXPLICIT,
-        options.budgetMs
-      )
-      const warmup = options.warmupIterations ?? 0
-      abi.anira_contract_hard_set_warmup(
-        contract.contract,
-        warmup > 0
-          ? anira_warmup_mode.ANIRA_WARMUP_FIXED
-          : anira_warmup_mode.ANIRA_WARMUP_NONE,
-        warmup
+      // The library's defaults where the options leave a field out, as anira::Hard's.
+      if (options.budgetMs === undefined) {
+        contract.hardBudget(anira_budget_kind.ANIRA_BUDGET_MEASURED)
+      } else {
+        contract.hardBudget(anira_budget_kind.ANIRA_BUDGET_EXPLICIT, options.budgetMs)
+      }
+      contract.hardWarmup(
+        options.warmup ?? anira_warmup_mode.ANIRA_WARMUP_UNTIL_STABLE,
+        options.warmupIterations ?? 0
       )
       for (const [canonical, dtype] of Object.entries(options.ringDtypes ?? {})) {
         contract.hardRingDtype(canonical, dtype)
@@ -139,6 +144,26 @@ export class ContractHandle {
       hostBlockMax,
       hostRate
     )
+    return this
+  }
+
+  /**
+   * The per-inference budget of this Hard contract (`anira_contract_hard_set_budget`,
+   * `anira::ContractHandle::hard_budget`): `ANIRA_BUDGET_MEASURED`, what the warm-up pass
+   * measures, or `ANIRA_BUDGET_EXPLICIT` with `explicitMs`.
+   */
+  hardBudget(kind: number, explicitMs = 0): this {
+    this.abi.anira_contract_hard_set_budget(this.contract, kind, explicitMs)
+    return this
+  }
+
+  /**
+   * The warm-up pass of this Hard contract (`anira_contract_hard_set_warmup`,
+   * `anira::ContractHandle::hard_warmup`): an `anira_warmup_mode`, with `ANIRA_WARMUP_FIXED`'s
+   * count.
+   */
+  hardWarmup(mode: number, iterations = 0): this {
+    this.abi.anira_contract_hard_set_warmup(this.contract, mode, iterations)
     return this
   }
 
