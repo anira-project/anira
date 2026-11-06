@@ -285,6 +285,59 @@ void grace_period() {
     std::this_thread::sleep_for(k_post_unload_grace);
 }
 
+
+#if defined(_WIN32)
+#include <tlhelp32.h>
+// [diag] Every thread of the process: id, start address, the module holding it, description.
+void diag_threads() {
+    using NtQit = LONG(WINAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+    using GetDesc = HRESULT(WINAPI*)(HANDLE, PWSTR*);
+    const auto ntq = reinterpret_cast<NtQit>(
+        GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationThread"));
+    const auto get_desc = reinterpret_cast<GetDesc>(
+        GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription"));
+    const DWORD pid = GetCurrentProcessId();
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    THREADENTRY32 entry{};
+    entry.dwSize = sizeof(entry);
+    int count = 0;
+    for (BOOL ok = Thread32First(snap, &entry); ok; ok = Thread32Next(snap, &entry)) {
+        if (entry.th32OwnerProcessID != pid) { continue; }
+        ++count;
+        HANDLE thread = OpenThread(THREAD_QUERY_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION,
+                                   FALSE, entry.th32ThreadID);
+        PVOID start = nullptr;
+        if (thread != nullptr && ntq != nullptr) {
+            ntq(thread, 9 /* ThreadQuerySetWin32StartAddress */, &start, sizeof(start), nullptr);
+        }
+        char module_name[MAX_PATH] = "?";
+        HMODULE holder = nullptr;
+        if (start != nullptr &&
+            GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               static_cast<LPCSTR>(start), &holder) != 0) {
+            GetModuleFileNameA(holder, module_name, MAX_PATH);
+        }
+        char desc[128] = "";
+        PWSTR wide = nullptr;
+        if (thread != nullptr && get_desc != nullptr && SUCCEEDED(get_desc(thread, &wide)) &&
+            wide != nullptr) {
+            WideCharToMultiByte(CP_UTF8, 0, wide, -1, desc, sizeof(desc), nullptr, nullptr);
+            LocalFree(wide);
+        }
+        std::fprintf(stderr, "[diag] thread %lu start %p in %s desc '%s'%s\n",
+                     static_cast<unsigned long>(entry.th32ThreadID), start, module_name, desc,
+                     entry.th32ThreadID == GetCurrentThreadId() ? " (this thread)" : "");
+        if (thread != nullptr) { CloseHandle(thread); }
+    }
+    CloseHandle(snap);
+    std::fprintf(stderr, "[diag] %d threads in the process\n", count);
+    std::fflush(stderr);
+}
+#else
+void diag_threads() {}
+#endif
+
 class LibraryUnload : public ::testing::Test {
 protected:
     void SetUp() override { pin_backend_runtimes(); }
@@ -407,6 +460,111 @@ TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
 
     // POSIX: no destroy, the instance (and its session) is leaked, as a careless host would.
     std::fprintf(stderr, "[diag] test: %s\n", "unloading");
+    diag_threads();
+    std::fflush(stderr);
+    module.unload();
+    std::fprintf(stderr, "[diag] test: %s\n", "unloaded");
+    std::fflush(stderr);
+    expect_unmapped();
+    grace_period();
+}
+
+TEST_F(LibraryUnload, DiagSkipLiteRtWarmUp) {
+#if defined(_WIN32)
+    SetEnvironmentVariableA("ANIRA_DIAG_SKIP_WARMUP", "3");
+    _putenv("ANIRA_DIAG_SKIP_WARMUP=3");
+#else
+    setenv("ANIRA_DIAG_SKIP_WARMUP", "3", 1);
+#endif
+    Module module;
+    std::fprintf(stderr, "[diag] test: %s\n", "loading");
+    std::fflush(stderr);
+    ASSERT_TRUE(module.load()) << module.error();
+    std::fprintf(stderr, "[diag] test: %s\n", "loaded");
+    std::fflush(stderr);
+    const Api& api = module.api();
+
+    void* instance = api.m_create_builtin();
+    std::fprintf(stderr, "[diag] test: %s\n", "created");
+    std::fflush(stderr);
+    const bool builtin = instance != nullptr;
+    RecordProperty("engine", builtin ? "built-in" : "pass-through");
+    if (!builtin) {
+        instance = api.m_create();
+        ASSERT_NE(instance, nullptr);
+        api.m_prepare(instance);
+    }
+    // Every block completes before the unload (premise above).
+    api.m_process_wait(instance, 10);
+    std::fprintf(stderr, "[diag] test: %s\n", "processed");
+    std::fflush(stderr);
+    ASSERT_TRUE(wait_for_num_inference_threads(api, 2));
+    std::fprintf(stderr, "[diag] test: %s\n", "two threads");
+    std::fflush(stderr);
+
+#if defined(_WIN32)
+    // Windows has no hook that may join, and the C ABI no forcing shutdown: the module exit
+    // destroys what it created, then calls anira_shutdown, which joins the pool.
+    api.m_destroy(instance);
+    EXPECT_EQ(api.m_shutdown(), 0);
+    EXPECT_EQ(api.m_num_inference_threads(), 0u);
+#endif
+
+    // POSIX: no destroy, the instance (and its session) is leaked, as a careless host would.
+    std::fprintf(stderr, "[diag] test: %s\n", "unloading");
+    diag_threads();
+    std::fflush(stderr);
+    module.unload();
+    std::fprintf(stderr, "[diag] test: %s\n", "unloaded");
+    std::fflush(stderr);
+    expect_unmapped();
+    grace_period();
+}
+
+TEST_F(LibraryUnload, DiagSkipExecuTorchWarmUp) {
+#if defined(_WIN32)
+    SetEnvironmentVariableA("ANIRA_DIAG_SKIP_WARMUP", "2");
+    _putenv("ANIRA_DIAG_SKIP_WARMUP=2");
+#else
+    setenv("ANIRA_DIAG_SKIP_WARMUP", "2", 1);
+#endif
+    Module module;
+    std::fprintf(stderr, "[diag] test: %s\n", "loading");
+    std::fflush(stderr);
+    ASSERT_TRUE(module.load()) << module.error();
+    std::fprintf(stderr, "[diag] test: %s\n", "loaded");
+    std::fflush(stderr);
+    const Api& api = module.api();
+
+    void* instance = api.m_create_builtin();
+    std::fprintf(stderr, "[diag] test: %s\n", "created");
+    std::fflush(stderr);
+    const bool builtin = instance != nullptr;
+    RecordProperty("engine", builtin ? "built-in" : "pass-through");
+    if (!builtin) {
+        instance = api.m_create();
+        ASSERT_NE(instance, nullptr);
+        api.m_prepare(instance);
+    }
+    // Every block completes before the unload (premise above).
+    api.m_process_wait(instance, 10);
+    std::fprintf(stderr, "[diag] test: %s\n", "processed");
+    std::fflush(stderr);
+    ASSERT_TRUE(wait_for_num_inference_threads(api, 2));
+    std::fprintf(stderr, "[diag] test: %s\n", "two threads");
+    std::fflush(stderr);
+
+#if defined(_WIN32)
+    // Windows has no hook that may join, and the C ABI no forcing shutdown: the module exit
+    // destroys what it created, then calls anira_shutdown, which joins the pool.
+    api.m_destroy(instance);
+    EXPECT_EQ(api.m_shutdown(), 0);
+    EXPECT_EQ(api.m_num_inference_threads(), 0u);
+#endif
+
+    // POSIX: no destroy, the instance (and its session) is leaked, as a careless host would.
+    std::fprintf(stderr, "[diag] test: %s\n", "unloading");
+    diag_threads();
     std::fflush(stderr);
     module.unload();
     std::fprintf(stderr, "[diag] test: %s\n", "unloaded");

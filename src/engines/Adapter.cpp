@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -177,6 +178,11 @@ void ExecutorLoaded::require_initialised() const {
     throw StatusError(ANIRA_ERROR_INVALID_STATE, message);
 }
 
+static bool diag_skip(const Model& m) {
+    const char* skip = std::getenv("ANIRA_DIAG_SKIP_WARMUP");
+    return skip != nullptr && std::atoi(skip) == static_cast<int>(m.m_engine);
+}
+
 static void diag_warm_up(const char* what, const Model& m) {
     std::fprintf(stderr, "[diag] creation warm-up %s: engine %d %s\n", what,
                  static_cast<int>(m.m_engine), m.m_path.c_str());
@@ -189,8 +195,8 @@ void ExecutorLoaded::adopt(std::unique_ptr<Executor> probe) {
     if (model().m_instances == 0) {
         // No shared slot: the probe waits for the first exclusive session.
         m_spare = std::move(probe);
-        diag_warm_up("begin", model());
-        m_spare->warm_up(k_creation_warm_up);
+        diag_warm_up(diag_skip(model()) ? "SKIPPED" : "begin", model());
+        if (!diag_skip(model())) { m_spare->warm_up(k_creation_warm_up); }
         diag_warm_up("end", model());
         return;
     }
@@ -198,8 +204,8 @@ void ExecutorLoaded::adopt(std::unique_ptr<Executor> probe) {
     m_shared.push_back(std::move(probe));
     for (uint32_t i = 1; i < model().m_instances; ++i) { m_shared.push_back(make_executor()); }
     for (const std::unique_ptr<Executor>& executor : m_shared) {
-        diag_warm_up("begin", model());
-        executor->warm_up(k_creation_warm_up);
+        diag_warm_up(diag_skip(model()) ? "SKIPPED" : "begin", model());
+        if (!diag_skip(model())) { executor->warm_up(k_creation_warm_up); }
         diag_warm_up("end", model());
     }
 }
