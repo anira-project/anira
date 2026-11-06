@@ -11,7 +11,8 @@ anira as soon as the plugin's last handler and context are gone.
 .. code-block:: cpp
 
     // a plugin's module-exit entry point (CLAP deinit, VST3 ExitDll), after every instance is gone
-    handler = nullptr;          // destroys the handler: drains its inferences; the last one joins the pool
+    handler = nullptr;          // std::unique_ptr<anira::InferenceHandler>: drains its inferences;
+                                // the last handler also joins the pool
     context = nullptr;          // std::unique_ptr<anira::Context>
     anira::shutdown();          // stops the core's threads; ANIRA_ERROR_INVALID_STATE while a
                                 // context or a handler lives
