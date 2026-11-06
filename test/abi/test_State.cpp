@@ -1377,7 +1377,8 @@ anira_status ANIRA_CALL ask_host_end(const anira_processor_ctx* ctx,
 void run_host_end_probe(HostEndLog& log) {
     anira_processor_desc processor = ANIRA_PROCESSOR_DESC_INIT;
     processor.user_data = &log;
-    processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
+    processor.realtime_phases =
+        ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS);
     processor.pre_process = &ask_host_end;
     processor.post_process = &ask_host_end;
     Rig rig(accumulator_model(), k_accumulator, {processor});

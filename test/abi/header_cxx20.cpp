@@ -188,7 +188,7 @@ static_assert(
         std::declval<anira::ProcessorContext&>())) &&
     noexcept(std::declval<anira::Processor&>().release()) &&
     noexcept(std::declval<const anira::Processor&>().consumed_kinds()) &&
-    noexcept(std::declval<const anira::Processor&>().flags()) &&
+    noexcept(std::declval<const anira::Processor&>().realtime_phases()) &&
     noexcept(std::declval<const anira::ProcessorContext&>().entry()) &&
     !noexcept(
         std::declval<anira::Processor&>().prepare(std::declval<const anira::PrepareInfo&>())) &&
@@ -434,9 +434,13 @@ private:
 
 class ProbeProcessor final : public anira::Processor {
 public:
-    uint32_t phases() const noexcept override { return k_pre_process | k_after_inference; }
-    // The real-time promise a Hard contract requires of a filled pre_process.
-    uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+    // reset only with k_reset: the Prepared overrides it.
+    uint32_t phases() const noexcept override {
+        return k_pre_process | k_after_inference | k_reset;
+    }
+    // The real-time promise a Hard contract requires of a filled pre_process and reset, and the
+    // hook's beside them: every body here is real-time.
+    uint32_t realtime_phases() const noexcept override { return phases(); }
 
     void init(const anira::InitInfo& info) override {
         if (info.context() == nullptr || info.log_level() > ANIRA_LOG_ERROR) {
@@ -703,7 +707,7 @@ int anira_header_cxx20_probe() {
         const std::shared_ptr<anira::Processor> processor = std::make_shared<ProbeProcessor>();
         anira::Pipeline other;
         other.add_inference(model).add_processor(processor);
-        checks += processor->flags() != 0 ? 1 : 0;
+        checks += processor->realtime_phases() != 0 ? 1 : 0;
         checks += nonblocking_probe(nullptr) > 0 ? 1 : 0;
         // A custom engine added to the pipeline; the enum alias where the model config takes
         // one.

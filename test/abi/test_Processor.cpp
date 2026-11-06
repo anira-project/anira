@@ -144,14 +144,17 @@ struct ProcessorHandler {
     anira_error m_err = ANIRA_ERROR_INIT;
 };
 
-/// A descriptor with the user_data and both real-time bits: every phase body of this file
-/// allocates nothing and blocks on nothing (the file comment), so the descriptors promise it,
-/// and a Hard contract takes a filled pre_process or post_process only with the promise. A
-/// case about the promise itself clears the bits.
+/// A descriptor with the user_data and every per-chunk phase promised real-time: every phase
+/// body of this file allocates nothing and blocks on nothing (the file comment), so the
+/// descriptors promise it, and a Hard contract takes a filled pre_process, post_process or
+/// reset only with its bit. A case about the promise itself sets the bits it is about.
 anira_processor_desc promising_processor(void* user_data) {
     anira_processor_desc processor = ANIRA_PROCESSOR_DESC_INIT;
     processor.user_data = user_data;
-    processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+    processor.realtime_phases =
+        ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) |
+        ANIRA_PHASE_BIT(ANIRA_PHASE_BEFORE_INFERENCE) |
+        ANIRA_PHASE_BIT(ANIRA_PHASE_AFTER_INFERENCE) | ANIRA_PHASE_BIT(ANIRA_PHASE_RESET);
     return processor;
 }
 
@@ -561,13 +564,18 @@ TEST(AbiProcessor, AddProcessorRefusals) {
     EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(std::strstr(err.message, "struct_size"), nullptr) << err.message;
 
-    // A flags bit the header does not define, low or high.
-    bad = processor;
-    bad.flags = 4U;
-    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_NE(std::strstr(err.message, "flags"), nullptr) << err.message;
-    bad.flags = 0x80000000U | ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
-    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    // A realtime_phases bit of no per-chunk phase: the engine call, a lifecycle phase, a high
+    // bit; each beside legal ones.
+    for (const uint32_t illegal : {ANIRA_PHASE_BIT(ANIRA_PHASE_INFERENCE),
+                                   ANIRA_PHASE_BIT(ANIRA_PHASE_PREPARE),
+                                   ANIRA_PHASE_BIT(ANIRA_PHASE_INIT),
+                                   0x80000000U}) {
+        bad = processor;
+        bad.realtime_phases |= illegal;
+        EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT)
+            << illegal;
+        EXPECT_NE(std::strstr(err.message, "realtime_phases"), nullptr) << err.message;
+    }
 
     bad = processor;
     bad.num_consumed_kinds = 1;
@@ -606,7 +614,7 @@ TEST(AbiProcessor, ASecondProcessorIsRefused) {
     EXPECT_EQ(anira_pipeline_add_processor(pipeline, &processor, &err), ANIRA_ERROR_INVALID_STATE);
     // A malformed descriptor is reported as such, not as a second processor.
     anira_processor_desc bad = other;
-    bad.flags = 4U;
+    bad.realtime_phases = ANIRA_PHASE_BIT(ANIRA_PHASE_INFERENCE);
     EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
 
     anira_pipeline_destroy(pipeline);
@@ -615,7 +623,7 @@ TEST(AbiProcessor, ASecondProcessorIsRefused) {
 }
 
 // A caller compiled against a shorter header hands over the three leading slots only: the
-// rest reads as ANIRA_PROCESSOR_DESC_INIT, so the processor has no callback and no flags.
+// rest reads as ANIRA_PROCESSOR_DESC_INIT, so the processor has no callback and no promise.
 TEST(AbiProcessor, AShortDescriptorReadsAsTheDefaults) {
     const Context context;
     Lifetime lifetime;
@@ -628,7 +636,7 @@ TEST(AbiProcessor, AShortDescriptorReadsAsTheDefaults) {
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(lifetime.m_prepared, 0);
     ASSERT_NE(handler.m_handler->m_pipeline.m_processor, nullptr);
-    EXPECT_EQ(handler.m_handler->m_pipeline.m_processor->desc().flags, 0U);
+    EXPECT_EQ(handler.m_handler->m_pipeline.m_processor->desc().realtime_phases, 0U);
     EXPECT_EQ(handler.m_handler->m_pipeline.m_processor->desc().prepare, nullptr);
 }
 
@@ -2424,14 +2432,31 @@ TEST(AbiProcessor, FailingPostProcessKeepsTheStreamAligned) {
 }
 
 // ============================================================================================
-// The real-time promise: anira_processor_desc.flags against the placement
+// The real-time promise: anira_processor_desc.realtime_phases against the placement
 // ============================================================================================
 
+namespace {
+
+constexpr uint32_t k_pre_bit = ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS);
+constexpr uint32_t k_post_bit = ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS);
+constexpr uint32_t k_reset_bit = ANIRA_PHASE_BIT(ANIRA_PHASE_RESET);
+constexpr uint32_t k_hook_bits =
+    ANIRA_PHASE_BIT(ANIRA_PHASE_BEFORE_INFERENCE) | ANIRA_PHASE_BIT(ANIRA_PHASE_AFTER_INFERENCE);
+
+/// Whether a refused prepare named `phase` and realtime_phases.
+void expect_refusal_names(const anira_error& err, const char* phase) {
+    const std::string filled = std::string("the processor: ") + phase + " is filled";
+    EXPECT_NE(std::strstr(err.message, filled.c_str()), nullptr) << err.message;
+    EXPECT_NE(std::strstr(err.message, "realtime_phases"), nullptr) << err.message;
+}
+
+}  // namespace
+
 // Under a Hard contract a filled pre_process, post_process or reset runs on the driving thread
-// (the reset right before the first pre_process of a new stream): the processor must promise
-// ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST, else prepare is CONFIG naming the phase and the flag, and
-// the handler stays unprepared. The hooks need no promise (an inference thread), and the promise
-// alone, without the hooks' bit, suffices for the three driving-thread slots.
+// (the reset right before the first pre_process of a new stream): each one must carry its own
+// bit in realtime_phases, else prepare is CONFIG naming that phase and realtime_phases, and the
+// handler stays unprepared. The hooks need no promise (an inference thread), and a promised
+// phase that is not filled is no error.
 TEST(AbiProcessor, TheRealTimePromiseIsCheckedAtPrepare) {
     const Context context;
     const anira::ContractHandle contract = zeros_contract();
@@ -2439,39 +2464,34 @@ TEST(AbiProcessor, TheRealTimePromiseIsCheckedAtPrepare) {
         Probe probe;
         probe.m_defaults = 1;
         anira_processor_desc processor = promising_processor(&probe);
-        processor.flags = 0;
+        processor.realtime_phases = 0;
         processor.pre_process = probe_phase;
         ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
         EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::strstr(handler.m_err.message, "the processor: pre_process is filled"),
-                  nullptr)
-            << handler.m_err.message;
-        EXPECT_NE(std::strstr(handler.m_err.message, "pre_process"), nullptr)
-            << handler.m_err.message;
-        EXPECT_NE(std::strstr(handler.m_err.message, "ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST"),
+        expect_refusal_names(handler.m_err, "pre_process");
+        EXPECT_NE(std::strstr(handler.m_err.message, "ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS)"),
                   nullptr)
             << handler.m_err.message;
         EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
         EXPECT_EQ(probe.m_calls.at(ANIRA_PHASE_PRE_PROCESS).load(), 0);
     }
     {
-        // post_process alone, with the hooks' bit only: the wrong promise.
+        // post_process alone, with the hooks' and pre_process's bits: the wrong promise.
         Probe probe;
         probe.m_defaults = 1;
         anira_processor_desc processor = promising_processor(&probe);
-        processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+        processor.realtime_phases = k_hook_bits | k_pre_bit;
         processor.post_process = probe_phase;
         ProcessorHandler handler(context, stream_model(), {processor});
         EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::strstr(handler.m_err.message, "post_process"), nullptr)
-            << handler.m_err.message;
+        expect_refusal_names(handler.m_err, "post_process");
     }
     {
-        // The hooks alone promise nothing and run: the promise is about the driving thread.
+        // The hooks without a promise run: the promise is about the driving thread.
         Probe probe;
         anira_processor_desc processor = promising_processor(&probe);
-        processor.flags = 0;
+        processor.realtime_phases = 0;
         processor.before_inference = probe_phase;
         processor.after_inference = probe_phase;
         ProcessorHandler handler(context, stream_model(), {processor});
@@ -2484,39 +2504,39 @@ TEST(AbiProcessor, TheRealTimePromiseIsCheckedAtPrepare) {
     }
     {
         // reset alone runs on the driving thread too (right before the first pre_process of a
-        // new stream): the same promise, else CONFIG naming reset.
+        // new stream): its own bit, else CONFIG naming reset.
         ResetLog log;
         anira_processor_desc processor = promising_processor(&log);
-        processor.flags = 0;
+        processor.realtime_phases = 0;
         processor.reset = reset_log_reset;
         ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
         EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::strstr(handler.m_err.message, "the processor: reset is filled"), nullptr)
-            << handler.m_err.message;
-        EXPECT_NE(std::strstr(handler.m_err.message, "ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST"),
-                  nullptr)
+        expect_refusal_names(handler.m_err, "reset");
+        EXPECT_NE(std::strstr(handler.m_err.message, "ANIRA_PHASE_BIT(ANIRA_PHASE_RESET)"), nullptr)
             << handler.m_err.message;
         EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
         EXPECT_EQ(log.m_resets.load(), 0U);
     }
     {
-        // reset beside the hooks, with the hooks' bit alone: still the wrong promise.
+        // reset beside pre_process, with every bit but reset's: the promise of the phase beside
+        // it, on the same thread, does not cover reset, which is named.
         ResetLog log;
         anira_processor_desc processor = promising_processor(&log);
-        processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+        processor.realtime_phases = k_pre_bit | k_post_bit | k_hook_bits;
+        processor.pre_process = reset_log_pre_process;
         processor.reset = reset_log_reset;
         ProcessorHandler handler(context, stream_model(), {processor});
         EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::strstr(handler.m_err.message, "the processor: reset is filled"), nullptr)
-            << handler.m_err.message;
+        expect_refusal_names(handler.m_err, "reset");
+        EXPECT_EQ(log.m_resets.load(), 0U);
     }
     {
-        // reset under the promise: prepare passes and the reset runs once, at the stream's
+        // reset under its own promise: prepare passes and the reset runs once, at the stream's
         // start.
         ResetLog log;
         anira_processor_desc processor = promising_processor(&log);
-        processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
+        processor.realtime_phases = k_reset_bit;
         processor.reset = reset_log_reset;
         ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
@@ -2527,10 +2547,11 @@ TEST(AbiProcessor, TheRealTimePromiseIsCheckedAtPrepare) {
         EXPECT_EQ(log.m_resets.load(), 1U);
     }
     {
+        // Exactly the filled phases promised: pre_process and post_process, nothing else.
         Probe probe;
         probe.m_defaults = 1;
         anira_processor_desc processor = promising_processor(&probe);
-        processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
+        processor.realtime_phases = k_pre_bit | k_post_bit;
         processor.pre_process = probe_phase;
         processor.post_process = probe_phase;
         ProcessorHandler handler(context, stream_model(), {processor});
@@ -2540,6 +2561,21 @@ TEST(AbiProcessor, TheRealTimePromiseIsCheckedAtPrepare) {
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
         expect_same_stream(stream.m_out, stream.expected());
         EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
+    }
+    {
+        // Every phase promised, pre_process alone filled: a promised phase that is not filled is
+        // no error.
+        Probe probe;
+        probe.m_defaults = 1;
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.pre_process = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
+        ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+        Stream stream(handler.m_handler);
+        stream.blocks(2);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        expect_same_stream(stream.m_out, stream.expected());
+        EXPECT_EQ(probe.m_calls.at(ANIRA_PHASE_PRE_PROCESS).load(), 2);
     }
 }
 

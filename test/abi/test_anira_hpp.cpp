@@ -1222,9 +1222,9 @@ public:
     explicit CountingProcessor(uint32_t mask) : m_mask(mask) {}
 
     uint32_t phases() const noexcept override { return m_mask; }
-    /// Both bits by default: every body here allocates nothing and blocks on nothing, and a
-    /// Hard contract takes a filled pre_process or post_process only with the promise.
-    uint32_t flags() const noexcept override { return m_flags; }
+    /// Every phase by default: every body here allocates nothing and blocks on nothing, and a
+    /// Hard contract takes a filled pre_process, post_process or reset only with its bit.
+    uint32_t realtime_phases() const noexcept override { return m_realtime_phases; }
 
     void init(const anira::InitInfo& info) override {
         ++m_inited;
@@ -1279,7 +1279,7 @@ public:
     static constexpr std::array<const char*, 1> k_kinds{"model:entry"};
 
     uint32_t m_mask;
-    uint32_t m_flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+    uint32_t m_realtime_phases = anira::Processor::k_all_phases;
     float m_scale = 1.0F;
     bool m_consumes_entry = false;
     bool m_init_throws = false;
@@ -1378,10 +1378,13 @@ TEST(AbiCxx, AProcessorSubclassRunsItsPhasesThroughACHandler) {
     CHandler handler(context, *pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(processor.use_count(), 2) << "the handler shares the pipeline's carrier";
-    // flags() reached the descriptor.
+    // realtime_phases() reached the descriptor, in the bits of the C phases.
     ASSERT_NE(handler.m_handler->m_pipeline.m_processor, nullptr);
-    EXPECT_EQ(handler.m_handler->m_pipeline.m_processor->desc().flags,
-              ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS);
+    EXPECT_EQ(handler.m_handler->m_pipeline.m_processor->desc().realtime_phases,
+              ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) |
+                  ANIRA_PHASE_BIT(ANIRA_PHASE_BEFORE_INFERENCE) |
+                  ANIRA_PHASE_BIT(ANIRA_PHASE_AFTER_INFERENCE) |
+                  ANIRA_PHASE_BIT(ANIRA_PHASE_RESET));
     pipe.reset();  // the handler carries the processor alone now
     EXPECT_EQ(processor.use_count(), 2);
     EXPECT_EQ(processor->m_released.load(), 0);
@@ -1472,15 +1475,17 @@ TEST(AbiCxx, APostOnlyProcessorLeavesTheDefaultPreProcessRunning) {
 }
 
 // Under a Hard contract a processor of inference hooks alone runs nothing on the driving thread:
-// it prepares without ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST and its reset slot stays empty. One
-// that names k_reset fills reset, which runs on the driving thread: refused without the promise,
-// with it its reset runs for the first chunk. A pre_process brings reset along unnamed.
-TEST(AbiCxx, AProcessorOfInferenceHooksAloneNeedsNoPrePostPromise) {
+// it prepares without promising anything and its reset slot stays empty. One that names k_reset
+// fills reset, which runs on the driving thread: refused without k_reset in realtime_phases (the
+// hooks' bits do not cover it), with it its reset runs for the first chunk. A Prepared that
+// overrides reset without k_reset in phases() is never reset, beside pre_process too: the slot
+// stays NULL.
+TEST(AbiCxx, AProcessorOfInferenceHooksAloneNeedsNoPromise) {
     const anira_test::Context context;
     const ModelConfig model = processor_stream_model();
-    const auto prepared = [&](uint32_t mask, uint32_t flags) {
+    const auto prepared = [&](uint32_t mask, uint32_t realtime_phases) {
         auto processor = std::make_shared<CountingProcessor>(mask);
-        processor->m_flags = flags;
+        processor->m_realtime_phases = realtime_phases;
         anira::Pipeline pipe;
         pipe.add_inference(model, {custom_row()});
         pipe.add_processor(processor);
@@ -1490,10 +1495,10 @@ TEST(AbiCxx, AProcessorOfInferenceHooksAloneNeedsNoPrePostPromise) {
         const anira_status status = handler->prepare(anira_test::explicit_contract());
         return std::make_pair(std::move(handler), std::make_pair(status, processor));
     };
+    constexpr uint32_t k_hooks =
+        anira::Processor::k_before_inference | anira::Processor::k_after_inference;
     {
-        auto [handler, result] =
-            prepared(anira::Processor::k_before_inference | anira::Processor::k_after_inference,
-                     ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS);
+        auto [handler, result] = prepared(k_hooks, 0U);
         ASSERT_EQ(result.first, ANIRA_OK) << handler->m_err.message;
         std::vector<float> in;
         std::vector<float> out;
@@ -1504,17 +1509,19 @@ TEST(AbiCxx, AProcessorOfInferenceHooksAloneNeedsNoPrePostPromise) {
     }
     {
         auto [handler, result] =
-            prepared(anira::Processor::k_before_inference | anira::Processor::k_reset,
-                     ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS);
+            prepared(anira::Processor::k_before_inference | anira::Processor::k_reset, k_hooks);
         EXPECT_EQ(result.first, ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::string_view(handler->m_err.message).find("reset is filled"),
+        EXPECT_NE(std::string_view(handler->m_err.message).find("the processor: reset is filled"),
+                  std::string_view::npos)
+            << handler->m_err.message;
+        EXPECT_NE(std::string_view(handler->m_err.message).find("realtime_phases"),
                   std::string_view::npos)
             << handler->m_err.message;
     }
     {
         auto [handler, result] =
             prepared(anira::Processor::k_before_inference | anira::Processor::k_reset,
-                     ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS | ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST);
+                     anira::Processor::k_before_inference | anira::Processor::k_reset);
         ASSERT_EQ(result.first, ANIRA_OK) << handler->m_err.message;
         std::vector<float> in;
         std::vector<float> out;
@@ -1523,14 +1530,19 @@ TEST(AbiCxx, AProcessorOfInferenceHooksAloneNeedsNoPrePostPromise) {
         EXPECT_EQ(result.second->last().m_resets.load(), 1) << "k_reset: the first chunk";
     }
     {
+        // CountingPrepared overrides reset, but the mask does not name it: the slot stays NULL
+        // beside pre_process, and the promise of pre_process alone suffices.
         auto [handler, result] =
-            prepared(anira::Processor::k_pre_process, ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST);
+            prepared(anira::Processor::k_pre_process, anira::Processor::k_pre_process);
         ASSERT_EQ(result.first, ANIRA_OK) << handler->m_err.message;
+        ASSERT_NE(handler->m_handler->m_pipeline.m_processor, nullptr);
+        EXPECT_EQ(handler->m_handler->m_pipeline.m_processor->desc().reset, nullptr);
         std::vector<float> in;
         std::vector<float> out;
         drive(handler->m_handler, 2, in, out);
         ASSERT_FALSE(HasFatalFailure());
-        EXPECT_EQ(result.second->last().m_resets.load(), 1) << "pre_process brings reset along";
+        EXPECT_EQ(result.second->last().m_pre.load(), 2);
+        EXPECT_EQ(result.second->last().m_resets.load(), 0) << "no k_reset: no reset slot";
     }
 }
 
@@ -1659,14 +1671,14 @@ TEST(AbiCxx, ASecondCustomProcessorIsRefused) {
     EXPECT_EQ(first->m_released.load(), 0);
 }
 
-// flags() is the processor's promise: without ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST a processor
-// that fills pre_process is refused at prepare under a Hard contract, by name; a bit the C header
-// does not define is refused at add; with the promise the same processor runs.
+// realtime_phases() is the processor's promise, per phase: without k_pre_process a processor
+// that fills pre_process is refused at prepare under a Hard contract, naming the phase; a bit of
+// no per-chunk phase is refused at add; with the promise the same processor runs.
 TEST(AbiCxx, TheRealTimePromiseOfAProcessorIsCheckedAtPrepare) {
     const anira_test::Context context;
     const ModelConfig model = processor_stream_model();
     auto processor = std::make_shared<CountingProcessor>(anira::Processor::k_pre_process);
-    processor->m_flags = 0;
+    processor->m_realtime_phases = anira::Processor::k_post_process | anira::Processor::k_reset;
     {
         anira::Pipeline pipe;
         pipe.add_inference(model, {custom_row()});
@@ -1679,22 +1691,23 @@ TEST(AbiCxx, TheRealTimePromiseOfAProcessorIsCheckedAtPrepare) {
             std::string_view(handler.m_err.message).find("the processor: pre_process is filled"),
             std::string_view::npos)
             << handler.m_err.message;
-        EXPECT_NE(
-            std::string_view(handler.m_err.message).find("ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST"),
-            std::string_view::npos)
+        EXPECT_NE(std::string_view(handler.m_err.message).find("realtime_phases"),
+                  std::string_view::npos)
             << handler.m_err.message;
         EXPECT_TRUE(processor->m_counts.empty()) << "refused ahead of the processor's prepare";
     }
-    processor->m_flags = 4U;
-    {
+    // A bit of no per-chunk phase, beside a legal one: the engine call's, a lifecycle phase's.
+    for (const anira_phase illegal : {ANIRA_PHASE_INFERENCE, ANIRA_PHASE_PREPARE}) {
+        processor->m_realtime_phases =
+            anira::Processor::k_pre_process | anira::Processor::phase_bit(illegal);
         anira::Pipeline pipe;
         const Thrown bit = thrown_by([&] { pipe.add_processor(processor); });
         EXPECT_TRUE(bit.m_thrown);
         EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
-        EXPECT_NE(bit.m_what.find("flags"), std::string::npos) << bit.m_what;
+        EXPECT_NE(bit.m_what.find("realtime_phases"), std::string::npos) << bit.m_what;
         EXPECT_EQ(processor.use_count(), 1);
     }
-    processor->m_flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;  // read again by the next add
+    processor->m_realtime_phases = processor->phases();  // read again by the next add
     {
         anira::Pipeline pipe;
         pipe.add_inference(model, {custom_row()});
@@ -1828,7 +1841,7 @@ private:
 class Int16InputProcessor final : public anira::Processor {
 public:
     uint32_t phases() const noexcept override { return k_pre_process; }
-    uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+    uint32_t realtime_phases() const noexcept override { return phases(); }
     std::unique_ptr<anira::Processor::Prepared> prepare(
         const anira::PrepareInfo& /*info*/) override {
         return std::make_unique<Int16InputPrepared>();

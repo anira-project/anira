@@ -119,7 +119,8 @@ anira_status ANIRA_CALL record_after(const anira_processor_ctx* ctx,
 anira_processor_desc recording_processor(Recorder& recorder) {
     anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
     desc.user_data = &recorder;
-    desc.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
+    desc.realtime_phases =
+        ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS);
     desc.pre_process = record_pre;
     desc.post_process = record_post;
     desc.before_inference = record_before;

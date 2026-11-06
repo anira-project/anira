@@ -448,7 +448,7 @@ int anira_header_c_probe(void) {
             processor.struct_size == sizeof(anira_processor_desc) && processor.user_data == NULL
                 ? 1
                 : 0;
-        checks += processor.flags == 0u && processor.pre_process == NULL ? 1 : 0;
+        checks += processor.realtime_phases == 0u && processor.pre_process == NULL ? 1 : 0;
         checks += processor.reset == NULL && processor.unprepare == NULL && processor.init == NULL
                       ? 1
                       : 0;
@@ -466,17 +466,19 @@ int anira_header_c_probe(void) {
             ANIRA_PHASE_INIT == 9 && ANIRA_PHASE_LOAD == 10 && ANIRA_PHASE_UNLOAD == 11 ? 1 : 0;
         processor.consumed_kinds = kinds;
         processor.num_consumed_kinds = 1u;
-        /* The real-time promise of the two host-end phases (the reset runs on their thread), as
-           a Hard contract requires it, and the hooks' promise beside it. */
-        processor.flags =
-            ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+        /* The real-time promise per phase: the two host-end phases and the reset, as a Hard
+           contract requires it of the filled ones, and the hooks beside them. */
+        processor.realtime_phases =
+            ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) |
+            ANIRA_PHASE_BIT(ANIRA_PHASE_BEFORE_INFERENCE) |
+            ANIRA_PHASE_BIT(ANIRA_PHASE_AFTER_INFERENCE) | ANIRA_PHASE_BIT(ANIRA_PHASE_RESET);
         processor.pre_process = on_pre_process;
         processor.reset = on_processor_reset;
         processor.prepare = on_processor_prepare;
         processor.unprepare = on_processor_unprepare;
         processor.init = on_processor_init;
         processor.release = on_processor_release;
-        checks += processor.flags == 3u ? 1 : 0;
+        checks += processor.realtime_phases == 0x97u ? 1 : 0;
         checks += sizeof(anira_processor_ctx) == 64u && offsetof(anira_processor_ctx, frame) == 32u
                       ? 1
                       : 0;

@@ -407,7 +407,7 @@ class ConvertingProcessor final : public anira::Processor {
 public:
     explicit ConvertingProcessor(anira_dtype model_dtype) : m_model_dtype(model_dtype) {}
     uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
-    uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+    uint32_t realtime_phases() const noexcept override { return phases(); }
     std::unique_ptr<anira::Processor::Prepared> prepare(
         const anira::PrepareInfo& /*info*/) override {
         return std::make_unique<ConvertingPrepared>(m_model_dtype);

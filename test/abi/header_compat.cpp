@@ -261,7 +261,7 @@ int anira_header_compat_probe() {
         checks += &processor.config() == &mutable_config ? 1 : 0;
         const std::shared_ptr<v2::LegacyProcessor> legacy =
             std::make_shared<v2::LegacyProcessor>(processor);
-        checks += static_cast<int>(legacy->phases() + legacy->flags());
+        checks += static_cast<int>(legacy->phases() + legacy->realtime_phases());
         const std::shared_ptr<anira::Engine> engine = std::make_shared<v2::PassthroughEngine>();
         checks += static_cast<int>(engine->flags() + engine->id().size());
         anira::Pipeline pipeline;
