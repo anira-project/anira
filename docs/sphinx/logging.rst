@@ -192,7 +192,8 @@ a session prepared); Debug additionally switches the engines' verbose output on.
 level of the context config (``log_level``; default ``ANIRA_LOG_WARNING``; the most verbose
 request across the contexts of a process wins) is applied to anira's own logger and forwarded
 to the engines' runtimes (ONNX Runtime, LiteRT, LibTorch/c10; TFLite and ExecuTorch expose no
-runtime level).
+runtime level), each at its engine's init: once per process, when the first model of the engine
+loads, with the level in effect then.
 
 The platform sink maps the levels onto the platform's own vocabulary, which decides what the
 platform keeps:
@@ -250,7 +251,9 @@ non-flushing ``abort()`` loses nothing). "Flush" is not a knob on the control pa
 **Real-time path.** A real-time record sits in the queue until it is drained: by anira's
 drain thread every ``drain_interval_ms`` (default 10 ms; a low-priority thread named
 ``anira-log``, so that under heavy CPU contention delivery is delayed rather than competing
-with the audio path), or by the host through ``anira_drain_log()`` under
+with the audio path; the core starts it with the first context and stops and joins it when the
+last context and handler are destroyed, flushing the queue on the destroying thread), or by the
+host through ``anira_drain_log()`` under
 ``ANIRA_LOG_DRAIN_MANUAL``. That window is the only place where a record can be lost, and it
 is closed where it matters: **when a** ``[main-thread]`` **entry fails, the firewall drains
 the real-time queue on the failing caller's thread before returning the negative status**, so
