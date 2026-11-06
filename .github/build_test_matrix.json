@@ -51,7 +51,7 @@
   "name": "Windows-x86_64-static",
   "os": "windows-latest",
   "preset": "windows-msvc-tests-static",
-  "pr": false,
+  "pr": true,
   "assert_grep": "disabling ANIRA_WITH_LIBTORCH",
   "vcvars": "x64",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"

@@ -391,11 +391,18 @@ void* unloadtest_create_builtin(void) {
     // Created and prepared here: a build whose built-in engines cannot run the gain model
     // (none carried, or the model file of the chosen one missing) refuses one of the two.
     Instance* instance = nullptr;
+    std::fprintf(stderr, "[diag] module: create_builtin begins\n");
+    std::fflush(stderr);
     try {
         instance = make_instance(Kind::BuiltIn);
     } catch (...) { return nullptr; }
+    std::fprintf(stderr, "[diag] module: instance made: %p\n", static_cast<void*>(instance));
+    std::fflush(stderr);
     if (instance == nullptr) { return nullptr; }
-    if (prepare_instance(*instance) != ANIRA_OK) {
+    const anira_status diag_status = prepare_instance(*instance);
+    std::fprintf(stderr, "[diag] module: prepared: %d\n", static_cast<int>(diag_status));
+    std::fflush(stderr);
+    if (diag_status != ANIRA_OK) {
         destroy_instance(instance);
         return nullptr;
     }
@@ -445,7 +452,11 @@ void unloadtest_process_wait(void* instance, int num_blocks) {
 }
 
 void unloadtest_destroy(void* instance) {
+    std::fprintf(stderr, "[diag] module: destroy begins\n");
+    std::fflush(stderr);
     destroy_instance(static_cast<Instance*>(instance));
+    std::fprintf(stderr, "[diag] module: destroy ends\n");
+    std::fflush(stderr);
 }
 
 int unloadtest_create_throwing(void) {
@@ -476,7 +487,12 @@ int unloadtest_release_core_if_idle(void) {
 }
 
 int unloadtest_shutdown(void) {
-    return static_cast<int>(anira_shutdown());
+    std::fprintf(stderr, "[diag] module: shutdown begins\n");
+    std::fflush(stderr);
+    const int diag_result = static_cast<int>(anira_shutdown());
+    std::fprintf(stderr, "[diag] module: shutdown ends: %d\n", diag_result);
+    std::fflush(stderr);
+    return diag_result;
 }
 
 void unloadtest_leak_thread(void) {

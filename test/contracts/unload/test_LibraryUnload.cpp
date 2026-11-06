@@ -5,6 +5,7 @@
 // like a plugin in a DAW. Every entry point is resolved by name; the signatures mirror
 // test/unload/module_api.h.
 
+#include <cstdio>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -371,10 +372,16 @@ TEST_F(LibraryUnload, DefaultPolicyLeavesNoThreadBehind) {
 // out of reach once the module is gone (see passthrough_process).
 TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
     Module module;
+    std::fprintf(stderr, "[diag] test: %s\n", "loading");
+    std::fflush(stderr);
     ASSERT_TRUE(module.load()) << module.error();
+    std::fprintf(stderr, "[diag] test: %s\n", "loaded");
+    std::fflush(stderr);
     const Api& api = module.api();
 
     void* instance = api.m_create_builtin();
+    std::fprintf(stderr, "[diag] test: %s\n", "created");
+    std::fflush(stderr);
     const bool builtin = instance != nullptr;
     RecordProperty("engine", builtin ? "built-in" : "pass-through");
     if (!builtin) {
@@ -384,7 +391,11 @@ TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
     }
     // Every block completes before the unload (premise above).
     api.m_process_wait(instance, 10);
+    std::fprintf(stderr, "[diag] test: %s\n", "processed");
+    std::fflush(stderr);
     ASSERT_TRUE(wait_for_num_inference_threads(api, 2));
+    std::fprintf(stderr, "[diag] test: %s\n", "two threads");
+    std::fflush(stderr);
 
 #if defined(_WIN32)
     // Windows has no hook that may join, and the C ABI no forcing shutdown: the module exit
@@ -395,7 +406,11 @@ TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
 #endif
 
     // POSIX: no destroy, the instance (and its session) is leaked, as a careless host would.
+    std::fprintf(stderr, "[diag] test: %s\n", "unloading");
+    std::fflush(stderr);
     module.unload();
+    std::fprintf(stderr, "[diag] test: %s\n", "unloaded");
+    std::fflush(stderr);
     expect_unmapped();
     grace_period();
 }

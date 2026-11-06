@@ -177,20 +177,30 @@ void ExecutorLoaded::require_initialised() const {
     throw StatusError(ANIRA_ERROR_INVALID_STATE, message);
 }
 
+static void diag_warm_up(const char* what, const Model& m) {
+    std::fprintf(stderr, "[diag] creation warm-up %s: engine %d %s\n", what,
+                 static_cast<int>(m.m_engine), m.m_path.c_str());
+    std::fflush(stderr);
+}
+
 void ExecutorLoaded::adopt(std::unique_ptr<Executor> probe) {
     m_shared.clear();
     m_spare.reset();
     if (model().m_instances == 0) {
         // No shared slot: the probe waits for the first exclusive session.
         m_spare = std::move(probe);
+        diag_warm_up("begin", model());
         m_spare->warm_up(k_creation_warm_up);
+        diag_warm_up("end", model());
         return;
     }
     m_shared.reserve(model().m_instances);
     m_shared.push_back(std::move(probe));
     for (uint32_t i = 1; i < model().m_instances; ++i) { m_shared.push_back(make_executor()); }
     for (const std::unique_ptr<Executor>& executor : m_shared) {
+        diag_warm_up("begin", model());
         executor->warm_up(k_creation_warm_up);
+        diag_warm_up("end", model());
     }
 }
 
