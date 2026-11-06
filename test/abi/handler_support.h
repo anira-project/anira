@@ -685,6 +685,22 @@ inline std::shared_ptr<anira::SessionElement> session_of(const anira_handler* ha
     return found;
 }
 
+/// The core freed, so the test starts with no model's figure (Core's figure index, which lives
+/// as long as the core): what a test that asserts a fresh measurement (a pass's outcome and
+/// counts, an engine's calls during its prepare) calls first. The mobile legs run every test
+/// binary as one process, so an earlier test's figure of the same model would otherwise be reused.
+/// Fails when the core cannot be freed: an earlier test left a context, a handler or a thread
+/// alive.
+inline ::testing::AssertionResult fresh_core() {
+    static_cast<void>(anira_shutdown());  // refused, and harmless, while the core has a user
+    if (anira_has_core() != 0U && anira_release_core_if_idle() == 0U) {
+        return ::testing::AssertionFailure()
+               << "the core is in use: an earlier test left a context, a handler or a thread alive";
+    }
+    if (anira_has_core() != 0U) { return ::testing::AssertionFailure() << "the core survived"; }
+    return ::testing::AssertionSuccess();
+}
+
 /// Lowers the drain summary's interval for the test's lifetime.
 struct SummaryInterval {
     explicit SummaryInterval(uint32_t ms) { anira::detail::set_rt_summary_interval_ms(ms); }

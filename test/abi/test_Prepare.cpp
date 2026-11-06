@@ -1634,6 +1634,7 @@ std::vector<float> waited_stream(anira_handler* handler, size_t blocks) {
 // earlier than the fifth (the first is in no window of four that agrees), and the plan's budget,
 // the window's maximum, is not the first time. The engine runs nothing else at prepare.
 TEST(AbiWarmup, UntilStableLeavesTheColdStartOut) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int call) { return call == 0 ? 10.0 : 1.0; }, Wait::Busy);
     Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
@@ -1650,6 +1651,7 @@ TEST(AbiWarmup, UntilStableLeavesTheColdStartOut) {
 // Times that never agree within 20 % (1 and 5 ms alternating) stop the pass at its cap of 32,
 // and the budget is the last four's maximum, a 5 ms one.
 TEST(AbiWarmup, AnUnsettledPassStopsAtItsCap) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_WARNING);
     RecordCollector collector;
     const ScriptedEngine engine([](int call) { return call % 2 == 0 ? 1.0 : 5.0; }, Wait::Busy);
@@ -1671,6 +1673,7 @@ TEST(AbiWarmup, AnUnsettledPassStopsAtItsCap) {
 // FIXED n runs n inferences of every plan, whatever their times, under either budget: the
 // custom plan of the gain model among the built-in ones runs its own n, and nothing at load.
 TEST(AbiWarmup, FixedRunsItsCountPerPlan) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 0.0; }, Wait::Busy);
     const std::vector<anira_backend_id> candidates = custom_candidates();
@@ -1698,6 +1701,7 @@ TEST(AbiWarmup, FixedRunsItsCountPerPlan) {
 // A MEASURED budget is the slowest plan's: the session is sized for the maximum of the plans'
 // figures, and each plan's row carries its own.
 TEST(AbiWarmup, TheSessionRunsTheSlowestPlansFigure) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 0.0; }, Wait::Busy);
     const std::vector<anira_backend_id> candidates = custom_candidates();
@@ -1720,6 +1724,7 @@ TEST(AbiWarmup, TheSessionRunsTheSlowestPlansFigure) {
 // burst), its budget what the pass measured; a Hard prepare never answers ANIRA_ERROR_BUDGET.
 // The stream runs, its misses filled under on_miss.
 TEST(AbiWarmup, AModelTooSlowForTheStreamStillPrepares) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_WARNING);
     RecordCollector collector;
     const ScriptedEngine engine([](int /*call*/) { return 30.0; }, Wait::Sleep);
@@ -1753,6 +1758,7 @@ TEST(AbiWarmup, AModelTooSlowForTheStreamStillPrepares) {
 // Under an explicit budget the pass's timings are only reported: the session is sized for the
 // declared figure, which the plan's row keeps, however slow the pass was.
 TEST(AbiWarmup, AnExplicitBudgetIsNotReplacedByTheMeasurement) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_WARNING);
     RecordCollector collector;
     const ScriptedEngine engine([](int /*call*/) { return 30.0; }, Wait::Sleep);
@@ -1782,6 +1788,7 @@ TEST(AbiWarmup, AnExplicitBudgetIsNotReplacedByTheMeasurement) {
 // An inference of 0.85 hop periods on one instance is above the comfortable load by
 // construction: marginal, or not real-time when the machine adds to it, never comfortable.
 TEST(AbiWarmup, AMarginalLoadIsNeverComfortable) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     constexpr double k_hop_period_ms = 1000.0 * k_block / k_rate;
     const ScriptedEngine engine([](int /*call*/) { return 0.85 * k_hop_period_ms; }, Wait::Sleep);
@@ -1797,6 +1804,7 @@ TEST(AbiWarmup, AMarginalLoadIsNeverComfortable) {
 // zero, its real-time factor the declared budget's (5 ms over a hop period of 512 / 48 kHz on
 // the model's two instances), and the prepare logs it at Info.
 TEST(AbiWarmup, AnExplicitBudgetWithoutAWarmUpIsUnmeasured) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_INFO);
     RecordCollector collector;
     Handler handler(context, anira_test::mono_stream_model());
@@ -1824,6 +1832,7 @@ TEST(AbiWarmup, AnExplicitBudgetWithoutAWarmUpIsUnmeasured) {
 // refuses a prepare that warms up (INVALID_STATE naming the running thread it needs) and takes
 // one that does not (an explicit budget without a warm-up).
 TEST(AbiWarmup, AWarmUpWithoutARunningThreadIsInvalidState) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context(0);
     Handler handler(context, anira_test::mono_stream_model());
     anira_error err = ANIRA_ERROR_INIT;
@@ -1836,6 +1845,7 @@ TEST(AbiWarmup, AWarmUpWithoutARunningThreadIsInvalidState) {
 // A failing inference of the pass fails the prepare with ENGINE naming the plan, and the handler
 // is unprepared.
 TEST(AbiWarmup, AFailedWarmUpInferenceFailsThePrepare) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     GateEngine engine;
     engine.m_fail.store(true);
@@ -1853,6 +1863,7 @@ TEST(AbiWarmup, AFailedWarmUpInferenceFailsThePrepare) {
 // at a hop of 512 at 48 kHz needs more structs than one clock step) unprepares it and prepares it
 // again with the final record.
 TEST(AbiWarmup, AnEntryCountThatMovesPreparesTheUserCodeAgain) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context(4);
     {
         const ScriptedEngine fast([](int /*call*/) { return 0.0; }, Wait::Busy);
@@ -1888,6 +1899,7 @@ TEST(AbiWarmup, AnEntryCountThatMovesPreparesTheUserCodeAgain) {
 // sample, that of a twin prepared without a warm-up, on the custom pass-through and on the
 // built-in gain of the first engine of this build.
 TEST(AbiWarmup, ThePassLeavesNoTraceInTheStream) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ContractHandle warmed = explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS, 0.0, 5.0, 3);
     const ContractHandle unwarmed =
@@ -1948,6 +1960,7 @@ anira_processor_desc hooked_processor(const char* id) {
 // first measured, runs no pass (the engine's count does not grow during its prepare) and reports
 // the same budget and latency, its outcome REUSED with the first's counts.
 TEST(AbiFigure, TwoHandlersOfOneModelShareItsFigure) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
     Handler first(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
@@ -1972,6 +1985,7 @@ TEST(AbiFigure, TwoHandlersOfOneModelShareItsFigure) {
 // A re-prepare of one handler at another host block of the same window reuses the model's
 // figure: no pass, REUSED, the same inference time.
 TEST(AbiFigure, ARePrepareReusesTheFigure) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
     Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
@@ -1989,6 +2003,7 @@ TEST(AbiFigure, ARePrepareReusesTheFigure) {
 // one inference time and a real-time factor twice as large, and an inference of 6 ms on one
 // instance at a hop of 512 is not real-time at 96 kHz (5.3 ms per hop) by construction.
 TEST(AbiFigure, AnotherSampleRateKeepsTheTimeAndDoublesTheFactor) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 6.0; }, Wait::Sleep);
     Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
@@ -2008,6 +2023,7 @@ TEST(AbiFigure, AnotherSampleRateKeepsTheTimeAndDoublesTheFactor) {
 // UNTIL_STABLE, which replaces it; the UNTIL_STABLE figure then answers both UNTIL_STABLE and
 // FIXED n.
 TEST(AbiFigure, AWeakerFigureIsMeasuredAgain) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
     Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
@@ -2028,6 +2044,7 @@ TEST(AbiFigure, AWeakerFigureIsMeasuredAgain) {
 // Two prepares of one model on two threads at once: one measures, the other waits for its
 // figure and reuses it; the engine ran one pass.
 TEST(AbiFigure, TwoPreparesAtOnceMeasureTheModelOnce) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context(4);
     const ScriptedEngine engine([](int /*call*/) { return 2.0; }, Wait::Sleep);
     Handler first(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
@@ -2055,6 +2072,7 @@ TEST(AbiFigure, TwoPreparesAtOnceMeasureTheModelOnce) {
 // with a before_inference and one id share the figure; without an id each registration measures
 // its own; a processor without inference hooks never enters the key.
 TEST(AbiFigure, TheProcessorsInferenceHooksAreInTheKey) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
     const auto prepared_calls = [&](const anira_processor_desc& processor) {
@@ -2085,6 +2103,7 @@ TEST(AbiFigure, TheProcessorsInferenceHooksAreInTheKey) {
 // the core is shut down and freed (anira_release_core_if_idle), the next prepare of the model
 // measures again.
 TEST(AbiFigure, TheFiguresGoWithTheCore) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
     int calls = 0;
     {
@@ -2109,6 +2128,7 @@ TEST(AbiFigure, TheFiguresGoWithTheCore) {
 // Every pass feeds the index, under either budget kind (D16): an explicit budget with
 // UNTIL_STABLE measures the model, and a measured budget then reuses it, its budget the figure.
 TEST(AbiFigure, AnExplicitPassFeedsALaterMeasuredBudget) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
     Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
@@ -2129,6 +2149,7 @@ TEST(AbiFigure, AnExplicitPassFeedsALaterMeasuredBudget) {
 // The reverse (D16): a measured budget's figure is reused by an explicit budget, which keeps
 // its declared budget and latency and reports the figure's factor and verdict.
 TEST(AbiFigure, AnExplicitBudgetReusesTheFigureAndKeepsItsSizing) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
     Handler explicit_twin(context,
@@ -2159,6 +2180,7 @@ TEST(AbiFigure, AnExplicitBudgetReusesTheFigureAndKeepsItsSizing) {
 // NONE is the opt-out (D17): an explicit budget without a warm-up neither measures nor reads
 // the model's figure; its row is UNMEASURED, its factor the declared budget's.
 TEST(AbiFigure, AnExplicitBudgetWithoutAWarmUpIgnoresTheFigure) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
     Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());

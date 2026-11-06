@@ -33,6 +33,10 @@ namespace anira::capi {
 /// read any of it.
 std::string model_config_json(const anira_model_config& model);
 
+/// Re-arms the once-per-process Warning of an upgraded version 2 document, so that the next
+/// upgrade warns again: a test's hook (a test binary that runs as one process upgrades many).
+void rearm_upgrade_warning() noexcept;
+
 /// One axis of a tensor spec; written says whether set_axis touched the slot.
 struct Axis {
     anira_axis_tag m_tag = ANIRA_AXIS_ANY;

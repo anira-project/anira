@@ -2679,6 +2679,7 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
 // reaches neither the state nor the stream: after prepare the state is zeros, the first hop is
 // the identity, and after n hops the counter reads n, not n + 1.
 TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
+    ASSERT_TRUE(anira_test::fresh_core());
     for (const anira_engine engine : file_engines()) {
         SCOPED_TRACE(engine_word(engine));
         EngineRig rig(engine);
@@ -2714,6 +2715,7 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
 // stream's first inference reads zeros, the closed form holds from it, and after n hops the
 // counter reads n.
 TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOfARegisteredEngine) {
+    ASSERT_TRUE(anira_test::fresh_core());
     AccumulatorEngine engine;
     const std::array<Registration, 1> registrations{
         {{.m_id = k_accumulator_id, .m_engine = &engine}}};
@@ -2746,6 +2748,7 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOfARegisteredEngine) {
 // LibTorch's input) or copies them (LibTorch's output, ExecuTorch, TFLite, LiteRT), from the
 // warm-up pass's inferences at prepare (the file's FIXED 1) on; the closed form holds.
 TEST(AbiState, TheStateAlternatesBetweenTwoBuffersOnEveryEngine) {
+    ASSERT_TRUE(anira_test::fresh_core());
     for (const anira_engine engine : file_engines()) {
         SCOPED_TRACE(engine_word(engine));
         PointerLog log;

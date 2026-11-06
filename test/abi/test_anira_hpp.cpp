@@ -3360,6 +3360,7 @@ TEST(AbiCxx, TheHandlerIsMoveOnlyAndPreparesFromEveryContractForm) {
 // budget the warm-up pass measures (positive on every plan), UNTIL_STABLE's four inferences or
 // more, the session sized for the slowest plan.
 TEST(AbiCxx, AHardWithItsHostBlocksAlonePreparesWithTheDefaults) {
+    ASSERT_TRUE(anira_test::fresh_core());
     anira::Context context(hpp_context_config());
     anira::InferenceHandler handler(context, stereo_pipeline());
     const anira::PlanReport report =

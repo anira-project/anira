@@ -1161,6 +1161,7 @@ TEST(AbiProcessor, ResetRunsBeforeTheFirstPreProcessOfANewStream) {
 // ============================================================================================
 
 TEST(AbiProcessor, CtxPerPhase) {
+    ASSERT_TRUE(anira_test::fresh_core());
     const Context context;
     Probe probe;
     probe.m_defaults = 1;  // the processor owns pre_process and post_process and calls the defaults
