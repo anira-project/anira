@@ -5351,12 +5351,12 @@ export class AniraBindings {
    * object, which anira_pipeline_add_engine adds to any number of pipelines. The object
    * is the engine's identity and the id its name, both fixed for the object's life:
    * handlers running the same object on an equal model configuration share one loaded
-   * model (one load), whichever pipelines they come from; two objects never share, even
-   * under one id over the same callbacks and user_data. The handle holds one reference
-   * and may be destroyed right after the last anira_pipeline_add_engine; release fires
-   * exactly once, when the last reference dies (the handle, the pipelines, their
-   * handlers, the loaded models), after every unload. A refused call creates nothing and
-   * never calls release.
+   * model (one load), whichever pipelines they come from; two objects never share one,
+   * even under one id over the same callbacks and user_data, though they share the
+   * model's figure under it (engine_id). The handle holds one reference and may be
+   * destroyed right after the last anira_pipeline_add_engine; release fires exactly once,
+   * when the last reference dies (the handle, the pipelines, their handlers, the loaded
+   * models), after every unload. A refused call creates nothing and never calls release.
    *
    * @param engine_id The engine's id, copied: the reverse-URI name model entries name the
    *   engine by (anira_model_config_add_model_path with ANIRA_ENGINE_CUSTOM), which
@@ -5366,7 +5366,10 @@ export class AniraBindings {
    *   legal like any other id (a 2.x model file's "CUSTOM" row names it). The id belongs to
    *   the engine, in every pipeline it is added to, and is unique per pipeline
    *   (anira_pipeline_add_engine), not per process: two engine objects may carry one id in
-   *   two pipelines.
+   *   two pipelines. They share the model's figure, which a prepare's warm-up pass measures
+   *   (identical plugins report the same latency), so an id names one implementation;
+   *   "anira.v2.custom", which names every 2.x custom backend, is the exception, its
+   *   figures kept per engine object.
    * @param desc The engine; min(struct_size, sizeof(anira_engine_desc)) bytes are copied,
    *   with the consumed kinds, so the record and its strings may die when the call returns.
    *   The slots a shorter struct_size does not cover read as in ANIRA_ENGINE_DESC_INIT.

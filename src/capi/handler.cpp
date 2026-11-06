@@ -1827,8 +1827,14 @@ anira::FigureKey figure_key(const anira_handler& handler,
         handler.m_pipeline.m_variants[0].m_models[handler.m_plans[plan].m_row];
     if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
             registered_engine(handler.m_pipeline, row)) {
-        key.m_carrier = engine;
-        key.m_registered = true;
+        // The engine's id: every registration of one id shares the figure (identical plugins
+        // report the same latency), as a processor's id does for its hooks. The 2.x catch-all
+        // id names every 2.x custom backend, so those are told apart by their registration.
+        key.m_engine_id = engine->id();
+        if (engine->id() == anira::capi::k_v2_custom_engine) {
+            key.m_carrier = engine;
+            key.m_by_registration = true;
+        }
     }
     const std::shared_ptr<anira::capi::ProcessorCarrier>& processor =
         handler.m_pipeline.m_processor;

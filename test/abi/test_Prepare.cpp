@@ -1520,12 +1520,13 @@ namespace {
 /// asserts an upper bound), a sleep from below alone.
 enum class Wait : uint8_t { Busy, Sleep };
 
-/// A registered engine under anira.v2.custom whose call k takes `figure_ms(k)` and then passes
-/// through; it counts its calls, its prepares and unprepares, and keeps the entry count of its
-/// last prepare's record. Declared before the Handler that adds it.
+/// A registered engine under `id` (default anira.v2.custom, whose figure is keyed per
+/// registration) whose call k takes `figure_ms(k)` and then passes through; it counts its calls,
+/// its prepares and unprepares, and keeps the entry count of its last prepare's record. Declared
+/// before the Handler that adds it.
 class ScriptedEngine {
 public:
-    ScriptedEngine(std::function<double(int)> figure_ms, Wait wait)
+    ScriptedEngine(std::function<double(int)> figure_ms, Wait wait, const char* id = k_custom)
         : m_figure_ms(std::move(figure_ms)), m_wait(wait) {
         anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
         desc.user_data = this;
@@ -1533,8 +1534,7 @@ public:
         desc.prepare = &prepare_slot;
         desc.unprepare = &unprepare_slot;
         anira_error err = ANIRA_ERROR_INIT;
-        EXPECT_EQ(anira_custom_engine_create(k_custom, &desc, &m_engine, &err), ANIRA_OK)
-            << err.message;
+        EXPECT_EQ(anira_custom_engine_create(id, &desc, &m_engine, &err), ANIRA_OK) << err.message;
     }
     ~ScriptedEngine() { anira_custom_engine_destroy(m_engine); }
     ScriptedEngine(const ScriptedEngine&) = delete;
@@ -2106,6 +2106,72 @@ TEST(AbiFigure, TheProcessorsInferenceHooksAreInTheKey) {
     const int plain = prepared_calls(unhooked);
     EXPECT_GT(plain, without_id) << "no hooks: the model's key alone, measured once";
     EXPECT_EQ(prepared_calls(unhooked), plain) << "another processor without hooks reuses it";
+}
+
+namespace {
+
+// mono_stream_model() with its entry on the registered engine `id` instead of anira.v2.custom.
+anira::ModelConfig mono_model_on(const char* id) {
+    anira::ModelConfig model;
+    model.add_model_path(id, "custom-processor");
+    model.max_instances(1);
+    model.input(anira_test::stream_tensor("in", 1, k_block, k_block));
+    model.output(anira_test::stream_tensor("out", 1, k_block, k_block));
+    return model;
+}
+
+}  // namespace
+
+// A registered engine's figure is keyed by its engine id, as a processor's hooks are by the
+// processor's id: two engine objects of one id in two handlers (two instances of a plugin, each
+// registering its own engine) share the model's figure, the second runs no pass (its engine is
+// never called during its prepare) and reports the first's budget and latency; an engine of
+// another id over the same model measures its own.
+TEST(AbiFigure, TwoRegistrationsOfOneEngineIdShareTheFigure) {
+    ASSERT_TRUE(anira_test::fresh_core());
+    const Context context;
+    constexpr const char* k_shared = "org.anira.test.figure-shared";
+    constexpr const char* k_other = "org.anira.test.figure-other";
+    const ScriptedEngine first_engine([](int /*call*/) { return 1.0; }, Wait::Busy, k_shared);
+    const ScriptedEngine second_engine([](int /*call*/) { return 1.0; }, Wait::Busy, k_shared);
+    const ScriptedEngine other_engine([](int /*call*/) { return 1.0; }, Wait::Busy, k_other);
+    Handler first(context, mono_model_on(k_shared), {}, {}, first_engine.engine());
+    ASSERT_EQ(first.prepare(measured_contract()), ANIRA_OK) << first.m_err.message;
+    ASSERT_GE(first_engine.m_calls.load(), 4);
+    Handler second(context, mono_model_on(k_shared), {}, {}, second_engine.engine());
+    ASSERT_EQ(second.prepare(measured_contract()), ANIRA_OK) << second.m_err.message;
+    EXPECT_EQ(second_engine.m_calls.load(), 0) << "one id: one figure, no pass";
+    EXPECT_EQ(plan_row(second).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    EXPECT_DOUBLE_EQ(plan_row(second).budget_ms, plan_row(first).budget_ms);
+    EXPECT_EQ(anira_handler_get_latency(second.m_handler, 0),
+              anira_handler_get_latency(first.m_handler, 0));
+    Handler other(context, mono_model_on(k_other), {}, {}, other_engine.engine());
+    ASSERT_EQ(other.prepare(measured_contract()), ANIRA_OK) << other.m_err.message;
+    EXPECT_GE(other_engine.m_calls.load(), 4) << "another id: its own figure";
+    EXPECT_NE(plan_row(other).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+}
+
+// Under the 2.x catch-all id anira.v2.custom, which compat/v2.hpp gives every 2.x custom backend,
+// the id names no implementation: two engine objects of it are two registrations, each measured.
+TEST(AbiFigure, TheVersionTwoCatchAllIdIsKeyedByRegistration) {
+    ASSERT_TRUE(anira_test::fresh_core());
+    const Context context;
+    const ScriptedEngine first_engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    const ScriptedEngine second_engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    Handler first(context,
+                  anira_test::mono_stream_model(k_block, 1),
+                  {},
+                  {},
+                  first_engine.engine());
+    ASSERT_EQ(first.prepare(measured_contract()), ANIRA_OK) << first.m_err.message;
+    Handler second(context,
+                   anira_test::mono_stream_model(k_block, 1),
+                   {},
+                   {},
+                   second_engine.engine());
+    ASSERT_EQ(second.prepare(measured_contract()), ANIRA_OK) << second.m_err.message;
+    EXPECT_GE(second_engine.m_calls.load(), 4) << "two 2.x backends: two figures";
+    EXPECT_NE(plan_row(second).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
 }
 
 // The figures live as long as the core's state: once the last context and handler are gone and

@@ -3262,7 +3262,9 @@ public:
     /// ANIRA_ERROR_INVALID_ARGUMENT there (anira.v2.custom excepted: the id of a 2.x custom
     /// backend, anira/compat/v2.hpp). The engines of one Pipeline have distinct ids; two
     /// objects may carry one id on two Pipelines (two instances of a plugin, each with its own
-    /// engine) and never share a loaded model.
+    /// engine) and never share a loaded model. They share the model's figure, which a prepare's
+    /// warm-up pass measures, so that identical plugins report the same latency: an id names one
+    /// implementation (anira.v2.custom excepted, whose figures stay per object).
     explicit Engine(std::string id) : m_id(std::move(id)) {}
     virtual ~Engine() = default;
     Engine(const Engine&) = delete;
