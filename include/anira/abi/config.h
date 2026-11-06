@@ -467,16 +467,16 @@ ANIRA_API void ANIRA_CALL anira_tensor_spec_destroy(anira_tensor_spec* spec) ANI
 /**
  * @brief Creates a Hard (real-time) contract with the host blocks; the fixed-block host earns
  * the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on miss,
- * wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the host blocks left unset,
- * completed by hard_set_host_blocks or refused at prepare: 0, 0, 0 is legal here) or
- * both finite and > 0 with host_block_min <= host_block_max; host_block_min <
- * host_block_max allows every smaller block. A block need not be whole: a fractional
- * block (for a model with no stream at the host rate, e.g. a control-rate decoder at
- * samplesPerBlock / 2048.0) is taken as the rational the latency calculation recovers
- * from it (1e-6 relative, denominator at most 2^20), and the host moves an element of a
- * stream only once a whole one has accumulated: after its k-th call it has pushed and
- * popped floor(k * b) elements of a stream whose block is b, so one call carries
- * floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
+ * wait_ratio 0, no edge-cost limit (ANIRA_EDGE_UNKNOWN). The blocks are both 0 (the host
+ * blocks left unset, completed by hard_set_host_blocks or refused at prepare: 0, 0, 0 is
+ * legal here) or both finite and > 0 with host_block_min <= host_block_max;
+ * host_block_min < host_block_max allows every smaller block. A block need not be whole:
+ * a fractional block (for a model with no stream at the host rate, e.g. a control-rate
+ * decoder at samplesPerBlock / 2048.0) is taken as the rational the latency calculation
+ * recovers from it (1e-6 relative, denominator at most 2^20), and the host moves an
+ * element of a stream only once a whole one has accumulated: after its k-th call it has
+ * pushed and popped floor(k * b) elements of a stream whose block is b, so one call
+ * carries floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
  * @param host_block_min Smallest block the host callback delivers, in Time-axis elements of the
  *        anchor tensor; may be fractional (0.25: one element every fourth
  *        callback).
@@ -500,7 +500,8 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(double host_block_m
 
 /**
  * @brief Creates an Async contract: no deadline (the offline posture), FINISH on late, AUTO
- * priority, auto lanes and depth, POLLED delivery, PERMISSIVE edge cost.
+ * priority, auto lanes and depth, POLLED delivery, no edge-cost limit
+ * (ANIRA_EDGE_UNKNOWN).
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out.
