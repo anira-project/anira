@@ -3,6 +3,7 @@
 
 #include <anira/anira.hpp>
 #include <array>
+#include <atomic>
 #include <clap/helpers/plugin-proxy.hh>
 #include <clap/helpers/plugin.hh>
 #include <cstdint>
@@ -27,8 +28,8 @@ struct AniraClapPluginExample
                   uint32_t minFrameCount,
                   uint32_t maxFrameCount) noexcept override;
 
-    enum ParamIds : uint32_t { pmDryWet = 14256, pmBackend = 14257 };
-    static constexpr int m_number_params = 2;
+    enum ParamIds : uint32_t { pmDryWet = 14256, pmBackend = 14257, pmTryNonetheless = 14258 };
+    static constexpr int m_number_params = 3;
 
     bool implementsParams() const noexcept override { return true; }
     bool isValidParamId(clap_id paramId) const noexcept override;
@@ -60,13 +61,23 @@ public:
     bool implementsLatency() const noexcept override;
     uint32_t latencyGet() const noexcept override;
 
+    // clap.render: the host says whether it renders offline (a bounce), which runs the Backend
+    // choice whatever its verdict, since it does not run against the clock.
+    bool implementsRender() const noexcept override { return true; }
+    bool renderHasHardRealtimeRequirement() noexcept override { return false; }
+    bool renderSetMode(clap_plugin_render_mode mode) noexcept override;
+
 private:
     /// Selects the plan of the report that runs the Backend choice (m_param_backend); an
-    /// engine this build or the model lacks has none, and the choice changes nothing. Called by
-    /// activate (the new report) and by every change of the parameter.
+    /// engine this build or the model lacks has none, and the choice changes nothing. A choice
+    /// whose plan is not real-time on this machine runs the Bypassed plan instead while "Try
+    /// nonetheless" is off and the host renders in real time. Called by activate (the new
+    /// report), by every change of the two parameters and by a change of the render mode.
     void apply_backend() noexcept;
 
-    double m_param_dry_wet{100.0}, m_param_backend{3};
+    // "Try nonetheless" (on: accept a backend that is not real-time here) stays as the user set
+    // it across activations, so the plugin asks again only while it is off.
+    double m_param_dry_wet{100.0}, m_param_backend{3}, m_param_try_nonetheless{0};
     std::unordered_map<clap_id, double*> m_param_to_value;
     uint32_t m_plugin_latency;
 
@@ -78,6 +89,13 @@ private:
     anira::ContractHandle m_contract;
     anira::InferenceHandler m_inference_handler;
     anira::PlanReport m_plan_report{nullptr};
+    // Per Backend choice, the real-time verdict (anira_rt_verdict) of its plan in the last
+    // activate's report, UNMEASURED for a choice without a plan.
+    std::array<uint32_t, 6> m_verdicts{};
+    // The host's render mode: set on the main thread (renderSetMode), and the copy apply_backend
+    // reads, taken by activate and by process when it changed.
+    std::atomic<bool> m_offline{false};
+    bool m_applied_offline{false};
 
     // The host's input as one planar tensor over its channel pointer.
     std::array<float*, 1> m_channels{};

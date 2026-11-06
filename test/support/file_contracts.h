@@ -15,6 +15,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <ratio>
 #include <string_view>
 
 #include "../../extras/models/model_files.h"

@@ -11,6 +11,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -170,6 +171,13 @@ public:
 
     juce::AudioProcessorValueTreeState& getValueTreeState() { return parameters; }
 
+    /// For the editor, on the message thread: the line about the chosen backend's real-time
+    /// verdict (empty when it plays without a note), whether it waits for "Try nonetheless", and
+    /// the click that accepts it.
+    juce::String verdict_line() const;
+    bool waits_for_consent() const;
+    void try_nonetheless();
+
 private:
     void parameterChanged(const juce::String& parameterID, float newValue) override;
 
@@ -213,6 +221,24 @@ private:
     // The "Backend Type" choice: stored by the parameter listener, applied by processBlock.
     std::vector<anira::PlanQuery> backend_queries;
     std::atomic<int> backend{0};
+    // The "BYPASS" choice: the plan that runs while a backend waits for "Try nonetheless".
+    size_t bypass_choice = 0;
+
+    // Per backend choice, what prepareToPlay read off the plan report: the real-time verdict of
+    // the plan it runs (anira_rt_verdict; the worse of the encoder's and the decoder's in
+    // variant 7), its real-time factor and its parallel inferences; and the worst verdict the
+    // user accepted for it ("Try nonetheless"), kept across prepares, so that a re-prepare asks
+    // again only when the verdict got worse.
+    struct BackendVerdict {
+        std::atomic<uint32_t> verdict{ANIRA_RT_UNMEASURED};
+        std::atomic<float> rt_factor{0.0F};
+        std::atomic<uint32_t> rt_parallel{1};
+        std::atomic<uint32_t> accepted{ANIRA_RT_UNMEASURED};
+    };
+    static constexpr size_t k_max_backends = 8;
+    std::array<BackendVerdict, k_max_backends> verdicts{};
+    /// Whether a backend choice is held: not real-time here and not accepted.
+    bool held_back(size_t choice) const noexcept;
 
     // The host's audio as one planar tensor over its channel pointers.
     std::array<float*, 2> channels{};

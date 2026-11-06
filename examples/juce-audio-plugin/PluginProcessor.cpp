@@ -2,7 +2,10 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
+
+#include "PluginEditor.h"
 
 namespace {
 
@@ -14,6 +17,26 @@ anira::PlanQuery backend_query(const juce::String& choice) {
     if (choice == "LITERT") { return {.backend = {.engine = ANIRA_ENGINE_LITERT}}; }
     if (choice == "EXECUTORCH") { return {.backend = {.engine = ANIRA_ENGINE_EXECUTORCH}}; }
     return {.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = k_bypass_engine_id}};
+}
+
+const char* outcome_word(uint32_t outcome) {
+    switch (outcome) {
+        case ANIRA_WARMUP_OUTCOME_FIXED: return "fixed";
+        case ANIRA_WARMUP_OUTCOME_STABLE: return "stable";
+        case ANIRA_WARMUP_OUTCOME_CAPPED: return "capped";
+        case ANIRA_WARMUP_OUTCOME_REUSED:
+            return "the model's figure, measured at an earlier prepare";
+        default: return "no warm-up";
+    }
+}
+
+const char* verdict_word(uint32_t verdict) {
+    switch (verdict) {
+        case ANIRA_RT_COMFORTABLE: return "comfortable";
+        case ANIRA_RT_MARGINAL: return "marginal";
+        case ANIRA_RT_NOT_REALTIME: return "NOT real-time";
+        default: return "unmeasured";
+    }
 }
 
 }  // namespace
@@ -37,6 +60,8 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
     for (const juce::String& choice : PluginParameters::backendTypes) {
         backend_queries.push_back(backend_query(choice));
     }
+    jassert(backend_queries.size() <= k_max_backends);
+    bypass_choice = static_cast<size_t>(PluginParameters::backendTypes.indexOf("BYPASS"));
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
     gain_tensor = anira::Tensor::from_host(&gain_value, ANIRA_DTYPE_F32, std::array<int64_t, 1>{1});
 #endif
@@ -154,6 +179,55 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
     jassert(new_latency <= k_max_dry_latency);  // the dry path's delay covers it
     dry_wet_mixer.setWetLatency((float)new_latency);
 
+    // What prepare measured: per backend choice, the row of the plan it runs (a choice whose
+    // engine this build or the model lacks has none), to the log, and the plan's real-time
+    // verdict for processBlock and the editor. The figures are an estimate at prepare, measured
+    // on this machine under its load of the moment.
+#if MODEL_TO_USE != 7
+    const std::array<const AniraModel*, 1> models{&model};
+#else
+    const std::array<const AniraModel*, 2> models{&encoder, &decoder};
+#endif
+    for (size_t choice = 0; choice < backend_queries.size(); ++choice) {
+        uint32_t verdict = ANIRA_RT_UNMEASURED;
+        float rt_factor = 0.0F;
+        uint32_t rt_parallel = 1;
+        for (const AniraModel* m : models) {
+            const std::optional<uint32_t> plan = m->plan_report.find(backend_queries[choice]);
+            if (!plan.has_value()) { continue; }
+            const anira_plan_info row = m->plan_report.plans()[*plan];
+            juce::Logger::writeToLog(juce::String::formatted(
+                "anira: %s: budget %.3f ms (measured %.3f ms, median %.3f ms, %u warm-up "
+                "inferences, %s); real-time factor %.2f of %u (load %.2f): %s",
+                PluginParameters::backendTypes[static_cast<int>(choice)].toRawUTF8(),
+                row.budget_ms,
+                row.measured_ms,
+                row.median_ms,
+                row.warmup_iterations,
+                outcome_word(row.warmup_outcome),
+                row.rt_factor,
+                row.rt_parallel,
+                row.rt_factor / static_cast<double>(row.rt_parallel),
+                verdict_word(row.rt_verdict)));
+            // The worse of the handlers' verdicts (variant 7 runs two): the order of the enum
+            // is the order of severity, UNMEASURED first.
+            if (row.rt_verdict >= verdict) {
+                verdict = row.rt_verdict;
+                rt_factor = static_cast<float>(row.rt_factor);
+                rt_parallel = row.rt_parallel;
+            }
+        }
+        verdicts[choice].verdict.store(verdict);
+        verdicts[choice].rt_factor.store(rt_factor);
+        verdicts[choice].rt_parallel.store(rt_parallel);
+        if (verdict == ANIRA_RT_NOT_REALTIME &&
+            verdicts[choice].accepted.load() != ANIRA_RT_NOT_REALTIME) {
+            juce::Logger::writeToLog(
+                "anira: " + PluginParameters::backendTypes[static_cast<int>(choice)] +
+                " is not real-time on this machine: it stays bypassed until 'Try nonetheless'");
+        }
+    }
+
     for (auto& parameterID : PluginParameters::getPluginParameterList()) {
         parameterChanged(parameterID, parameters.getParameterAsValue(parameterID).getValue());
     }
@@ -196,8 +270,13 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // The backend choice: the plan of the report that runs it (an engine this build or the
     // model lacks has none, and the choice changes nothing). The report is the last prepare's,
-    // and prepareToPlay never runs beside this callback.
-    const anira::PlanQuery& query = backend_queries[static_cast<size_t>(backend.load())];
+    // and prepareToPlay never runs beside this callback. A choice whose plan is not real-time on
+    // this machine runs the bypass plan (the audio passes through, time-aligned) until the user
+    // agrees ("Try nonetheless" in the editor); an offline render (a bounce) runs it whatever the
+    // verdict, since it does not run against the clock.
+    const auto choice = static_cast<size_t>(backend.load());
+    const bool held = !isNonRealtime() && held_back(choice);
+    const anira::PlanQuery& query = backend_queries[held ? bypass_choice : choice];
 #if MODEL_TO_USE != 7
     model.select(query);
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
@@ -243,7 +322,49 @@ bool AudioPluginAudioProcessor::hasEditor() const {
 }
 
 juce::AudioProcessorEditor* AudioPluginAudioProcessor::createEditor() {
-    return new juce::GenericAudioProcessorEditor(*this);
+    return new PluginEditor(*this);
+}
+
+bool AudioPluginAudioProcessor::held_back(size_t choice) const noexcept {
+    return verdicts[choice].verdict.load() == ANIRA_RT_NOT_REALTIME &&
+           verdicts[choice].accepted.load() != ANIRA_RT_NOT_REALTIME;
+}
+
+bool AudioPluginAudioProcessor::waits_for_consent() const {
+    return held_back(static_cast<size_t>(backend.load()));
+}
+
+void AudioPluginAudioProcessor::try_nonetheless() {
+    // The user accepts the chosen backend's verdict: kept until a later prepare finds a worse one.
+    const auto choice = static_cast<size_t>(backend.load());
+    verdicts[choice].accepted.store(verdicts[choice].verdict.load());
+}
+
+juce::String AudioPluginAudioProcessor::verdict_line() const {
+    const auto choice = static_cast<size_t>(backend.load());
+    const BackendVerdict& v = verdicts[choice];
+    const juce::String name = PluginParameters::backendTypes[static_cast<int>(choice)];
+    const float rt_factor = v.rt_factor.load();
+    const uint32_t rt_parallel = v.rt_parallel.load();
+    const juce::String parallel =
+        juce::String(rt_parallel) +
+        (rt_parallel == 1 ? " parallel inference" : " parallel inferences");
+    switch (v.verdict.load()) {
+        case ANIRA_RT_NOT_REALTIME:
+            if (v.accepted.load() == ANIRA_RT_NOT_REALTIME) {
+                return name + " runs at " + juce::String(rt_factor, 2) + "x real time on this " +
+                       "machine (" + parallel + "): playing it anyway, it drops out";
+            }
+            return name + " runs at " + juce::String(rt_factor, 2) + "x real time on this " +
+                   "machine (" + parallel + "): the plugin stays bypassed";
+        case ANIRA_RT_MARGINAL: {
+            const int headroom =
+                juce::roundToInt(100.0F * (1.0F - rt_factor / static_cast<float>(rt_parallel)));
+            return name + ": marginal on this machine (" + juce::String(headroom) +
+                   " % headroom): may drop out under load";
+        }
+        default: return {};
+    }
 }
 
 //==============================================================================
