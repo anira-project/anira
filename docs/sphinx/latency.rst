@@ -151,24 +151,24 @@ The figure is the delay, in samples of each output, between a sample entering an
 A measured latency
 ------------------
 
-Under a measured budget, the default, :math:`T` is the slowest plan's warm-up figure, so the latency depends on the machine and on its load at the prepare that measured it (a later prepare of the model reuses that figure, :ref:`usage-budget-warmup`): a DAW's delay compensation sees it differ per machine, as it already does per block size. An explicit budget gives a reproducible figure. Below the first :math:`T` at which a :math:`d_m` or :math:`S` steps, the latency and the entry count (the :math:`2S` structures, ``anira_handler_num_entries``) do not move with :math:`T`; a probe of the bundled models at 48 kHz put those edges at:
+Under a measured budget, the default, :math:`T` is the slowest plan's warm-up figure, so the latency depends on the machine and on its load at the prepare that measured it (a later prepare of the model reuses that figure, :ref:`usage-budget-warmup`): a DAW's delay compensation sees it differ per machine, as it already does per block size. An explicit budget gives a reproducible figure. Below the first :math:`T` at which a :math:`d_m` or :math:`S` steps, the latency and the entry count (the :math:`2S` structures, ``anira_handler_num_entries``) do not move with :math:`T`; a probe of the bundled models at 48 kHz, bisected, put those edges at:
 
 .. list-table::
    :header-rows: 1
    :widths: 50 25 25
 
    * - Configuration
-     - latency flat below :math:`T \approx`
-     - entries flat below :math:`T \approx`
+     - latency flat below :math:`T`
+     - entries flat below :math:`T`
    * - blocks 1..512, the CNN family, the RNN, RAVE
-     - 5.3 ms
-     - 26.8 ms
+     - 5.354 ms
+     - 25.625 ms
    * - blocks 1..512, the gain model, hybridnn
-     - 5.3 ms
-     - 7.2 ms
+     - 5.354 ms
+     - 7.125 ms
    * - the web, render quantum 128, burst 1024
-     - 11.1 ms
-     - 14.9 ms
+     - 10.688 ms
+     - 14.229 ms
 
 The browser's clock resolution (5 µs in Chromium, 20 µs in Firefox) never moves a latency by a step: the warm-up's clock-step floor covers models that run in microseconds.
 

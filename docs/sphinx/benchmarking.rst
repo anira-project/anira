@@ -133,7 +133,7 @@ Inside this repository a benchmark links the fixture target beside anira:
 
 A project of your own copies ``ProcessBlockFixture.h`` and ``.cpp`` and builds them with Google
 Benchmark (the fixture needs nothing of anira but ``anira/anira.hpp``). As a Google Test executable
-it links ``GTest::gtest_main`` from your project's Google Test, and the test below calls tanh-lib's
+it fetches Google Test and links ``GTest::gtest_main``, and the test below calls tanh-lib's
 thread API, so the project fetches tanh-lib's core and links ``tanh::Core`` itself: a tanh-lib of
 its own, which never meets anira's private copy (``thl::anira``, :ref:`host-tanh-lib`).
 
@@ -149,6 +149,12 @@ its own, which never meets anira's private copy (``thl::anira``, :ref:`host-tanh
         GIT_TAG v1.9.5)
     set(BENCHMARK_ENABLE_TESTING OFF)
     FetchContent_MakeAvailable(benchmark)
+
+    FetchContent_Declare(googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.17.0)
+    set(INSTALL_GTEST OFF)
+    FetchContent_MakeAvailable(googletest)   # GTest::gtest_main
 
     # tanh-lib's core component, for the thread priority of test.cpp
     FetchContent_Declare(tanh-lib
@@ -169,6 +175,7 @@ its own, which never meets anira's private copy (``thl::anira``, :ref:`host-tanh
     target_link_libraries(benchmark_target anira::anira benchmark::benchmark GTest::gtest_main tanh::Core)
 
     enable_testing()
+    include(GoogleTest)
     gtest_discover_tests(benchmark_target)
 
 Running it
