@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -221,17 +222,24 @@ bool AniraClapPluginExample::activate(double sampleRate,
         if (!plan.has_value()) { continue; }
         const anira_plan_info& row = rows[*plan];
         m_verdicts[choice] = row.rt_verdict;
-        std::cout << "anira: " << k_backend_names[choice] << ": budget " << row.budget_ms
-                  << " ms (measured " << row.measured_ms << " ms, median " << row.median_ms
-                  << " ms, " << row.warmup_iterations << " warm-up inferences, "
-                  << outcome_word(row.warmup_outcome) << "); real-time factor " << row.rt_factor
-                  << " of " << row.rt_parallel << ": " << verdict_word(row.rt_verdict) << std::endl;
+        // Three significant digits, as the other examples print them, into a stream of its own:
+        // a plugin leaves the host's std::cout formatting as it found it.
+        std::ostringstream line;
+        line << std::setprecision(3) << "anira: " << k_backend_names[choice] << ": budget "
+             << row.budget_ms << " ms (measured " << row.measured_ms << " ms, median "
+             << row.median_ms << " ms, " << row.warmup_iterations << " warm-up inferences, "
+             << outcome_word(row.warmup_outcome) << "); real-time factor " << row.rt_factor
+             << " of " << row.rt_parallel << ": " << verdict_word(row.rt_verdict);
+        std::cout << line.str() << std::endl;
         if (row.rt_verdict == ANIRA_RT_NOT_REALTIME && m_param_try_nonetheless < 0.5 &&
             !m_applied_offline) {
-            std::cout << "anira: Backend '" << k_backend_names[choice] << "' runs at "
-                      << row.rt_factor << "x real time on this machine (" << row.rt_parallel
-                      << (row.rt_parallel == 1 ? " parallel inference" : " parallel inferences")
-                      << "): it stays Bypassed until 'Try nonetheless' is on" << std::endl;
+            std::ostringstream held;
+            held << std::setprecision(3) << "anira: Backend '" << k_backend_names[choice]
+                 << "' runs at " << row.rt_factor << "x real time on this machine ("
+                 << row.rt_parallel
+                 << (row.rt_parallel == 1 ? " parallel inference" : " parallel inferences")
+                 << "): it stays Bypassed until 'Try nonetheless' is on";
+            std::cout << held.str() << std::endl;
         }
     }
     // The handler starts on the model's default plan; the Backend choice the host shows (its
