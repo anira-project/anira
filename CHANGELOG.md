@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Examples:** the JUCE plugin's "Backend Type" and the CLAP plugin's "Backend" list only the engines the build compiled in (`anira::enabled_engines()`) that the model file has an entry for, then the bypass ("BYPASS", "Bypassed") last; the default is ONNX Runtime where the build has it (JUCE variant 3 defaults to LibTorch: the stateful LSTM's ONNX export starts every inference from a zero state; variants 6 and 7 have LibTorch only); the CLAP choices are reordered (Bypassed was index 3).
 - **Docs:** the README's model file, the usage guide's processing and state examples and the web `processor-and-engine` example declare no window where the fixed Time extent is the window.
+- **Branches:** the 3.x line is developed on `main` (renamed from `v3`), the 2.x line on `v2` (renamed from `main`); the workflows' pull-request triggers drop `v3`, and the contributing guide names the new bases. The docs deploy, the cache warmer and coverage already run on pushes to `main`.
 
 ### Fixed
 

@@ -70,7 +70,7 @@ worth a look, CI's run is the gate):
     # check mode over the tracked sources
     git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs -P "$(nproc)" -n 20 clang-format --dry-run --Werror
 
-    # format what the branch changes (<base>: v3 for the 3.x line, else main); never the whole tree
+    # format what the branch changes (<base>: main, or v2 for a 2.x fix); never the whole tree
     git diff --name-only --diff-filter=d origin/<base>... -- '*.h' '*.hpp' '*.c' '*.cpp' | xargs -r clang-format -i
 
     # tidy the changed .cpp files against the clang-tidy preset's database
@@ -97,11 +97,11 @@ Keep that list in step with ``SOURCES``.
 Branches and pull requests
 --------------------------
 
-``main`` carries the 2.x line. ``v3`` is the integration branch of the 3.x line: each change is a
-``feat/v3-<topic>`` branch with a pull request against ``v3``, gated by the same workflows. On
-``v3`` the version comes from the ``v3*`` tags alone (``tanh_git_version(... MATCH "v3*")``): a
-checkout without a reachable v3 tag configures as ``0.0.0`` with ABI ``0.0``
-(``cmake/build-info.cmake`` derives the ABI pair from the tag).
+``main`` carries the 3.x line: each change is a topic branch (``feat/<topic>``, ``fix/<topic>``)
+with a pull request against ``main``, gated by the workflows. ``v2`` carries the 2.x line (fixes
+only). On ``main`` the version comes from the ``v3*`` tags alone
+(``tanh_git_version(... MATCH "v3*")``): a checkout without a reachable v3 tag configures as
+``0.0.0`` with ABI ``0.0`` (``cmake/build-info.cmake`` derives the ABI pair from the tag).
 
 1. Branch, commit, and keep the branch current with ``git fetch upstream && git rebase
    upstream/<base>``.
