@@ -142,6 +142,10 @@ struct Model {
     /// Keeps the bytes alive while the loaded model lives: an aliasing shared_ptr over the
     /// row's carrier.
     std::shared_ptr<const void> m_bytes_owner;
+    /// The content hash of the bytes (anira::content_hash) for a bytes model, else 0: what the
+    /// model's figure tells bytes models apart by. Not compared by operator==, which compares
+    /// the bytes by address (a pooled loaded model is the one over these bytes).
+    uint64_t m_bytes_hash = 0;
     std::string m_entry;  ///< the method or function of the file to run; empty for its default
     /// A custom engine's variant as canonical JSON text (anira::capi::model_config_json): its
     /// load may read the whole model config, so its loaded models are shared over an equal one

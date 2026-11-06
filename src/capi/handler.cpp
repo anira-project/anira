@@ -1185,6 +1185,7 @@ anira::engine::Model model_of_row(const anira_model_config& model,
         record.m_bytes = row.m_bytes->data();
         record.m_num_bytes = row.m_bytes->size();
         record.m_bytes_owner = std::shared_ptr<const void>(row.m_bytes, row.m_bytes->data());
+        record.m_bytes_hash = row.m_bytes->content_hash();
     } else {
         record.m_path = row.m_path;
     }
@@ -1811,17 +1812,21 @@ private:
     bool m_claimed = false;
 };
 
-// The key of one plan's figure (FigureKey): its loaded model's record (its bytes' owner held
-// weakly, so the index keeps no model in memory), the registered engine's carrier where the row is
-// a custom one, and the identity of the processor's inference hooks: its id, else its
+// The key of one plan's figure (FigureKey): its loaded model's record (a bytes model by the
+// content hash of its bytes, never their address or owner, so the index keeps no model in
+// memory), the registered engine's id where the row is a custom one (its registration under the
+// 2.x catch-all id), and the identity of the processor's inference hooks: its id, else its
 // registration, and nothing for a processor that fills neither hook.
 anira::FigureKey figure_key(const anira_handler& handler,
                             const anira::SessionElement& session,
                             uint32_t plan) {
     anira::FigureKey key;
     key.m_model = session.m_plans[plan].m_loaded->model();
-    key.m_bytes_owner = key.m_model.m_bytes_owner;
-    key.m_has_bytes = key.m_model.m_bytes_owner != nullptr;
+    // A bytes model by its content (hash and size, the record's m_num_bytes), never by the
+    // bytes' address or owner: two plugins that each borrow or copy the same model bytes are
+    // one model, and a buffer reused for other bytes never matches.
+    key.m_bytes_hash = key.m_model.m_bytes_hash;
+    key.m_model.m_bytes = nullptr;
     key.m_model.m_bytes_owner.reset();
     const anira::capi::ModelEntry& row =
         handler.m_pipeline.m_variants[0].m_models[handler.m_plans[plan].m_row];

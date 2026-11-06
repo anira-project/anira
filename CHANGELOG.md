@@ -78,6 +78,7 @@ Refused at prepare: the Async contract, a Buffer spec under a Hard contract, a h
 
 ### Fixed
 
+- **Core:** the model's figure keys a model given as bytes by a 64-bit content hash of the bytes (XXH64, computed once per bytes object) and their size, not by their owner, so two configs that borrow or copy the same model bytes (two instances of the JUCE example over its BinaryData) share one figure and latency.
 - **Docs:** `anira/abi/draft/tensor_platform.h` is included by `anira/anira_all.h`, not `anira/anira.h`; `anira_tensor_spec_create`'s name binds a named engine side's slot the entry's tensors record leaves unnamed, and a custom engine's load record carries it.
 - **Breaking:** C++ — an `anira::Processor` of `before_inference` / `after_inference` alone needs no `ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST` under a Hard contract (prepare refused it, `ANIRA_ERROR_CONFIG`): `Pipeline::add_processor` fills the reset slot only for the new phase bit `anira::Processor::k_reset` (`phase_bit(ANIRA_PHASE_RESET)`, in `k_all_phases`), `k_pre_process` or `k_post_process`. Migration: a processor without pre/post-process whose `Prepared` overrides reset adds `k_reset` to `phases()` (and keeps the flag), or its reset is not called.
 - **LibTorch:** each thread that runs a model sets the engine's single intra-op thread, not the control thread alone; on Linux x86_64 (OpenMP) a oneDNN primitive (the stateful RNN's LSTM) spun one thread per core beside the inference threads.

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>  // IWYU pragma: keep - declares the nlohmann::json type name
@@ -18,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "../utils/ContentHash.h"
 #include "capi_internal.h"
 #include "handles.h"
 #include "validate.h"
@@ -990,6 +992,11 @@ BytesCarrier::BytesCarrier(const void* bytes,
 
 BytesCarrier::~BytesCarrier() {
     if (m_release != nullptr) { m_release(m_bytes, m_ctx); }
+}
+
+uint64_t BytesCarrier::content_hash() const {
+    std::call_once(m_hashed, [this] { m_hash = anira::content_hash(m_bytes, m_size); });
+    return m_hash;
 }
 
 }  // namespace anira::capi

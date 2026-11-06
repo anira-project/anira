@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <variant>
@@ -61,8 +62,15 @@ public:
     const void* data() const noexcept { return m_bytes; }
     size_t size() const noexcept { return m_size; }
     anira_bytes_ownership ownership() const noexcept { return m_ownership; }
+    /// The content hash of the bytes (anira::content_hash, XXH64), computed at the first call
+    /// and kept: what the model's figure keys a bytes model by (FigureKey), so that identical
+    /// bytes are one model whoever owns them. Thread-safe; it runs at prepare, never on a
+    /// real-time path.
+    uint64_t content_hash() const;
 
 private:
+    mutable std::once_flag m_hashed;
+    mutable uint64_t m_hash = 0;
     std::vector<unsigned char> m_copy;
     const void* m_bytes = nullptr;
     size_t m_size = 0;

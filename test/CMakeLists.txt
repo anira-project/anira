@@ -135,6 +135,7 @@ endfunction()
 # forms, and the session runs on the 3.x configuration.
 
 anira_add_test_binary(test_utils WHITE_BOX
+	utils/test_ContentHash.cpp
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp
 	utils/test_Logger.cpp

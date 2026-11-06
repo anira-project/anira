@@ -1776,17 +1776,16 @@ bool same_owner(const std::weak_ptr<const void>& a, const std::weak_ptr<const vo
 
 bool same_key(const FigureKey& a, const FigureKey& b) {
     return a.m_engine_id == b.m_engine_id && a.m_by_registration == b.m_by_registration &&
-           a.m_has_bytes == b.m_has_bytes &&
+           a.m_bytes_hash == b.m_bytes_hash &&
            a.m_hooks_by_registration == b.m_hooks_by_registration && a.m_hook_id == b.m_hook_id &&
            same_owner(a.m_carrier, b.m_carrier) && same_owner(a.m_hook_owner, b.m_hook_owner) &&
-           same_owner(a.m_bytes_owner, b.m_bytes_owner) && a.m_model == b.m_model;
+           a.m_model == b.m_model;
 }
 
 /// Whether a key names an object that died (its figure can never be asked for again).
 bool dead_key(const FigureKey& key) noexcept {
     return (key.m_by_registration && key.m_carrier.expired()) ||
-           (key.m_hooks_by_registration && key.m_hook_owner.expired()) ||
-           (key.m_has_bytes && key.m_bytes_owner.expired());
+           (key.m_hooks_by_registration && key.m_hook_owner.expired());
 }
 
 /// Whether a figure answers a warm-up: UNTIL_STABLE asks for one UNTIL_STABLE measured, FIXED n

@@ -165,7 +165,9 @@ four inferences; under an explicit budget the timings are only reported.
 **The model's figure.** The inference time belongs to the model: the core keeps what every pass
 measured, under either budget kind, keyed like its pool of loaded models (the engine, the provider
 and its options, the model, its entry, its tensors at the pinned window, its instances), except that
-a registered engine counts by its id (``anira.v2.custom`` by its engine object), plus the
+a model given as bytes counts by a content hash of its bytes (two plugin instances borrowing one
+embedded model are one model) and a registered engine by its id (``anira.v2.custom`` by its engine
+object), plus the
 processor's inference hooks (nothing for a processor without ``before_inference`` /
 ``after_inference``, else its id, ``anira_processor_desc.id`` / ``anira::Processor(id)``, else its
 registration).

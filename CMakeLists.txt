@@ -421,6 +421,7 @@ target_sources(anira_objects
         src/scheduler/Warmup.cpp
 
         # Utils
+        src/utils/ContentHash.cpp
         src/utils/Logger.cpp
         src/utils/LogSinks.cpp
         src/utils/RtLatch.cpp

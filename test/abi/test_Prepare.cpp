@@ -33,6 +33,7 @@
 #include <memory>
 #include <optional>
 #include <ratio>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -2172,6 +2173,100 @@ TEST(AbiFigure, TheVersionTwoCatchAllIdIsKeyedByRegistration) {
     ASSERT_EQ(second.prepare(measured_contract()), ANIRA_OK) << second.m_err.message;
     EXPECT_GE(second_engine.m_calls.load(), 4) << "two 2.x backends: two figures";
     EXPECT_NE(plan_row(second).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+}
+
+namespace {
+
+/// mono_model_on() over model bytes instead of a path: `bytes` borrowed or copied.
+anira::ModelConfig mono_bytes_model_on(const char* id,
+                                       std::span<const std::byte> bytes,
+                                       anira_bytes_ownership ownership) {
+    anira::ModelConfig model;
+    model.add_model_bytes(id, bytes, ownership);
+    model.max_instances(1);
+    model.input(anira_test::stream_tensor("in", 1, k_block, k_block));
+    model.output(anira_test::stream_tensor("out", 1, k_block, k_block));
+    return model;
+}
+
+/// Model bytes of `size` with byte i = (i * 31 + salt) mod 256.
+std::vector<std::byte> model_bytes(size_t size, unsigned salt = 0) {
+    std::vector<std::byte> bytes(size);
+    for (size_t i = 0; i < size; ++i) {
+        bytes[i] = static_cast<std::byte>(static_cast<unsigned char>((i * 31U) + salt));
+    }
+    return bytes;
+}
+
+}  // namespace
+
+// A model loaded from bytes is keyed by the bytes' content (their hash and size), never by their
+// owner or address: two model configs that borrow one buffer (two instances of a plugin over its
+// embedded binary data, ANIRA_BYTES_BORROW) are one model, so the second handler runs no pass and
+// reports the first's budget and latency.
+TEST(AbiFigure, TwoConfigsBorrowingOneBufferShareTheFigure) {
+    ASSERT_TRUE(anira_test::fresh_core());
+    const Context context;
+    constexpr const char* k_id = "org.anira.test.figure-borrowed";
+    static const std::vector<std::byte> k_embedded = model_bytes(4096);
+    const ScriptedEngine first_engine([](int /*call*/) { return 1.0; }, Wait::Busy, k_id);
+    const ScriptedEngine second_engine([](int /*call*/) { return 1.0; }, Wait::Busy, k_id);
+    Handler first(context,
+                  mono_bytes_model_on(k_id, k_embedded, ANIRA_BYTES_BORROW),
+                  {},
+                  {},
+                  first_engine.engine());
+    ASSERT_EQ(first.prepare(measured_contract()), ANIRA_OK) << first.m_err.message;
+    ASSERT_GE(first_engine.m_calls.load(), 4);
+    Handler second(context,
+                   mono_bytes_model_on(k_id, k_embedded, ANIRA_BYTES_BORROW),
+                   {},
+                   {},
+                   second_engine.engine());
+    ASSERT_EQ(second.prepare(measured_contract()), ANIRA_OK) << second.m_err.message;
+    EXPECT_EQ(second_engine.m_calls.load(), 0) << "one buffer: one model, no pass";
+    EXPECT_EQ(plan_row(second).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    EXPECT_DOUBLE_EQ(plan_row(second).budget_ms, plan_row(first).budget_ms);
+    EXPECT_EQ(anira_handler_get_latency(second.m_handler, 0),
+              anira_handler_get_latency(first.m_handler, 0));
+}
+
+// Two copies of identical bytes (ANIRA_BYTES_COPY, each config its own buffer) are one model too;
+// bytes of the same size with one byte changed are another, measured on their own.
+TEST(AbiFigure, IdenticalBytesShareTheFigureAndOtherBytesDoNot) {
+    ASSERT_TRUE(anira_test::fresh_core());
+    const Context context;
+    constexpr const char* k_id = "org.anira.test.figure-copied";
+    const std::vector<std::byte> one = model_bytes(4096);
+    const std::vector<std::byte> same = model_bytes(4096);
+    std::vector<std::byte> other = model_bytes(4096);
+    other[2048] ^= std::byte{1};
+    const ScriptedEngine first_engine([](int /*call*/) { return 1.0; }, Wait::Busy, k_id);
+    const ScriptedEngine same_engine([](int /*call*/) { return 1.0; }, Wait::Busy, k_id);
+    const ScriptedEngine other_engine([](int /*call*/) { return 1.0; }, Wait::Busy, k_id);
+    Handler first(context,
+                  mono_bytes_model_on(k_id, one, ANIRA_BYTES_COPY),
+                  {},
+                  {},
+                  first_engine.engine());
+    ASSERT_EQ(first.prepare(measured_contract()), ANIRA_OK) << first.m_err.message;
+    ASSERT_GE(first_engine.m_calls.load(), 4);
+    Handler copy(context,
+                 mono_bytes_model_on(k_id, same, ANIRA_BYTES_COPY),
+                 {},
+                 {},
+                 same_engine.engine());
+    ASSERT_EQ(copy.prepare(measured_contract()), ANIRA_OK) << copy.m_err.message;
+    EXPECT_EQ(same_engine.m_calls.load(), 0) << "identical bytes: one model";
+    EXPECT_EQ(plan_row(copy).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    Handler changed(context,
+                    mono_bytes_model_on(k_id, other, ANIRA_BYTES_COPY),
+                    {},
+                    {},
+                    other_engine.engine());
+    ASSERT_EQ(changed.prepare(measured_contract()), ANIRA_OK) << changed.m_err.message;
+    EXPECT_GE(other_engine.m_calls.load(), 4) << "one byte changed: another model";
+    EXPECT_NE(plan_row(changed).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
 }
 
 // The figures live as long as the core's state: once the last context and handler are gone and

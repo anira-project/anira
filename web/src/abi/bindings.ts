@@ -5672,7 +5672,8 @@ export class AniraBindings {
    * or FIXED 0: ordinary inferences of every plan through the session on the inference
    * threads, each timed on its thread (anira_warmup_mode); under a MEASURED budget each
    * plan's row takes its figure and the session the slowest. The core keeps what every
-   * pass measured as the model's figure (the pooled model, a registered engine's id,
+   * pass measured as the model's figure (the pooled model, a model given as bytes by a
+   * content hash of its bytes whoever owns them, a registered engine's id,
    * anira.v2.custom's engine object, and the processor's inference hooks:
    * anira_processor_desc.id), under either budget kind, for as long as its state lives: a
    * plan whose model has a figure at least as thorough as the contract's warm-up
