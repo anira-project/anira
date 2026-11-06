@@ -309,12 +309,11 @@ struct LogConfig {
 };
 
 /**
- * @brief The 2.x ContextConfig (v2.3.0's name; the pre-release that preceded anira 3 called it
- * CoreConfig): a plain value with the 2.x fields, minted into an anira::ContextConfig when a
- * handler is built (to_context_config). The default thread count is k_threads_auto, the
- * sentinel anira resolves (half the hardware threads, at least 1, on WebAssembly too) where 2.x
- * stored the resolved count: a host that read m_num_threads back to learn the count reads the
- * sentinel.
+ * @brief The 2.x ContextConfig (v2.3.0's name): a plain value with the 2.x fields, minted into an
+ * anira::ContextConfig when a handler is built (to_context_config). The default thread count is
+ * k_threads_auto, the sentinel anira resolves (half the hardware threads, at least 1, on
+ * WebAssembly too) where 2.x stored the resolved count: a host that read m_num_threads back to
+ * learn the count reads the sentinel.
  */
 struct ContextConfig {
     static constexpr unsigned k_threads_auto = ANIRA_THREADS_AUTO;
@@ -1952,10 +1951,9 @@ private:
 };
 
 /**
- * @brief The 2.x static face of the core (v2.3.0's anira::Context; the pre-release that preceded
- * anira 3 called it anira::Core), over the core entries. The rest of the 2.x class (the
- * inference threads of the host, the session list) is not declared: a host drives its own
- * threads through anira_inference_thread_create on a context.
+ * @brief The 2.x static face of the core (v2.3.0's anira::Context), over the core entries. The rest
+ * of the 2.x class (the inference threads of the host, the session list) is not declared: a host
+ * drives its own threads through anira_inference_thread_create on a context.
  */
 struct Context {
     /// anira_shutdown: ANIRA_ERROR_INVALID_STATE while a context or a handler lives, which
