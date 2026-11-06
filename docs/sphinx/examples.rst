@@ -136,8 +136,8 @@ the entry point ``anira-clap-demo-pluginentry.cpp``):
   activations.
 - The ``clap.render`` extension: ``CLAP_RENDER_OFFLINE`` runs the chosen backend whatever its
   verdict.
-- ``activate`` prints each backend's row and, while the parameter is off, that a ``NOT_REALTIME``
-  backend "stays Bypassed until 'Try nonetheless' is on".
+- ``activate`` prints each backend's row and, while the parameter is off in a real-time render,
+  that a ``NOT_REALTIME`` backend "stays Bypassed until 'Try nonetheless' is on".
 
 .. _examples-benchmarks:
 

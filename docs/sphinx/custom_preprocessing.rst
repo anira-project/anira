@@ -100,8 +100,11 @@ dtype, a ring its ring dtype.
 default: ``anira_processor_default_pre_process`` / ``_post_process``, in C++ the base class's
 ``Processor::Prepared::pre_process`` / ``post_process``. A filled phase **owns that phase for every
 slot with a host end** and calls the default for what it does not handle ("call super"). The two
-hooks have no default. The defaults are real-time, never touch a tensor of another role than
-Streamed, and return ``ANIRA_ERROR_CONFIG`` for a slot whose ring dtype is not its tensor's.
+hooks have no default. In C the reset slot is filled or ``NULL`` on its own; in C++ ``reset`` comes
+with ``pre_process`` or ``post_process`` unnamed, and a processor of the hooks alone whose
+``Prepared`` overrides ``reset`` names ``Processor::k_reset`` in ``phases()``, else its reset is
+never called. The defaults are real-time, never touch a tensor of another role than Streamed, and
+return ``ANIRA_ERROR_CONFIG`` for a slot whose ring dtype is not its tensor's.
 
 .. _processor-accessors:
 
@@ -178,14 +181,14 @@ Whether a body is real-time is the processor's own promise, its ``flags``:
 allocate nothing, lock nothing and block on nothing; ``ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS`` says
 the same of the two hooks; 0 promises nothing. A real-time body calls only the ``[callback-safe]``
 entries of anira. Under a Hard contract those three phases run on the driving thread, so a filled
-one without ``REALTIME_PRE_POST`` is ``ANIRA_ERROR_CONFIG`` at prepare, naming the flag. In C++ the
-reset slot is always filled (the base body does nothing), so under a Hard contract every
-``anira::Processor`` returns ``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST`` from ``flags()``, one of hooks
-alone included. Under Async no bit is required; ``REALTIME_HOOKS`` is required by no contract of
-this pre-release. A bit the header does not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at
-``anira_pipeline_add_processor``. anira's own side (the accessors, the ring calls, the defaults) is
-``ANIRA_NONBLOCKING``, so a body made of them can be checked by clang: declare the callback
-``ANIRA_NONBLOCKING`` yourself (``anira_processor_fn`` carries no attribute).
+one without ``REALTIME_PRE_POST`` is ``ANIRA_ERROR_CONFIG`` at prepare, naming the flag; a processor
+of ``before_inference`` and ``after_inference`` alone (in C++ without ``k_reset``) fills none of the
+three and needs no promise there. Under Async no bit is required; ``REALTIME_HOOKS`` is required by
+no contract of this pre-release. A bit the header does not define is
+``ANIRA_ERROR_INVALID_ARGUMENT`` at ``anira_pipeline_add_processor``. anira's own side (the
+accessors, the ring calls, the defaults) is ``ANIRA_NONBLOCKING``, so a body made of them can be
+checked by clang: declare the callback ``ANIRA_NONBLOCKING`` yourself (``anira_processor_fn``
+carries no attribute).
 
 .. _processor-lifecycle:
 
@@ -231,7 +234,8 @@ more (:doc:`custom_engines`).
    * - ``reset(ctx)``
      - For the first chunk of a new stream (after prepare, after ``anira_handler_reset``), before its
        ``pre_process`` and on its thread, in ``ANIRA_PHASE_RESET`` (the accessors answer the role only):
-       a resampler, an overlap buffer, a filter's history starts over.
+       a resampler, an overlap buffer, a filter's history starts over. C++ fills the slot with
+       ``k_pre_process``, ``k_post_process`` or ``k_reset`` in ``phases()``.
    * - ``unprepare(prepared)``
      - Once per successful prepare, at the next prepare of the handler (after the old session is
        released; a next prepare that fails earlier undoes the previous one too) and at its destroy,
@@ -261,8 +265,7 @@ the figure.
     class WindowProcessor : public anira::Processor {
     public:
         WindowProcessor() : anira::Processor("com.example.myplugin.window") {}
-        uint32_t phases() const noexcept override { return k_before_inference; }
-        uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+        uint32_t phases() const noexcept override { return k_before_inference; }   // no flag needed
         // ...
     };
 

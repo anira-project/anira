@@ -102,7 +102,7 @@ parallel inferences with the verdict. Nothing is held whatever the verdict: a be
 .. code-block:: text
 
     Model: model.onnx | Backend: onnx | Host Sample Rate: 44100 Hz | Host Buffer Size: 2048 = 46.4399 ms
-    Budget 7.90 ms (measured over 6 inferences, stable); real-time factor 0.17 of 4: comfortable
+    Budget 7.94 ms (measured over 6 inferences, stable); real-time factor 0.171 of 4: comfortable
 
 Each iteration then prints its time and its **real-time factor** (RTF: the time over the buffer
 period), marked ``[underrun]`` above 1.0. With the total of repetitions passed to

@@ -164,10 +164,11 @@ four inferences; under an explicit budget the timings are only reported.
 
 **The model's figure.** The inference time belongs to the model: the core keeps what every pass
 measured, under either budget kind, keyed like its pool of loaded models (the engine, the provider
-and its options, the model, its entry, its tensors at the pinned window, its instances; a registered
-engine's registration) plus the processor's inference hooks (nothing for a processor without
-``before_inference`` / ``after_inference``, else its id, ``anira_processor_desc.id`` /
-``anira::Processor(id)``, else its registration).
+and its options, the model, its entry, its tensors at the pinned window, its instances), except that
+a registered engine counts by its id (``anira.v2.custom`` by its engine object), plus the
+processor's inference hooks (nothing for a processor without ``before_inference`` /
+``after_inference``, else its id, ``anira_processor_desc.id`` / ``anira::Processor(id)``, else its
+registration).
 
 - A later prepare of the model, by another handler or the same one at another block size or rate,
   reuses the figure and runs no pass (``ANIRA_WARMUP_OUTCOME_REUSED``): identical plugins report
@@ -181,8 +182,8 @@ engine's registration) plus the processor's inference hooks (nothing for a proce
   ``anira_shutdown`` alone keeps them). An idle
   machine's figure can underestimate the time under later load (memory bandwidth, clock speed, SMT
   siblings); a marginal verdict's headroom is the margin for that, not a guarantee. Give a processor
-  with inference hooks an id, so that identical plugins share the figure; a registered engine that
-  each instance registers anew measures once per registration.
+  with inference hooks an id, so that identical plugins share the figure; registered engines of one
+  id share it, however many objects the instances create (``anira.v2.custom`` excepted).
 
 .. _usage-miss-policy:
 

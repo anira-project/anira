@@ -124,7 +124,8 @@ Every instance's ``Pipeline`` holds the object's C engine, so two instances with
 load the model once. Keep the ``Pipeline`` while the instance runs: a registration made after every
 ``Pipeline`` holding the object is gone creates a new C engine, which does not share with handlers of
 the old one. Two different plugin binaries never share a custom engine, and a plugin's engine code
-never outlives the plugin.
+never outlives the plugin. Two engine objects of one id load separately but share the model's
+measured figure (:ref:`usage-budget-warmup`; ``anira.v2.custom`` excepted).
 
 .. _engines-capabilities:
 

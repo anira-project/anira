@@ -73,7 +73,7 @@ In C it is a descriptor, ``anira_engine_desc`` of ``anira/abi/engine.h``, made i
 - ``anira_pipeline_add_engine(pipe, engine, &err)`` adds it to a pipeline. One engine may be added
   to any number of pipelines; the engines of one pipeline have distinct ids. The id is unique per
   pipeline, not per process: two plugin instances that each create their own engine under one id
-  share nothing.
+  share no loaded model (they share the model's measured figure).
 
 The handle, every pipeline the engine was added to, every handler created from them and every loaded
 model of the engine hold a reference. ``anira_custom_engine_destroy`` drops the handle's, so it may
@@ -278,8 +278,8 @@ it keeps):
   it returns ``ANIRA_ERROR_NOT_SUPPORTED`` (a device missing at run time: create checked the list).
 - ``option_keys`` / ``option_values`` / ``num_options``: the context's provider options for this
   backend (:ref:`usage-provider-options`), only for an engine that lists
-  ``"context:provider_options"``; ``NULL`` and 0 otherwise and when none are set. Part of the loaded model: two contexts with
-  different options load twice.
+  ``"context:provider_options"``; ``NULL`` and 0 otherwise and when none are set. Part of the
+  loaded model: two contexts with different options load twice.
 - ``instances``: the **shared call slots**, the ``process`` calls that may run at once, each on its
   ``ctx->instance`` below this count: a stateless model's ``max_instances`` (``ANIRA_INSTANCES_AUTO``
   resolved to the pool's size, at least 1), clamped to the pool's size; 0 for a model declared
@@ -289,12 +289,13 @@ it keeps):
 through the handler's session and reaches the engine as ordinary ``process`` calls, which it times
 (:ref:`usage-budget-warmup`). Under a measured budget the engine's ``prepare`` may run twice in one
 ``anira_handler_prepare``: ``prepare``, the pass's ``process`` calls, then ``unprepare`` and
-``prepare`` again with the final record when the pass moved the entry count. The figure is the
-model's on this registration: a later handler on it with the same model key reuses it
-(:ref:`usage-budget-warmup`), an engine registered anew (one object per plugin instance) measures its
-own. An engine that wants its first-run cost gone before the pass
-runs a warm inference itself, over the shared slots at load and over an exclusive handler's executor
-at prepare, as the built-in engines do over every executor they make.
+``prepare`` again with the final record when the pass moved the entry count. The figure is keyed by
+the engine's id with the rest of the model's key: engine objects of one id share it, so two plugin
+instances that each register their own engine report the same latency (an id names one
+implementation); ``anira.v2.custom``, which names every 2.x custom backend, is keyed per engine
+object. An engine that wants its first-run cost gone before the pass runs a warm inference itself,
+over the shared slots at load and over an exclusive handler's executor at prepare, as the built-in
+engines do over every executor they make.
 
 **The prepare record**, ``anira_prepare_info`` (Tier 2; the handler pointer and the report stay valid
 while the handler stays prepared, the arrays for the call): ``handler``, ``report``,
