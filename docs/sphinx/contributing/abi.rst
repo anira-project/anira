@@ -106,8 +106,8 @@ Writing a registry entry
   - The dual tag ``driver-thread | inference-thread`` (a processor callback, the six context
     accessors, the two default bodies) requires ``nonblocking: true`` on an entry, as
     ``driver-thread`` does, but no attribute on the callback typedef ``anira_processor_fn``: whether
-    a processor body is real-time is its own promise (``anira_processor_desc.flags``, checked at
-    prepare).
+    a processor body is real-time is its own promise (``anira_processor_desc.realtime_phases``,
+    per phase, checked at prepare).
   - The ``inference-thread`` typedef ``anira_engine_process_fn`` carries no ``nonblocking`` for the
     same reason: the engine's promise is ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``.
 

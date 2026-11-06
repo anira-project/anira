@@ -175,10 +175,9 @@ descriptor ``anira_processor_desc``, or :cpp:class:`anira::Processor` in C++):
        fails the chunk (zeros at its stream position) and is latched in
        ``anira_handler_rt_error``.
    * - the audio-thread rule of ``pre_process`` / ``post_process``
-     - The flags (``Processor::flags()``): ``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST`` is required
-       under a Hard contract by a processor that fills ``pre_process``, ``post_process`` or ``reset``
-       (:ref:`processor-promise`), ``ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS`` is the promise for the two
-       hooks.
+     - The promise per phase (``Processor::realtime_phases()``, in the bits of ``phases()``):
+       under a Hard contract every filled ``pre_process``, ``post_process`` and ``reset`` needs its
+       bit (:ref:`processor-promise`); the two hooks need none, and may promise theirs.
    * - the hidden-state splice in the hooks (the ``StatefulPrePostProcessor`` pattern)
      - Declared state: ``"role": "state"`` on both halves and ``"state_source"`` on the input;
        anira feeds and captures it, no hook needed. The hooks still see the fed and the

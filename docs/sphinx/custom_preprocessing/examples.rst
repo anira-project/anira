@@ -22,7 +22,7 @@ model reads ``float32``. Without a processor prepare refuses the contract; with 
     class Int16ToFloat : public anira::Processor {
     public:
         uint32_t phases() const noexcept override { return k_pre_process; }   // post_process: the default
-        uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+        uint32_t realtime_phases() const noexcept override { return phases(); }
         std::unique_ptr<Prepared> prepare(const anira::PrepareInfo& info) override;
 
     private:
@@ -106,7 +106,7 @@ Both rings float32, the model tensors float16 (``to_half`` and ``from_half`` are
     class HalfProcessor final : public anira::Processor {
     public:
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
-        uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+        uint32_t realtime_phases() const noexcept override { return phases(); }
         std::unique_ptr<Prepared> prepare(const anira::PrepareInfo&) override {
             return std::make_unique<HalfPrepared>();
         }
@@ -123,7 +123,7 @@ The input spec's window is longer than the hop (``window(2048, 2048, 1536)``: 51
 ``pre_process`` assembles the window (the history through ``peek_past_block``, the hop through
 ``pop_block``) and transforms it; ``post_process`` transforms back and pushes the hop. The transform
 runs on the driving thread, so it is real-time itself (preallocated plans). The windows live in a
-per-entry scratch that ``reset`` clears.
+per-entry scratch that ``reset`` clears, which ``phases()`` names with ``k_reset``.
 
 .. code-block:: cpp
 
@@ -139,8 +139,10 @@ per-entry scratch that ``reset`` clears.
 
     class Spectral : public anira::Processor {
     public:
-        uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
-        uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+        uint32_t phases() const noexcept override {
+            return k_pre_process | k_post_process | k_reset;   // Frames overrides reset
+        }
+        uint32_t realtime_phases() const noexcept override { return phases(); }
         std::unique_ptr<Prepared> prepare(const anira::PrepareInfo& info) override;
 
     private:
@@ -213,9 +215,10 @@ When the transform is heavy: the same in C, split across the hooks
 A transform too heavy for the audio callback moves to the inference thread, keyed by the entry:
 ``pre_process`` only pops the window into the per-entry scratch, ``before_inference`` transforms it
 into the model tensor, ``after_inference`` transforms the output back into the scratch, and
-``post_process`` pushes the hop. The hooks may then use a library that allocates, since the flags
-promise ``REALTIME_PRE_POST`` alone. ``prepare`` allocates this handler's windows and hands them back
-through ``out_prepared``; ``unprepare`` frees them; ``user_data`` stays NULL, since nothing is shared.
+``post_process`` pushes the hop. The hooks may then use a library that allocates, since
+``realtime_phases`` promises ``pre_process``, ``post_process`` and ``reset`` alone. ``prepare``
+allocates this handler's windows and hands them back through ``out_prepared``; ``unprepare`` frees
+them; ``user_data`` stays NULL, since nothing is shared.
 
 .. code-block:: c
 
@@ -335,7 +338,9 @@ shared by the handlers of the pipeline):
 .. code-block:: c
 
     anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
-    desc.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;   /* the hooks promise nothing */
+    desc.realtime_phases = ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) |
+                           ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) |
+                           ANIRA_PHASE_BIT(ANIRA_PHASE_RESET);   /* the hooks promise nothing */
     desc.pre_process = spectral_pre_process;
     desc.before_inference = spectral_before_inference;
     desc.after_inference = spectral_after_inference;

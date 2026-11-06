@@ -207,8 +207,9 @@ the five helpers, over two views: ``anira::v2::RingBuffer`` is a view of the ``a
 one Streamed slot (the float face of the ring accessors of ``anira/abi/processor.h``), and
 ``anira::v2::BufferF`` a view of the model end of one slot, one channel of the tensor's packed
 elements, as 2.x laid a model buffer out. ``anira::v2::LegacyProcessor`` runs such a
-processor as the processor of a 3.x pipeline (all four phases,
-``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST``); the processor sees the backend of the chunk's plan,
+processor as the processor of a 3.x pipeline (all four phases and reset, with
+``realtime_phases()`` of ``pre_process``, ``post_process`` and ``reset``); the processor sees the
+backend of the chunk's plan,
 ``CUSTOM`` for a custom engine. ``anira::v2::PassthroughEngine`` is ``BackendBase::process`` as
 an :cpp:class:`anira::Engine` under ``anira.v2.custom``: what a 2.x ``CUSTOM`` row runs when
 no engine was passed. ``anira::v2::Context`` carries the 2.x statics (``shutdown``,

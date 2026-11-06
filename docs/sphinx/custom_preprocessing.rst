@@ -15,7 +15,7 @@ subclass of :cpp:class:`anira::Processor`; in C an ``anira_processor_desc`` of
     public:
         explicit Normalise(float gain) : m_gain(gain) {}
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
-        uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+        uint32_t realtime_phases() const noexcept override { return phases(); }   // both real-time
         std::unique_ptr<Prepared> prepare(const anira::PrepareInfo&) override {
             return std::make_unique<Scaler>(m_gain);              // one per handler
         }
@@ -100,10 +100,9 @@ dtype, a ring its ring dtype.
 default: ``anira_processor_default_pre_process`` / ``_post_process``, in C++ the base class's
 ``Processor::Prepared::pre_process`` / ``post_process``. A filled phase **owns that phase for every
 slot with a host end** and calls the default for what it does not handle ("call super"). The two
-hooks have no default. In C the reset slot is filled or ``NULL`` on its own; in C++ ``reset`` comes
-with ``pre_process`` or ``post_process`` unnamed, and a processor of the hooks alone whose
-``Prepared`` overrides ``reset`` names ``Processor::k_reset`` in ``phases()``, else its reset is
-never called. The defaults are real-time, never touch a tensor of another role than Streamed, and
+hooks have no default. The reset slot is filled or ``NULL`` on its own, like the other four: in C++
+a ``Prepared`` that overrides ``reset`` names ``Processor::k_reset`` in ``phases()``, else its reset
+is never called. The defaults are real-time, never touch a tensor of another role than Streamed, and
 return ``ANIRA_ERROR_CONFIG`` for a slot whose ring dtype is not its tensor's.
 
 .. _processor-accessors:
@@ -176,19 +175,20 @@ a failed ``post_process`` anira tops every Streamed output up to the hop with ze
 The real-time promise
 ---------------------
 
-Whether a body is real-time is the processor's own promise, its ``flags``:
-``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST`` says ``pre_process``, ``post_process`` and ``reset``
-allocate nothing, lock nothing and block on nothing; ``ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS`` says
-the same of the two hooks; 0 promises nothing. A real-time body calls only the ``[callback-safe]``
-entries of anira. Under a Hard contract those three phases run on the driving thread, so a filled
-one without ``REALTIME_PRE_POST`` is ``ANIRA_ERROR_CONFIG`` at prepare, naming the flag; a processor
-of ``before_inference`` and ``after_inference`` alone (in C++ without ``k_reset``) fills none of the
-three and needs no promise there. Under Async no bit is required; ``REALTIME_HOOKS`` is required by
-no contract of this pre-release. A bit the header does not define is
-``ANIRA_ERROR_INVALID_ARGUMENT`` at ``anira_pipeline_add_processor``. anira's own side (the
-accessors, the ring calls, the defaults) is ``ANIRA_NONBLOCKING``, so a body made of them can be
-checked by clang: declare the callback ``ANIRA_NONBLOCKING`` yourself (``anira_processor_fn``
-carries no attribute).
+Whether a body is real-time is the processor's own promise, per phase, its ``realtime_phases``
+(C++ ``realtime_phases()``): the bit of a phase, ``ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS)`` in C
+and ``k_pre_process`` in C++, the bits of ``phases()``, says that phase allocates nothing, locks
+nothing and blocks on nothing; 0 promises nothing. A real-time body calls only the
+``[callback-safe]`` entries of anira. Every filled phase that the contract runs on the driving
+thread must carry its bit, else prepare is ``ANIRA_ERROR_CONFIG``, naming the phase and
+``realtime_phases``. Under a Hard contract those are ``pre_process``, ``post_process`` and
+``reset``, so a processor of ``before_inference`` and ``after_inference`` alone needs no promise;
+under Async none. A promised phase that is not filled is no error, so a processor whose bodies are
+all real-time says so in one line, ``realtime_phases()`` returning ``phases()``. The bit of any
+other phase (the engine call's, a lifecycle phase's) is ``ANIRA_ERROR_INVALID_ARGUMENT`` at
+``anira_pipeline_add_processor``. anira's own side (the accessors, the ring calls, the defaults) is
+``ANIRA_NONBLOCKING``, so a body made of them can be checked by clang: declare the callback
+``ANIRA_NONBLOCKING`` yourself (``anira_processor_fn`` carries no attribute).
 
 .. _processor-lifecycle:
 
@@ -235,7 +235,8 @@ more (:doc:`custom_engines`).
      - For the first chunk of a new stream (after prepare, after ``anira_handler_reset``), before its
        ``pre_process`` and on its thread, in ``ANIRA_PHASE_RESET`` (the accessors answer the role only):
        a resampler, an overlap buffer, a filter's history starts over. C++ fills the slot with
-       ``k_pre_process``, ``k_post_process`` or ``k_reset`` in ``phases()``.
+       ``k_reset`` in ``phases()``; under a Hard contract it needs its own bit in
+       ``realtime_phases``.
    * - ``unprepare(prepared)``
      - Once per successful prepare, at the next prepare of the handler (after the old session is
        released; a next prepare that fails earlier undoes the previous one too) and at its destroy,
@@ -368,7 +369,7 @@ At setup, beside ``anira_pipeline_add_inference`` (``user_data``, ``init`` and `
 .. code-block:: c
 
     anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
-    desc.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;   /* required: pre_process runs on the driving thread */
+    desc.realtime_phases = ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS);   /* required: it runs on the driving thread */
     desc.pre_process = convert_pre_process;        /* post_process stays NULL: the default push */
     desc.prepare = convert_prepare;                /* per handler: hands the scratch back */
     desc.unprepare = convert_unprepare;            /* once per prepare: frees it */

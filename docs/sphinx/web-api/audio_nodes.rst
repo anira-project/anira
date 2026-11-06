@@ -228,8 +228,8 @@ they share the context's first-node setup, and each creation completes on its ow
 node, ``createAudioNode`` loads ``worklet-scope.js`` into the scope: the scope has no
 ``performance``, which the module's clock needs on the audio thread. A JavaScript processor's
 worklet phases run on the scope's registry, which anira boots over the worklet's instance at every
-create; the code there must not allocate, lock or wait (the processor states
-``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST``).
+create; the code there must not allocate, lock or wait (the processor promises it:
+``realtimePhases`` names ``preProcess``, ``postProcess`` and ``reset`` by default).
 
 The module is built with ``-sASSERTIONS=0``: Emscripten's Web Audio library asserts a
 ``window.AudioContext``, which an ``OfflineAudioContext`` is not.
