@@ -15,6 +15,7 @@ import {
   InferenceHandler,
   ModelConfig,
   Pipeline,
+  anira_budget_kind,
   anira_engine,
   anira_rt_verdict,
   anira_warmup_outcome,
@@ -63,8 +64,9 @@ const run = async () => {
     )
   ).hardHostBlocks(QUANTUM, QUANTUM, RATE)
   check(
-    abi.anira_contract_hard_budget(contract.native()).explicit_ms === 5,
-    'the contract file is read as written (budget 5 ms)'
+    abi.anira_contract_hard_budget(contract.native()).kind ===
+      anira_budget_kind.ANIRA_BUDGET_MEASURED,
+    'the contract file is read as written (the measured budget)'
   )
 
   // The file's warm-up runs at prepare on the pool's Workers, which start with the context:

@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "../../extras/models/model_files.h"
+#include "../support/file_contracts.h"
 #include "../support/log_record_collector.h"
 #include "capi/handler.h"
 #include "scheduler/Core.h"
@@ -293,11 +294,12 @@ inline anira::ModelConfig mono_stream_model(int64_t window = k_block, uint32_t m
     return model;
 }
 
-/// A bundled contract file with the host blocks patched in.
+/// A bundled contract file with its 2.x figures pinned (pinned_file_contract: the file itself
+/// runs the measured defaults) and the host blocks patched in.
 inline anira::ContractHandle file_contract(const char* contract_json,
                                            uint32_t block,
                                            double host_rate = k_rate) {
-    anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
+    anira::ContractHandle contract = pinned_file_contract(contract_json);
     contract.hard_host_blocks(block, block, host_rate);
     return contract;
 }

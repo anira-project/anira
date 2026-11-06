@@ -52,6 +52,7 @@
 #include <vector>
 
 #include "../../extras/models/model_files.h"
+#include "../support/file_contracts.h"
 #include "../support/log_record_collector.h"
 #include "capi/handles.h"
 #include "capi/port.h"
@@ -2531,9 +2532,12 @@ uint32_t plan_engine(const anira_handler* handler) {
 /// is input slot 1 and `processed_data` output slot 0: the file's order).
 class EngineRig {
 public:
+    /// `as_written`: the contract file as it spells itself (the measured defaults), else with its
+    /// 2.x figures pinned (pinned_file_contract), what the closed-form cases need.
     explicit EngineRig(anira_engine engine,
                        uint32_t host_block_max = k_file_hop,
-                       std::vector<anira_processor_desc> processors = {})
+                       std::vector<anira_processor_desc> processors = {},
+                       bool as_written = false)
         : m_model(ModelConfig::from_file(k_stateful_accumulator_model_json))
         , m_candidates{anira_backend_id{.struct_size = sizeof(anira_backend_id),
                                         .engine = static_cast<uint32_t>(engine),
@@ -2541,7 +2545,8 @@ public:
                                         .engine_id = nullptr}}
         , m_processors(std::move(processors))
         , m_handler(m_context, m_model, m_candidates, m_processors)
-        , m_host_block_max(host_block_max) {
+        , m_host_block_max(host_block_max)
+        , m_as_written(as_written) {
         prepare();
     }
     ~EngineRig() = default;
@@ -2552,7 +2557,8 @@ public:
 
     void prepare() {
         anira::ContractHandle contract =
-            anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
+            m_as_written ? anira::ContractHandle::from_file(k_stateful_accumulator_contract_json)
+                         : anira_test::pinned_file_contract(k_stateful_accumulator_contract_json);
         contract.hard_host_blocks(1, m_host_block_max, k_file_rate);
         ASSERT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
         m_session = anira_test::session_of(m_handler.m_handler);
@@ -2597,6 +2603,7 @@ private:
     std::vector<anira_processor_desc> m_processors;
     anira_test::Handler m_handler;
     uint32_t m_host_block_max;
+    bool m_as_written;
     std::shared_ptr<anira::SessionElement> m_session;
 };
 
@@ -2672,7 +2679,8 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
     }
 }
 
-// The contract file asks for one warm-up inference. It runs at prepare through the session,
+// The contract file runs the defaults (UNTIL_STABLE): four warm-up inferences or more, at prepare
+// through the session,
 // on the inference threads: anira feeds it the pair's read buffer and captures what it produces,
 // so the pass advances the state. The session's second sizing starts the stream over (both
 // buffers zeroed, a new generation, the exclusive engine reset at its first inference), so it
@@ -2682,13 +2690,16 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
     ASSERT_TRUE(anira_test::fresh_core());
     for (const anira_engine engine : file_engines()) {
         SCOPED_TRACE(engine_word(engine));
-        EngineRig rig(engine);
+        EngineRig rig(engine, k_file_hop, {}, /*as_written=*/true);
         ASSERT_TRUE(rig.ready());
         const anira_handler* h = rig.get();
         const anira::capi::HardContract* hard = h->m_contract.hard();
         ASSERT_NE(hard, nullptr);
-        EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_FIXED) << "the contract file's fixed warm-up";
-        EXPECT_EQ(hard->m_warmup_iterations, 1U) << "the contract file's fixed warm-up";
+        EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_UNTIL_STABLE) << "the contract file's defaults";
+        EXPECT_EQ(hard->m_budget, ANIRA_BUDGET_MEASURED) << "the contract file's defaults";
+        const anira_plan_info& row = h->m_report.m_plans.at(anira_handler_get_plan(h));
+        EXPECT_GE(row.warmup_iterations, 4U) << "the pass ran through the session";
+        EXPECT_NE(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
         const std::vector<float> fresh = state_values(h, EngineRig::state_slot());
         ASSERT_EQ(fresh.size(), static_cast<size_t>(k_channels) * k_state_width);
         for (const float value : fresh) { EXPECT_EQ(value, 0.0F); }
@@ -2818,7 +2829,7 @@ public:
 
     anira_status prepare() {
         anira::ContractHandle contract =
-            anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
+            anira_test::pinned_file_contract(k_stateful_accumulator_contract_json);
         contract.hard_host_blocks(1, k_file_hop, k_file_rate);
         return m_handler.prepare(contract);
     }

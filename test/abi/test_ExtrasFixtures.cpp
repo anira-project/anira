@@ -28,6 +28,7 @@
 #include "../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../extras/models/model_files.h"
 #include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../support/file_contracts.h"
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "capi/validate.h"
@@ -216,7 +217,14 @@ void check_files(const char* model_json, const char* contract_json, const Oracle
     }
     const anira::ModelConfig loaded = anira::ModelConfig::from_file(model_json);
     EXPECT_FALSE(loaded.upgraded()) << "a 3.x document";
-    expect_matches(facts_of(loaded, anira::ContractHandle::from_file(contract_json)), oracle);
+    // The file runs the library's defaults; its 2.x figures, the explicit budget and the fixed
+    // warm-up of the 2.x header, live in the tests' one table (k_file_figures), which the oracle
+    // checks here.
+    const anira::ContractHandle file = anira::ContractHandle::from_file(contract_json);
+    ASSERT_NE(file.native()->hard(), nullptr);
+    EXPECT_EQ(file.native()->hard()->m_budget, ANIRA_BUDGET_MEASURED);
+    EXPECT_EQ(file.native()->hard()->m_warmup, ANIRA_WARMUP_UNTIL_STABLE);
+    expect_matches(facts_of(loaded, anira_test::pinned_file_contract(contract_json)), oracle);
 }
 
 /// The builder at its default size equals the file, so the benchmarks sweep the same model.
@@ -412,10 +420,12 @@ TEST(ExtrasFixtures, StatefulAccumulator) {
     EXPECT_FALSE(contract.upgraded());
     const anira::capi::HardContract* hard = contract.native()->hard();
     ASSERT_NE(hard, nullptr);
-    EXPECT_EQ(hard->m_budget, ANIRA_BUDGET_EXPLICIT);
-    EXPECT_EQ(hard->m_budget_ms, 5.0);
-    EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_FIXED);
-    EXPECT_EQ(hard->m_warmup_iterations, 1U);
+    EXPECT_EQ(hard->m_budget, ANIRA_BUDGET_MEASURED) << "the library's defaults";
+    EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_UNTIL_STABLE) << "the library's defaults";
+    const anira_test::FileFigures figures =
+        anira_test::file_figures(k_stateful_accumulator_contract_json);
+    EXPECT_EQ(figures.m_budget_ms, 5.0) << "its 2.x figures, pinned by the suites";
+    EXPECT_EQ(figures.m_warm_up, 1U);
 }
 
 // The bundled TypedGainNetwork files: the gain fixture's tensors at int16, int8 and float16,

@@ -40,6 +40,7 @@
 #include <vector>
 
 #include "../../extras/models/model_files.h"
+#include "../support/file_contracts.h"
 #include "../support/log_record_collector.h"
 #include "../support/v2_documents.h"
 #include "capi/handles.h"
@@ -833,6 +834,15 @@ TEST(AbiPrepare, TheLegacyContractCarriesZeros) {
         ASSERT_NE(gain.native()->hard(), nullptr);
         EXPECT_EQ(gain.native()->hard()->m_on_miss, ANIRA_MISS_BYPASS)
             << "a 3.x file without the key keeps the default";
+        // Every bundled file runs the library's defaults: a measured budget, UNTIL_STABLE.
+        for (const anira_test::FileFigures& figures : anira_test::k_file_figures) {
+            const ContractHandle file = ContractHandle::from_file(figures.m_contract_json);
+            ASSERT_NE(file.native()->hard(), nullptr) << figures.m_contract_json;
+            EXPECT_EQ(file.native()->hard()->m_budget, ANIRA_BUDGET_MEASURED)
+                << figures.m_contract_json;
+            EXPECT_EQ(file.native()->hard()->m_warmup, ANIRA_WARMUP_UNTIL_STABLE)
+                << figures.m_contract_json;
+        }
         const ContractHandle encoder =
             ContractHandle::from_file(k_rave_funk_drum_encoder_contract_json);
         ASSERT_NE(encoder.native()->hard(), nullptr);
