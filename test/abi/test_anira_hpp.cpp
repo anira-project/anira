@@ -1467,8 +1467,71 @@ TEST(AbiCxx, APostOnlyProcessorLeavesTheDefaultPreProcessRunning) {
     drive(plain.m_handler, 2, plain_in, plain_out);
     ASSERT_FALSE(HasFatalFailure());
     EXPECT_EQ(silent->last().m_pre.load() + silent->last().m_post.load(), 0);
-    EXPECT_EQ(silent->last().m_resets.load(), 1) << "the reset slot is filled whatever the mask";
+    EXPECT_EQ(silent->last().m_resets.load(), 0) << "no k_reset, no pre or post: no reset slot";
     expect_scaled_passthrough(plain.m_handler, plain_in, plain_out, 1.0F);
+}
+
+// Under a Hard contract a processor of inference hooks alone runs nothing on the driving thread:
+// it prepares without ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST and its reset slot stays empty. One
+// that names k_reset fills reset, which runs on the driving thread: refused without the promise,
+// with it its reset runs for the first chunk. A pre_process brings reset along unnamed.
+TEST(AbiCxx, AProcessorOfInferenceHooksAloneNeedsNoPrePostPromise) {
+    const anira_test::Context context;
+    const ModelConfig model = processor_stream_model();
+    const auto prepared = [&](uint32_t mask, uint32_t flags) {
+        auto processor = std::make_shared<CountingProcessor>(mask);
+        processor->m_flags = flags;
+        anira::Pipeline pipe;
+        pipe.add_inference(model, {custom_row()});
+        pipe.add_processor(processor);
+        anira_test::add_passthrough(pipe.native());
+        auto handler = std::make_unique<CHandler>(context, pipe);
+        EXPECT_EQ(handler->m_status, ANIRA_OK) << handler->m_err.message;
+        const anira_status status = handler->prepare(anira_test::explicit_contract());
+        return std::make_pair(std::move(handler), std::make_pair(status, processor));
+    };
+    {
+        auto [handler, result] =
+            prepared(anira::Processor::k_before_inference | anira::Processor::k_after_inference,
+                     ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS);
+        ASSERT_EQ(result.first, ANIRA_OK) << handler->m_err.message;
+        std::vector<float> in;
+        std::vector<float> out;
+        drive(handler->m_handler, 2, in, out);
+        ASSERT_FALSE(HasFatalFailure());
+        EXPECT_EQ(result.second->last().m_before.load(), 2);
+        EXPECT_EQ(result.second->last().m_resets.load(), 0) << "no reset slot";
+    }
+    {
+        auto [handler, result] =
+            prepared(anira::Processor::k_before_inference | anira::Processor::k_reset,
+                     ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS);
+        EXPECT_EQ(result.first, ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string_view(handler->m_err.message).find("reset is filled"),
+                  std::string_view::npos)
+            << handler->m_err.message;
+    }
+    {
+        auto [handler, result] =
+            prepared(anira::Processor::k_before_inference | anira::Processor::k_reset,
+                     ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS | ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST);
+        ASSERT_EQ(result.first, ANIRA_OK) << handler->m_err.message;
+        std::vector<float> in;
+        std::vector<float> out;
+        drive(handler->m_handler, 2, in, out);
+        ASSERT_FALSE(HasFatalFailure());
+        EXPECT_EQ(result.second->last().m_resets.load(), 1) << "k_reset: the first chunk";
+    }
+    {
+        auto [handler, result] =
+            prepared(anira::Processor::k_pre_process, ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST);
+        ASSERT_EQ(result.first, ANIRA_OK) << handler->m_err.message;
+        std::vector<float> in;
+        std::vector<float> out;
+        drive(handler->m_handler, 2, in, out);
+        ASSERT_FALSE(HasFatalFailure());
+        EXPECT_EQ(result.second->last().m_resets.load(), 1) << "pre_process brings reset along";
+    }
 }
 
 // Pipeline::add_processor refuses what it cannot describe, and a refused add keeps no copy of
