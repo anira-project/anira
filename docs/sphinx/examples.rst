@@ -80,6 +80,12 @@ to the host (``setLatencySamples``, the CLAP latency extension) for compensation
 under a host that changes its block size would miss blocks instead. A host that changes the size
 between calls can still miss a block, rarely (`#228 <https://github.com/anira-project/anira/issues/228>`_).
 
+Both offer as backends the engines this build compiled in (``anira::enabled_engines()``) that the
+model file has an entry for, then the bypass, last. The default is ONNX Runtime where the build has
+it; JUCE variant 3 defaults to LibTorch, since the stateful LSTM's ONNX export starts every
+inference from a zero state. A backend whose engine cannot run the model on the machine (no plan in
+the report) runs the bypass plan and says so.
+
 Both act on the verdict of the plan they run (:ref:`usage-plan-report`): a ``NOT_REALTIME``
 backend stays on the bypass plan until the user chooses "Try nonetheless", and an offline render is
 never held.
@@ -117,8 +123,7 @@ never held.
          planar tensor
 
 - The "Backend Type" parameter stores its choice in an atomic and ``processBlock`` applies it: the
-  plan that runs the chosen engine (``PlanReport::find``, then ``set_plan``; nothing changes when
-  the build or the model has no such plan).
+  plan that runs the chosen engine (``PlanReport::find``, then ``set_plan``).
 - ``PluginEditor`` holds the parameters' controls, a verdict line and a "Try nonetheless" button,
   shown while the chosen backend waits, polling the processor at 4 Hz. ``prepareToPlay`` reads the
   row of each backend's plan and writes it to ``juce::Logger`` (variant 7 both handlers' rows,

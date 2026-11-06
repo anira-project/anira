@@ -22,22 +22,36 @@ namespace clap_plugin_example {
 
 namespace {
 
-/// The Backend choices: their names and the plans they stand for.
-constexpr std::array<const char*, 6> k_backend_names{"OnnxRuntime",
-                                                     "LibTorch",
-                                                     "TensorFlowLite",
-                                                     "Bypassed",
-                                                     "LiteRt",
-                                                     "ExecuTorch"};
-constexpr std::array<anira::PlanQuery, 6> k_backend_queries{{
-    {.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}},
-    {.backend = {.engine = ANIRA_ENGINE_LIBTORCH}},
-    {.backend = {.engine = ANIRA_ENGINE_TFLITE}},
-    {.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = k_bypass_engine_id}},
-    {.backend = {.engine = ANIRA_ENGINE_LITERT}},
-    {.backend = {.engine = ANIRA_ENGINE_EXECUTORCH}},
-}};
-constexpr size_t k_bypassed = 3;
+/// The Backend choices: in this order, each engine this build compiled in
+/// (anira::enabled_engines) that the model config has an entry for, then Bypassed, the bypass
+/// engine's plan.
+std::vector<BackendChoice> backend_choices(const anira::ModelConfig& config) {
+    constexpr std::array<BackendChoice, 5> k_engines{{
+        {"OnnxRuntime", {.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}}},
+        {"LibTorch", {.backend = {.engine = ANIRA_ENGINE_LIBTORCH}}},
+        {"LiteRt", {.backend = {.engine = ANIRA_ENGINE_LITERT}}},
+        {"TensorFlowLite", {.backend = {.engine = ANIRA_ENGINE_TFLITE}}},
+        {"ExecuTorch", {.backend = {.engine = ANIRA_ENGINE_EXECUTORCH}}},
+    }};
+    const std::vector<anira::BackendId> built = anira::enabled_engines();
+    std::vector<BackendChoice> choices;
+    for (const BackendChoice& choice : k_engines) {
+        const anira::EngineKind engine = choice.query.backend.engine;
+        const bool in_build =
+            std::any_of(built.begin(), built.end(), [engine](const anira::BackendId& id) {
+                return id.engine == static_cast<uint32_t>(engine);
+            });
+        bool in_model = false;
+        for (uint32_t i = 0; i < config.model_count(); ++i) {
+            if (config.model_engine(i).kind == engine) { in_model = true; }
+        }
+        if (in_build && in_model) { choices.push_back(choice); }
+    }
+    choices.push_back(
+        {"Bypassed",
+         {.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = k_bypass_engine_id}}});
+    return choices;
+}
 
 const char* outcome_word(uint32_t outcome) {
     switch (outcome) {
@@ -75,7 +89,10 @@ AniraClapPluginExample::AniraClapPluginExample(const clap_host* host)
                           anira::Pipeline()
                               .add_engine(std::make_shared<BypassEngine>())
                               .add_inference(m_model_config)
-                              .add_processor(std::make_shared<HybridNNProcessor>())) {
+                              .add_processor(std::make_shared<HybridNNProcessor>()))
+    , m_backends(backend_choices(m_model_config))
+    , m_bypassed(m_backends.size() - 1) {
+    m_param_backend = static_cast<double>(k_default_backend);
     m_param_to_value[pmDryWet] = &m_param_dry_wet;
     m_param_to_value[pmBackend] = &m_param_backend;
     m_param_to_value[pmTryNonetheless] = &m_param_try_nonetheless;
@@ -115,8 +132,8 @@ bool AniraClapPluginExample::paramsInfo(uint32_t paramIndex, clap_param_info* in
             strncpy(info->name, "Backend", CLAP_NAME_SIZE);
             strncpy(info->module, "Demo", CLAP_NAME_SIZE);
             info->min_value = 0;
-            info->max_value = 5;
-            info->default_value = 3;
+            info->max_value = static_cast<double>(m_backends.size() - 1);
+            info->default_value = static_cast<double>(k_default_backend);
             info->flags |= CLAP_PARAM_IS_STEPPED;
             break;
         case 2:
@@ -148,7 +165,11 @@ bool AniraClapPluginExample::paramsValueToText(clap_id paramId,
 
     switch (pid) {
         case pmDryWet: sValue = n2s(value) + " %"; break;
-        case pmBackend: sValue = k_backend_names.at(static_cast<size_t>(value)); break;
+        case pmBackend:
+            if (const auto choice = static_cast<size_t>(value); choice < m_backends.size()) {
+                sValue = m_backends[choice].name;
+            }
+            break;
         case pmTryNonetheless: sValue = value >= 0.5 ? "On" : "Off"; break;
     }
 
@@ -163,8 +184,8 @@ bool AniraClapPluginExample::paramsTextToValue(clap_id paramId,
     switch (paramId) {
         case pmDryWet: *value = std::clamp(std::atof(display), 0., 100.); return true;
         case pmBackend:
-            for (size_t i = 0; i < k_backend_names.size(); ++i) {
-                if (strcmp(display, k_backend_names[i]) == 0) {
+            for (size_t i = 0; i < m_backends.size(); ++i) {
+                if (strcmp(display, m_backends[i].name) == 0) {
                     *value = static_cast<double>(i);
                     return true;
                 }
@@ -208,24 +229,30 @@ bool AniraClapPluginExample::activate(double sampleRate,
         std::cerr << "anira: " << error.what() << std::endl;
         return false;
     }
-    // What prepare measured: per Backend choice, the row of the plan it runs (a choice whose
-    // engine this build or the model lacks has none), and its real-time verdict for
-    // apply_backend. The figures are an estimate at activate, measured on this machine under its
+    // What prepare measured: per Backend choice, the row of the plan it runs, and whether it has
+    // a plan and the plan's real-time verdict, for apply_backend. A choice can lack a plan
+    // although the build and the model have its engine: the engine could not run the model on
+    // this machine. The figures are an estimate at activate, measured on this machine under its
     // load of the moment.
     // The render mode the host set before this activate (clap.render): an offline render holds
     // nothing.
     m_applied_offline = m_offline.load();
     const std::vector<anira_plan_info> rows = m_plan_report.plans();
-    for (size_t choice = 0; choice < k_backend_queries.size(); ++choice) {
+    for (size_t choice = 0; choice < m_backends.size(); ++choice) {
         m_verdicts[choice] = ANIRA_RT_UNMEASURED;
-        const std::optional<uint32_t> plan = m_plan_report.find(k_backend_queries[choice]);
-        if (!plan.has_value()) { continue; }
+        const std::optional<uint32_t> plan = m_plan_report.find(m_backends[choice].query);
+        m_has_plan[choice] = plan.has_value();
+        if (!plan.has_value()) {
+            std::cout << "anira: Backend '" << m_backends[choice].name
+                      << "': no plan on this machine: it runs Bypassed" << std::endl;
+            continue;
+        }
         const anira_plan_info& row = rows[*plan];
         m_verdicts[choice] = row.rt_verdict;
         // Three significant digits, as the other examples print them, into a stream of its own:
         // a plugin leaves the host's std::cout formatting as it found it.
         std::ostringstream line;
-        line << std::setprecision(3) << "anira: " << k_backend_names[choice] << ": budget "
+        line << std::setprecision(3) << "anira: " << m_backends[choice].name << ": budget "
              << row.budget_ms << " ms (measured " << row.measured_ms << " ms, median "
              << row.median_ms << " ms, " << row.warmup_iterations << " warm-up inferences, "
              << outcome_word(row.warmup_outcome) << "); real-time factor " << row.rt_factor
@@ -234,7 +261,7 @@ bool AniraClapPluginExample::activate(double sampleRate,
         if (row.rt_verdict == ANIRA_RT_NOT_REALTIME && m_param_try_nonetheless < 0.5 &&
             !m_applied_offline) {
             std::ostringstream held;
-            held << std::setprecision(3) << "anira: Backend '" << k_backend_names[choice]
+            held << std::setprecision(3) << "anira: Backend '" << m_backends[choice].name
                  << "' runs at " << row.rt_factor << "x real time on this machine ("
                  << row.rt_parallel
                  << (row.rt_parallel == 1 ? " parallel inference" : " parallel inferences")
@@ -243,7 +270,7 @@ bool AniraClapPluginExample::activate(double sampleRate,
         }
     }
     // The handler starts on the model's default plan; the Backend choice the host shows (its
-    // default "Bypassed", or what it set before this activate) is applied over the new report.
+    // default, or what it set before this activate) is applied over the new report.
     apply_backend();
 
     m_audio = anira::Tensor::from_host_planar<float>(
@@ -336,14 +363,15 @@ void AniraClapPluginExample::paramsFlush(const clap_input_events* in,
 
 void AniraClapPluginExample::apply_backend() noexcept {
     auto choice = static_cast<size_t>(m_param_backend);
-    if (choice >= k_backend_queries.size()) { return; }
-    // Not real-time here, not accepted, and played against the clock: the Bypassed plan (the
-    // audio passes through, time-aligned, and the slow model costs no CPU meanwhile).
-    if (m_verdicts[choice] == ANIRA_RT_NOT_REALTIME && m_param_try_nonetheless < 0.5 &&
-        !m_applied_offline) {
-        choice = k_bypassed;
+    if (choice >= m_backends.size()) { return; }
+    // No plan here, or not real-time here, not accepted, and played against the clock: the
+    // Bypassed plan (the audio passes through, time-aligned, and the slow model costs no CPU
+    // meanwhile).
+    if (!m_has_plan[choice] || (m_verdicts[choice] == ANIRA_RT_NOT_REALTIME &&
+                                m_param_try_nonetheless < 0.5 && !m_applied_offline)) {
+        choice = m_bypassed;
     }
-    if (const std::optional<uint32_t> plan = m_plan_report.find(k_backend_queries[choice])) {
+    if (const std::optional<uint32_t> plan = m_plan_report.find(m_backends[choice].query)) {
         m_inference_handler.set_plan(*plan);
     }
 }

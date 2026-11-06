@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Examples:** the JUCE plugin's "Backend Type" and the CLAP plugin's "Backend" list only the engines the build compiled in (`anira::enabled_engines()`) that the model file has an entry for, then the bypass ("BYPASS", "Bypassed") last; the default is ONNX Runtime where the build has it (JUCE variant 3 defaults to LibTorch: the stateful LSTM's ONNX export starts every inference from a zero state; variants 6 and 7 have LibTorch only); the CLAP choices are reordered (Bypassed was index 3).
+
+### Fixed
+
+- **Examples:** a JUCE or CLAP backend choice without a plan (an engine the build lacks, such as ExecuTorch in a shared build) kept the previous plan running while the parameter showed the choice; the list no longer offers it, and a choice whose engine cannot run the model on the machine runs the bypass plan and says so (#243).
+
 ## [v3.0.0-alpha.3] - 2026-11-06
 
 The Hard contract's defaults run: a measured budget and the `UNTIL_STABLE` warm-up pass, which times every plan at prepare, keeps the model's figure for later prepares and reports each plan's real-time factor and verdict (`anira_plan_info.rt_verdict`) for a host to act on ("Try nonetheless"). Model tensors run in any of the ten dtypes anira names, every built-in engine binds in place where its runtime accepts it, and the plan report states per slot and direction what the edge costs and who moves the bytes (ABI 0.3: 228 promised names, 4 draft, 12 Emscripten-only; `anira_check_abi` accepts the exact ABI version alone).
