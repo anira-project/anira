@@ -252,7 +252,10 @@ naming the engine (``the engine 'com.example.myengine' refused load: it returned
 while a loaded model of it holds it, so a failed load or the last unload frees what init built right
 there (never at process exit), and the next load makes a new object. Its init: ONNX Runtime and
 LiteRT create their environment (at anira's log level; LiteRT with the accelerators its registration
-finds, which a load is checked against), ExecuTorch initialises its runtime, LibTorch sets its
+finds, which a load is checked against), ExecuTorch initialises its runtime and, once per
+process, shrinks the runtime's process-wide thread pool to the calling thread (a kernel outside the
+XNNPACK delegate would otherwise start a worker per further core, which a statically linked plugin
+joins inside ``FreeLibrary`` on Windows, under the loader lock), LibTorch sets its
 intra-op threads to one (OpenBLAS's too on Linux aarch64, where ``torch::set_num_threads`` does not
 reach it) and c10's log level; TensorFlow Lite has nothing per process. A load before the init is
 ``ANIRA_ERROR_INVALID_STATE``, for a built-in and a registered engine alike.

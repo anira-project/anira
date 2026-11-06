@@ -15,8 +15,10 @@
  * delegate of every method is loaded with its runtime options set to no shared workspace and
  * no weight cache (the process-wide mutexes the prebuilt runtime otherwise takes around every
  * call), and it captures its thread pool at that load under NoThreadPoolGuard, so every call
- * runs inline on the inference thread that made it. File-local over anira::engine::Model:
- * nothing of ExecuTorch enters a public header.
+ * runs inline on the inference thread that made it. The runtime's process-wide thread pool, which
+ * a kernel outside the delegate reaches through parallel_for whatever the guard says, is shrunk to
+ * the calling thread at the engine's first init (shrink_thread_pool_of_the_process). File-local
+ * over anira::engine::Model: nothing of ExecuTorch enters a public header.
  */
 #ifdef USE_EXECUTORCH
 
@@ -57,6 +59,7 @@
 #include "executorch/extension/module/module.h"
 #include "executorch/extension/tensor/tensor_ptr.h"
 #include "executorch/extension/tensor/tensor_ptr_maker.h"
+#include "executorch/extension/threadpool/threadpool.h"
 #include "executorch/extension/threadpool/threadpool_guard.h"
 #include "executorch/runtime/backend/backend_options_map.h"
 #include "executorch/runtime/backend/interface.h"
@@ -212,6 +215,43 @@ void set_xnnpack_options_of_the_process() {
                           in_effect.has_value() ? in_effect->m_workspace_sharing_mode : -1,
                           in_effect.has_value() && in_effect->m_weight_cache_enabled ? 1 : 0,
                           k_xnnpack_workspace_per_instance);
+    }
+}
+
+// The runtime's process-wide thread pool, shrunk to the calling thread: no worker threads. anira
+// runs every inference on one thread, its own pool's, as it runs every engine (ONNX Runtime,
+// LiteRT and LibTorch at one intra-op thread); NoThreadPoolGuard holds the XNNPACK delegate to
+// that, but a kernel outside the delegate reaches the pool through parallel_for, which takes it
+// whatever the guard says, and the pool's first use starts a worker per further core. Those
+// workers outlive every anira object, and in a binary that is unloaded (a statically linked
+// plugin) the pool's static destructor joins them inside the loader's unload, which on Windows
+// holds the loader lock a thread needs to exit: FreeLibrary never returns. The runtime sizes its
+// pool only through ThreadPool::_unsafe_reset_threadpool (deprecated in 1.3.1 as experimental):
+// get_threadpool() makes the pool with its workers and the reset joins them at once, here at the
+// engine's first init on the control thread, before any model of the process runs.
+void shrink_thread_pool_of_the_process() {
+    executorch::extension::threadpool::ThreadPool* pool =
+        executorch::extension::threadpool::get_threadpool();
+    if (pool == nullptr || pool->get_thread_count() <= 1) { return; }
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    static_cast<void>(pool->_unsafe_reset_threadpool(1));
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
+    if (pool->get_thread_count() != 1) {
+        ANIRA_LOG_WARNING(log_group::k_engine_executorch,
+                          "executorch: the runtime's thread pool kept %zu threads after its "
+                          "reset to one: a kernel outside the delegate may run on them, and an "
+                          "unloaded binary may wait for them",
+                          pool->get_thread_count());
     }
 }
 
@@ -734,9 +774,11 @@ anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
 
 /// The engine object: the runtime's global initialisation (executorch::runtime::runtime_init,
 /// the platform abstraction layer; the kernels and the backends register at static
-/// initialisation) and the XNNPACK delegate's options for the process (a workspace per delegate
-/// instance, no weight cache: set_xnnpack_options_of_the_process, read back), run once at the
-/// engine's init; the thread-pool guard is per call. The core hands out one object per engine
+/// initialisation) with its process-wide thread pool shrunk to the calling thread
+/// (shrink_thread_pool_of_the_process), once per process, and the XNNPACK delegate's options for
+/// the process (a workspace per delegate instance, no weight cache:
+/// set_xnnpack_options_of_the_process, read back) at every init; the thread-pool guard is per
+/// call. The core hands out one object per engine
 /// while a loaded model holds it (Core::builtin_engine); the next one after the last let go
 /// runs its init again.
 class ExecuTorchEngine final : public BuiltinEngine {
@@ -749,7 +791,10 @@ protected:
         // its contract), the delegate's options with every object. The flag is trivially
         // destructible: nothing is registered for static teardown.
         static std::once_flag s_runtime_init;
-        std::call_once(s_runtime_init, [] { executorch::runtime::runtime_init(); });
+        std::call_once(s_runtime_init, [] {
+            executorch::runtime::runtime_init();
+            shrink_thread_pool_of_the_process();
+        });
         set_xnnpack_options_of_the_process();
     }
 
@@ -907,6 +952,12 @@ bool executorch_xnnpack_options(int& workspace_sharing_mode, bool& weight_cache_
     workspace_sharing_mode = in_effect->m_workspace_sharing_mode;
     weight_cache_enabled = in_effect->m_weight_cache_enabled;
     return true;
+}
+
+size_t executorch_thread_pool_threads() {
+    const executorch::extension::threadpool::ThreadPool* pool =
+        executorch::extension::threadpool::get_threadpool();
+    return pool == nullptr ? 0 : pool->get_thread_count();
 }
 
 std::vector<ProviderInfo> executorch_providers() {
