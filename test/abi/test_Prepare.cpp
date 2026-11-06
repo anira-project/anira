@@ -51,7 +51,6 @@
 #include "scheduler/Core.h"
 #include "scheduler/LatencyCalculator.h"
 #include "scheduler/SessionElement.h"
-#include "scheduler/Warmup.h"
 
 namespace {
 
@@ -1893,7 +1892,7 @@ TEST(AbiWarmup, AnEntryCountThatMovesPreparesTheUserCodeAgain) {
     const anira::LatencyCalculator at_pass(handler.m_handler->m_derived,
                                            hard,
                                            session->m_num_instances,
-                                           static_cast<double>(anira::clock_step_ns()) / 1e6);
+                                           anira::LatencyCalculator::pass_sizing_ms(hard));
     const anira::LatencyCalculator at_figure(handler.m_handler->m_derived,
                                              hard,
                                              session->m_num_instances,

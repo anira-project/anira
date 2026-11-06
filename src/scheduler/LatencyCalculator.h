@@ -245,6 +245,21 @@ public:
                               double time_ms) noexcept;
 
     /**
+     * @brief The budget a MEASURED prepare sizes the session for before its warm-up pass, in ms
+     *
+     * One clock step (clock_step_ns()), the smallest figure a pass can measure; or, when the
+     * clock steps finer, twice the largest inference time the sizing treats as an instant one
+     * (the batch delay's ceiling tolerance, 1e-6 host blocks of host_block_max: every time at
+     * or below it sizes the session as no inference time does). Every time a pass measures lies
+     * above that tolerance, so this budget sizes the session as every figure below the first
+     * struct edge does, and the sizing after the pass usually keeps the entry count.
+     *
+     * @param hard The contract's Hard half (its host_block_max and host_rate)
+     * @return The budget in ms, at least one clock step
+     */
+    static double pass_sizing_ms(const capi::HardContract& hard);
+
+    /**
      * @brief The host block in hops, @f$\rho = B/R@f$ as a reduced fraction
      */
     Rational get_block_hops() const;

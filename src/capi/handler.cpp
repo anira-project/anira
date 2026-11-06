@@ -2289,12 +2289,13 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                           return m.m_source == PlanMeasurement::Source::None;
                       });
     // The first sizing: the explicit budget; under a MEASURED one the slowest plan's figure when
-    // every plan has one (no pass: this is the only sizing), else for the pass a single clock
-    // step, the smallest figure there is (it sizes the session as every figure below the first
-    // struct edge does, so the second sizing below usually keeps the entry count).
+    // every plan has one (no pass: this is the only sizing), else for the pass the smallest
+    // figure there is above the sizing's instant-inference tolerance (LatencyCalculator::
+    // pass_sizing_ms: it sizes the session as every figure below the first struct edge does, so
+    // the second sizing below usually keeps the entry count).
     double first_budget_ms = prepared_hard.m_budget_ms;
     if (measured) {
-        first_budget_ms = static_cast<double>(anira::clock_step_ns()) / 1e6;
+        first_budget_ms = anira::LatencyCalculator::pass_sizing_ms(prepared_hard);
         if (!pass) {
             for (const PlanMeasurement& known : measurements) {
                 first_budget_ms = std::max(first_budget_ms, known.m_figure.m_figure.m_measured_ms);

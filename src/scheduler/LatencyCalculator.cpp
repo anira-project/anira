@@ -10,6 +10,7 @@
 
 #include "../capi/handles.h"
 #include "../capi/validate.h"
+#include "Warmup.h"
 
 namespace anira {
 
@@ -435,6 +436,13 @@ double LatencyCalculator::hop_periods(const capi::Derived& derived,
     const double hop = anchor_hop(derived);
     if (!(hop > 0.0)) { return 0.0; }
     return time_ms * hard.m_host_rate / (1000.0 * hop);
+}
+
+double LatencyCalculator::pass_sizing_ms(const capi::HardContract& hard) {
+    const double clock_step_ms = static_cast<double>(clock_step_ns()) / 1e6;
+    if (!(hard.m_host_rate > 0.0)) { return clock_step_ms; }
+    const double instant_ms = k_ceil_epsilon * 1000.0 * hard.m_host_block_max / hard.m_host_rate;
+    return std::max(clock_step_ms, 2.0 * instant_ms);
 }
 
 bool LatencyCalculator::is_feasible() const {

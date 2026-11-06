@@ -713,3 +713,23 @@ TEST(LatencyCalculatorClosedForm, RejectsAnAnchorWithoutAStream) {
     EXPECT_THROW(LatencyCalculator(derived, hard_contract(2048.0, 48000.0, 40.0, 0.0), 2),
                  std::invalid_argument);
 }
+
+// The budget a MEASURED prepare sizes the session for before its pass lies above the sizing's
+// tolerance for an instant inference, whatever the clock's step: it sizes the session as a figure
+// of a microsecond does (a pass never measures less), where a budget below the tolerance sizes it
+// as no inference time does. Sized at one clock step, a clock stepping finer than the tolerance
+// (10.7 ns at 512 samples of 48 kHz) moved the entry count of every pass and prepared the user
+// code twice.
+TEST(LatencyCalculatorClosedForm, ThePassSizingLiesAboveTheInstantTolerance) {
+    capi::Derived const derived = streams({512}, {512});
+    capi::HardContract const hard = hard_contract(512.0, 48000.0, 0.0, 0.0);
+    double const tolerance_ms = 1e-6 * 1000.0 * 512.0 / 48000.0;
+    double const sizing_ms = LatencyCalculator::pass_sizing_ms(hard);
+    EXPECT_GT(sizing_ms, tolerance_ms);
+    LatencyCalculator const at_sizing(derived, hard, 4, sizing_ms);
+    LatencyCalculator const at_microsecond(derived, hard, 4, 1e-3);
+    LatencyCalculator const below_tolerance(derived, hard, 4, tolerance_ms / 2.0);
+    EXPECT_EQ(at_sizing.get_num_structs(), at_microsecond.get_num_structs());
+    EXPECT_NE(below_tolerance.get_num_structs(), at_microsecond.get_num_structs())
+        << "the edge the pass sizing steps over is gone";
+}
