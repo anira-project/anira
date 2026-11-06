@@ -9,7 +9,7 @@ no processor is needed. Both halves have the role ``state``, and the input names
 fed from. The bundled StatefulAccumulatorNetwork
 (``extras/models/model-pool/stateful_accumulator.model.json``) is the smallest instance: a stereo
 stream of 64 samples per inference and a ``[1, 2, 2]`` state, per channel a running sum and a
-block counter. Trimmed to one engine:
+block counter. Trimmed to one engine, and without the windows (the fixed Time extent is the window):
 
 .. code-block:: json
 
@@ -22,11 +22,11 @@ block counter. Trimmed to one engine:
         { "name": "state_in", "dtype": "float32", "role": "state",
           "axes": [["batch", 1], ["channel", 2], ["any", 2]], "state_source": "state_out" },
         { "name": "data", "dtype": "float32", "role": "streamed",
-          "axes": [["batch", 1], ["channel", 2], ["time", 64]], "window": { "min": 64, "max": 64 } }
+          "axes": [["batch", 1], ["channel", 2], ["time", 64]] }
       ],
       "outputs": [
         { "name": "processed_data", "dtype": "float32", "role": "streamed",
-          "axes": [["batch", 1], ["channel", 2], ["time", 64]], "window": { "min": 64, "max": 64 } },
+          "axes": [["batch", 1], ["channel", 2], ["time", 64]] },
         { "name": "state_out", "dtype": "float32", "role": "state",
           "axes": [["batch", 1], ["channel", 2], ["any", 2]] }
       ]

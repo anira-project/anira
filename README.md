@@ -35,10 +35,8 @@ anira takes its configuration from two JSON files that travel with the model: th
 ```json
 {
   "models": [ { "engine": "onnxruntime", "path": "model.onnx" } ],
-  "inputs":  [ { "name": "audio_in",  "axes": [["time", 256], ["channel", 1], ["any", 1]],
-                 "window": { "min": 256, "max": 256 } } ],
-  "outputs": [ { "name": "audio_out", "axes": [["time", 256], ["any", 1]],
-                 "window": { "min": 256, "max": 256 } } ]
+  "inputs":  [ { "name": "audio_in",  "axes": [["time", 256], ["channel", 1], ["any", 1]] } ],
+  "outputs": [ { "name": "audio_out", "axes": [["time", 256], ["any", 1]] } ]
 }
 ```
 

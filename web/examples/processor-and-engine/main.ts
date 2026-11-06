@@ -26,7 +26,7 @@ import { DOUBLE_ENGINE } from './double-engine'
 import workerModule from './double-engine.ts?worker&url'
 import processorModule from './gain-processor.ts?worker&url'
 
-// The model's window: 128 samples per inference.
+// 128 samples per inference: the fixed Time extent is the model's window.
 const WINDOW = 128
 
 export type GainExample = {
@@ -83,7 +83,6 @@ export async function createGainExample(
       ['channel', 1],
       ['time', WINDOW],
     ],
-    window: { min: WINDOW, max: WINDOW },
   })
   const model = await ModelConfig.fromJson(
     anira,

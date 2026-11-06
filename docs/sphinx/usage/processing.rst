@@ -165,13 +165,11 @@ Streamed audio tensor at slot 0 of each side, a Static ``control`` input ``[1, 1
 
     {
       "inputs": [
-        { "name": "audio_in", "axes": [["batch", 1], ["channel", 1], ["time", 2048]],
-          "window": { "min": 2048, "max": 2048 } },
+        { "name": "audio_in", "axes": [["batch", 1], ["channel", 1], ["time", 2048]] },
         { "name": "control", "role": "static", "axes": [["batch", 1], ["channel", 1], ["any", 4]] }
       ],
       "outputs": [
-        { "name": "audio_out", "axes": [["batch", 1], ["channel", 1], ["time", 2048]],
-          "window": { "min": 2048, "max": 2048 } },
+        { "name": "audio_out", "axes": [["batch", 1], ["channel", 1], ["time", 2048]] },
         { "name": "confidence", "role": "static", "axes": [["batch", 1], ["channel", 1], ["any", 1]] }
       ]
     }
