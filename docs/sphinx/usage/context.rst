@@ -94,7 +94,7 @@ engine and provider its runtime reports usable on this machine, ``ANIRA_PROVIDER
 A custom engine belongs to a pipeline, so its rows are the pipeline's:
 ``pipe.capabilities(context).backends()`` / ``.edge(from, to)``
 (``anira_pipeline_capabilities_backends`` / ``_edge``) lists the context's rows and then, per custom
-engine, one row per provider its ``query`` reports usable (:doc:`../custom_engines`).
+engine, one row per provider its ``query`` reports usable (:ref:`engines-capabilities`).
 
 .. _usage-provider-options:
 

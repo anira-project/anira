@@ -4,6 +4,8 @@ Plugins and hosts
 What a plugin that embeds anira must know about the host it runs in: engine symbols, shared
 engine libraries, a host's own tanh-lib, and unloading.
 
+.. _plugins-engine-symbols:
+
 Keeping engine symbols private
 ------------------------------
 

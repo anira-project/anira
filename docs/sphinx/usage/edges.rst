@@ -59,7 +59,7 @@ one class outside the scale:
 ExecuTorch output on a device delegate), and the edge then has the worse move's class. The rule is
 per direction: an input slot is a device runtime's upload, an output its readback, with the same
 class and mover both ways for a built-in provider and each its own reason; a registered engine
-states its own per slot (:doc:`../custom_engines`).
+states its own per slot (:ref:`engines-edges`).
 
 The memory kind
 ---------------
