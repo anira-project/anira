@@ -369,4 +369,21 @@ TEST(AdapterExecuTorch, TheEngineInitSetsTheXnnpackOptionsOfTheProcess) {
     EXPECT_FALSE(weight_cache_enabled);
 }
 
+// The engine object's first init shrinks the runtime's process-wide thread pool to the calling
+// thread: a kernel outside the delegate reaches it through parallel_for whatever
+// NoThreadPoolGuard says, and its workers would outlive every anira object; a statically linked
+// plugin then hangs in FreeLibrary on Windows, where the pool's static destructor joins them
+// under the loader lock (LibraryUnload.UnloadWithLiveSessionIsJoinedByHook on the static
+// Windows legs).
+TEST(AdapterExecuTorch, TheEngineInitLeavesTheRuntimesThreadPoolWithoutWorkers) {
+    const std::shared_ptr<anira::engine::BuiltinEngine> engine =
+        anira::engine::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH);
+    ASSERT_NE(engine, nullptr);
+    anira_init_info info = ANIRA_INIT_INFO_INIT;
+    info.log_level = static_cast<uint32_t>(anira::get_log_level());
+    engine->ensure_init(info);
+    EXPECT_EQ(anira::engine::executorch_thread_pool_threads(), 1U)
+        << "the calling thread alone, no worker threads";
+}
+
 #endif  // USE_EXECUTORCH

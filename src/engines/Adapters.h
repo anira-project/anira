@@ -11,6 +11,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -117,6 +118,9 @@ std::vector<ProviderInfo> executorch_providers();
 /// the engine object's init set: 0 and off). False when the backend is not registered here or
 /// does not answer.
 bool executorch_xnnpack_options(int& workspace_sharing_mode, bool& weight_cache_enabled);
+/// The threads of the runtime's process-wide thread pool, the calling thread included (what the
+/// engine object's first init shrank it to: 1, no worker threads).
+size_t executorch_thread_pool_threads();
 #endif
 
 }  // namespace anira::engine
