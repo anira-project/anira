@@ -211,6 +211,9 @@ bool AniraClapPluginExample::activate(double sampleRate,
     // engine this build or the model lacks has none), and its real-time verdict for
     // apply_backend. The figures are an estimate at activate, measured on this machine under its
     // load of the moment.
+    // The render mode the host set before this activate (clap.render): an offline render holds
+    // nothing.
+    m_applied_offline = m_offline.load();
     const std::vector<anira_plan_info> rows = m_plan_report.plans();
     for (size_t choice = 0; choice < k_backend_queries.size(); ++choice) {
         m_verdicts[choice] = ANIRA_RT_UNMEASURED;
@@ -223,7 +226,8 @@ bool AniraClapPluginExample::activate(double sampleRate,
                   << " ms, " << row.warmup_iterations << " warm-up inferences, "
                   << outcome_word(row.warmup_outcome) << "); real-time factor " << row.rt_factor
                   << " of " << row.rt_parallel << ": " << verdict_word(row.rt_verdict) << std::endl;
-        if (row.rt_verdict == ANIRA_RT_NOT_REALTIME && m_param_try_nonetheless < 0.5) {
+        if (row.rt_verdict == ANIRA_RT_NOT_REALTIME && m_param_try_nonetheless < 0.5 &&
+            !m_applied_offline) {
             std::cout << "anira: Backend '" << k_backend_names[choice] << "' runs at "
                       << row.rt_factor << "x real time on this machine (" << row.rt_parallel
                       << (row.rt_parallel == 1 ? " parallel inference" : " parallel inferences")
@@ -232,7 +236,6 @@ bool AniraClapPluginExample::activate(double sampleRate,
     }
     // The handler starts on the model's default plan; the Backend choice the host shows (its
     // default "Bypassed", or what it set before this activate) is applied over the new report.
-    m_applied_offline = m_offline.load();
     apply_backend();
 
     m_audio = anira::Tensor::from_host_planar<float>(
