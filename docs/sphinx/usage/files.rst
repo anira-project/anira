@@ -82,7 +82,8 @@ The contract file
 -----------------
 
 One root, ``"hard"`` or ``"async"``; ``edge_cost`` and ``host_domains`` stand beside either. The
-bundled files spell the defaults out:
+defaults, spelled out (the bundled files spell the budget and the warm-up; the RAVE files add
+``"on_miss": "zeros"``):
 
 .. code-block:: json
 

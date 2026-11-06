@@ -375,5 +375,5 @@ At setup, beside ``anira_pipeline_add_inference`` (``user_data``, ``init`` and `
 
 .. note::
     A 2.x ``PrePostProcessor`` runs as a 3.x pipeline's processor through
-    ``anira::v2::LegacyProcessor`` of ``anira/compat/v2.hpp``; :ref:`migration-runtime` maps its
+    ``anira::v2::LegacyProcessor`` of ``anira/compat/v2.hpp``; :ref:`migration-processor` maps its
     virtuals and helpers.

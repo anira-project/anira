@@ -83,7 +83,7 @@ come without keeping it alive: the addition is ``ANIRA_ERROR_INVALID_STATE`` onc
 released, and ``anira_custom_engine_destroy`` still frees the handle.
 
 - **The id** is a reverse-URI name: it contains a ``.``, and the prefix ``anira.`` is anira's own,
-  except ``anira.v2.custom``, the 2.x ``CUSTOM`` backend's id (:ref:`migration-runtime`).
+  except ``anira.v2.custom``, the 2.x ``CUSTOM`` backend's id (:ref:`migration-engine`).
 - **Adding** is legal before or after ``anira_pipeline_add_inference``; a handler copies the
   pipeline at ``anira_handler_create``, so an engine added afterwards does not reach it.
 - **A model entry** names the engine as ``ANIRA_ENGINE_CUSTOM`` with the id (the pair rule;
@@ -413,6 +413,6 @@ pointers, split as the C levels are:
     A 2.x ``BackendBase`` subclass becomes an :cpp:class:`anira::Engine` constructed with
     ``anira::v2::k_custom_engine_id`` (``"anira.v2.custom"``, the id a 2.x ``CUSTOM`` row names);
     ``anira::v2::PassthroughEngine`` of ``anira/compat/v2.hpp`` is ``BackendBase::process`` as such
-    an engine (:ref:`migration-runtime`). The built-in engines are adapters of the same descriptor
+    an engine (:ref:`migration-engine`). The built-in engines are adapters of the same descriptor
     shape (``src/engines/``, internal): where to look for how a real engine binds by name, checks
     the shapes it was handed and splits what one load shares from what one executor owns.
