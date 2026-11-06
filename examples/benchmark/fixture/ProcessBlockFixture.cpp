@@ -158,9 +158,9 @@ void ProcessBlockFixture::initialize_repetition(const anira::ModelConfig& model,
                   << '\n';
         // What prepare measured for the plan: an estimate at prepare, on this machine under its
         // load of the moment. Nothing is held whatever the verdict: a benchmark measures.
-        std::cout << "Budget " << std::setprecision(2) << info.budget_ms << " ms ("
-                  << warmup_words(info) << "); real-time factor " << info.rt_factor << " of "
-                  << info.rt_parallel << ": " << verdict_words(info.rt_verdict) << '\n';
+        std::cout << "Budget " << std::defaultfloat << std::setprecision(3) << info.budget_ms
+                  << " ms (" << warmup_words(info) << "); real-time factor " << info.rt_factor
+                  << " of " << info.rt_parallel << ": " << verdict_words(info.rt_verdict) << '\n';
         std::cout << "-----------------------------------------------------------------------------"
                      "-----------------------------------------------------------\n"
                   << '\n';

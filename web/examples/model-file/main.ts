@@ -132,10 +132,10 @@ export async function createModelFileExample(
     const plans = handler.planReport().plans()
     plans.forEach((row, index) =>
       console.log(
-        `plan ${index}: budget ${row.budgetMs.toFixed(3)} ms (measured ` +
-          `${row.measuredMs.toFixed(3)} ms, median ${row.medianMs.toFixed(3)} ms, ` +
+        `plan ${index}: budget ${row.budgetMs.toPrecision(3)} ms (measured ` +
+          `${row.measuredMs.toPrecision(3)} ms, median ${row.medianMs.toPrecision(3)} ms, ` +
           `${row.warmupIterations} warm-up inferences, outcome ${row.warmupOutcome}); ` +
-          `real-time factor ${row.rtFactor.toFixed(2)} of ${row.rtParallel}, verdict ` +
+          `real-time factor ${row.rtFactor.toPrecision(3)} of ${row.rtParallel}, verdict ` +
           `${row.rtVerdict}`
       )
     )

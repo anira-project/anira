@@ -197,8 +197,8 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
             if (!plan.has_value()) { continue; }
             const anira_plan_info row = m->plan_report.plans()[*plan];
             juce::Logger::writeToLog(juce::String::formatted(
-                "anira: %s: budget %.3f ms (measured %.3f ms, median %.3f ms, %u warm-up "
-                "inferences, %s); real-time factor %.2f of %u (load %.2f): %s",
+                "anira: %s: budget %.3g ms (measured %.3g ms, median %.3g ms, %u warm-up "
+                "inferences, %s); real-time factor %.3g of %u (load %.3g): %s",
                 PluginParameters::backendTypes[static_cast<int>(choice)].toRawUTF8(),
                 row.budget_ms,
                 row.measured_ms,

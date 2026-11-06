@@ -128,8 +128,8 @@ int main(void) {
                 "anira_plan_report_plans");
         for (uint32_t i = 0; i < count && i < 4u; ++i) {
             printf(
-                "plan %u: budget %.3f ms (measured %.3f ms, median %.3f ms, %u warm-up "
-                "inferences, outcome %u), real-time factor %.3f of %u: %s\n",
+                "plan %u: budget %.3g ms (measured %.3g ms, median %.3g ms, %u warm-up "
+                "inferences, outcome %u), real-time factor %.3g of %u: %s\n",
                 i,
                 rows[i].budget_ms,
                 rows[i].measured_ms,
