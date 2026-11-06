@@ -67,7 +67,7 @@ The model file
        lacks), ``entry`` (the entry point)
    * - ``inputs[]``, ``outputs[]``
      - The specs: ``name``, ``dtype`` (the words of :ref:`usage-dtypes`, default ``float32``),
-       ``role`` (``streamed``, ``static``, ``state``, ``buffer``), ``axes`` (``[tag, extent]``, an
+       ``role`` (``streamed``, the default; ``static``, ``state``, ``buffer``), ``axes`` (``[tag, extent]``, an
        extent or ``"dynamic"``), ``window`` (``min``, ``max`` or ``"unbounded"``; optional on a
        Streamed tensor and written back only where declared), ``overlap`` (needs a ``window``),
        ``latency`` (outputs), ``time_ratio``, ``state_source`` (the input half of a State pair)
@@ -82,8 +82,8 @@ The contract file
 -----------------
 
 One root, ``"hard"`` or ``"async"``; ``edge_cost`` and ``host_domains`` stand beside either. The
-defaults, spelled out (the bundled files spell the budget and the warm-up; the RAVE files add
-``"on_miss": "zeros"``):
+defaults, spelled out (the bundled files spell the budget and the warm-up; the RAVE encoder and
+decoder files add ``"on_miss": "zeros"``):
 
 .. code-block:: json
 

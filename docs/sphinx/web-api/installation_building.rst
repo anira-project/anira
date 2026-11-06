@@ -82,7 +82,7 @@ Two stages, both from a checkout of the repository: Emscripten builds the module
 - the `Emscripten SDK <https://emscripten.org/docs/getting_started/downloads.html>`_ at **4.0.23**,
   the version CI pins: the prebuilt ONNX Runtime archive the module links is built with it, and a
   later emsdk's libc++ does not match it;
-- CMake 3.15 or later (3.25 for the presets) and Ninja;
+- CMake 3.18 or later (3.25 for the presets) and Ninja;
 - Node.js 20.19 or 22.12 and later, and TypeScript on the ``PATH`` (``emcc --emit-tsd`` runs
   ``tsc``; CI installs ``typescript@5.9``).
 

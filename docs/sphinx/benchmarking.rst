@@ -1,39 +1,27 @@
 Benchmarking Guide
 ==================
 
-Overview
---------
+anira's benchmark examples measure a model's real-time performance with a fixture for `Google
+Benchmark <https://github.com/google/benchmark>`_, ``anira::benchmark::ProcessBlockFixture``: it
+holds a static :cpp:class:`anira::InferenceHandler` and times consecutive calls of its ``process``.
+The fixture is part of the examples, not of the library: it lives in ``examples/benchmark/fixture/``
+(``ProcessBlockFixture.h`` / ``.cpp``, the static target ``anira_benchmark_fixture``), written over
+``anira/anira.hpp`` alone. anira itself does not link Google Benchmark, and its installed package
+does not look for it. The benchmarks use the objects of :doc:`usage`: a model config, a contract, a
+pipeline and a handler.
 
-anira's benchmark examples measure a neural network's real-time performance with a custom benchmark fixture class within the `Google Benchmark <https://github.com/google/benchmark>`_ framework - ``anira::benchmark::ProcessBlockFixture``. The fixture holds a static :cpp:class:`anira::InferenceHandler` and measures the runtimes of several consecutive calls to its :cpp:func:`anira::InferenceHandler::process` method.
+Inside this repository, ``ANIRA_WITH_BENCHMARK=ON`` builds the benchmark examples and the fixture
+(also without ``ANIRA_WITH_EXAMPLES``); a project of your own copies the two fixture files and links
+Google Benchmark (and Google Test) itself (:ref:`benchmarking-cmake`).
 
-The fixture is designed to:
+.. _benchmarking-one:
 
-- Measure runtime performance across multiple iterations
-- Compare first inference with subsequent ones to detect warm-up requirements
-- Test different configurations (buffer sizes, engines)
-- Estimate maximum inference times for real-time constraints
-
-The fixture is part of the examples, not of the library: it lives in ``examples/benchmark/fixture/`` (``ProcessBlockFixture.h`` and ``ProcessBlockFixture.cpp``, the static target ``anira_benchmark_fixture``) and is written over ``anira/anira.hpp`` alone. The benchmark examples of this repository link the target; a project of your own copies the two files (see *CMake Configuration* below). anira itself does not link Google Benchmark, and its installed package does not look for it.
-
-.. note::
-    To use the fixture, you should first become familiar with the main anira usage patterns. The benchmarks build upon the same :cpp:class:`anira::InferenceHandler`, :cpp:class:`anira::ModelConfig`, :cpp:class:`anira::ContractHandle` and :cpp:class:`anira::Pipeline` described in the :doc:`usage` section. The fixture is a specialized tool that extends the standard usage patterns to measure performance in a controlled manner.
-
-Prerequisites
+One benchmark
 -------------
 
-Before using the benchmarking tools, ensure that:
-
-1. you build the benchmark examples of this repository with the ``ANIRA_WITH_BENCHMARK`` option set to ``ON`` (it builds ``examples/benchmark`` and the fixture, also without ``ANIRA_WITH_EXAMPLES``), or your project carries a copy of the fixture and links Google Benchmark and Google Test itself
-2. you have a working model configuration and contract (:doc:`usage` section 1)
-3. your model files are accessible and properly configured
-
-Single Configuration Benchmarking
-----------------------------------
-
-1. Define the Benchmark Setup
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The benchmark body creates the context, the pipeline and the :cpp:class:`anira::InferenceHandler` into the fixture's static members, prepares it with the contract of the buffer size and selects the plan to measure:
+The body creates the context, the pipeline and the handler into the fixture's static members,
+prepares it with the contract for the buffer size, selects the plan to measure, and times each
+``process`` until its result is back:
 
 .. code-block:: cpp
     :caption: benchmark.cpp
@@ -46,22 +34,18 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The ben
 
     typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
-    // Configure your inference setup (same as in regular usage): the model file and the
-    // contract file
     const anira::ModelConfig my_model_config = anira::ModelConfig::from_file("model.json");
     anira::ContractHandle my_contract = anira::ContractHandle::from_file("contract.json");
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
-        // The host blocks: the buffer size at SAMPLE_RATE, on the contract
+        // The host blocks: the buffer size (the registered argument) at SAMPLE_RATE
         const auto block = static_cast<double>(get_buffer_size());
         my_contract.hard_host_blocks(block, block, SAMPLE_RATE);
 
-        // Only report errors, so the log output of the engines does not pollute the
-        // benchmark results (section 3.1 of the usage guide)
+        // Only report errors, so the engines' log output does not pollute the results
         m_context = std::make_unique<anira::Context>(
             anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
 
-        // Create and prepare the InferenceHandler instance, then pick the plan to measure
         anira::Pipeline pipeline;
         pipeline.add_inference(my_model_config);
         m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
@@ -69,90 +53,89 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The ben
         const uint32_t plan = report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}}).value();
         m_inference_handler->set_plan(plan);
 
-        // Initialize the repetition (sizes the buffer, tracks the configuration, optional sleep)
+        // Size the input buffer, track the configuration, sleep between repetitions (true)
         initialize_repetition(my_model_config, my_contract.hard(), plan, true);
 
-.. note::
-    The ``initialize_repetition`` method sets up the benchmark fixture over the prepared handler: it sizes the input buffer (the anchor input's channels times the buffer size, one planar float32 tensor), tracks configuration changes, and optionally sleeps between repetitions for thermal stability. The first parameter is the model configuration, the second the Hard contract the handler was prepared with (its ``host_block_max`` and ``rate``), the third the plan of the report that is measured, and the fourth controls whether to sleep after each repetition. The sleep duration is equal to the time taken to process all iterations, allowing for thermal cooldown between repetitions. :cpp:func:`anira::PlanReport::find` returns the index of the report's first plan on an engine (a custom engine by its id), ``std::nullopt`` when the report has none; a pipeline with one candidate has one plan, plan 0.
-
-2. Measure Process Method Runtime
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Implement the main measurement loop using the Google Benchmark framework's state control:
-
-.. code-block:: cpp
-    :caption: benchmark.cpp
-
-        // Main benchmark loop
         for (auto _ : state) {
-            // Fill buffer with random samples in range [-1.0, 1.0)
-            push_random_samples_in_buffer();
-
-            // Initialize iteration tracking
+            push_random_samples_in_buffer();      // random samples in [-1.0, 1.0)
             initialize_iteration();
-
-            // Begin timing measurement
-            std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-
-            // Process the buffer (this triggers inference)
-            process_buffer();
-
-            // Wait for processing completion (inference is asynchronous)
-            while (!buffer_processed()) {
+            const auto start = std::chrono::steady_clock::now();
+            process_buffer();                     // InferenceHandler::process, in place
+            while (!buffer_processed()) {         // the inference runs on another thread
                 std::this_thread::sleep_for(std::chrono::nanoseconds(10));
             }
-
-            // End timing measurement
-            std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-
-            // Record the measured runtime
-            interation_step(start, end, state);
+            const auto end = std::chrono::steady_clock::now();
+            interation_step(start, end, state);   // records the time and its RTF
         }
-
-        // Clean up after all iterations complete
-        repetition_step(NUM_REPETITIONS);
+        repetition_step(NUM_REPETITIONS);         // the total enables the Summary line
     }
-
-.. note::
-    ``process_buffer()`` is :cpp:func:`anira::InferenceHandler::process` over the planar tensor of the input buffer, in place, and returns its status. It operates asynchronously: to ensure accurate timing measurements, you must wait for the ``buffer_processed`` method to return ``true`` before stopping the timer. This guarantees that the measured time includes the complete processing duration, not just the time to initiate processing.
-
-.. note::
-    Each recorded iteration also prints its real-time factor (RTF) — the measured runtime divided by the host buffer period — and marks iterations that exceeded the buffer period with ``[underrun]``. When the total number of repetitions is passed to ``repetition_step``, the fixture additionally prints a ``Summary/...`` line after the final repetition, reporting ``rtf_mean``, ``rtf_max`` and the underrun count over all iterations of all repetitions of the current benchmark instance. Calling ``repetition_step`` without an argument disables the summary line.
-
-3. Register the Benchmark
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Configure and register your benchmark with the Google Benchmark framework; the argument is the buffer size ``get_buffer_size()`` reads:
-
-.. code-block:: cpp
-    :caption: benchmark.cpp
 
     BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_SIMPLE)
         ->Unit(benchmark::kMillisecond)
-        ->Iterations(NUM_ITERATIONS)
-        ->Repetitions(NUM_REPETITIONS)
-        ->Arg(BUFFER_SIZE)
-        ->UseManualTime();
+        ->Iterations(NUM_ITERATIONS)      // process calls per repetition
+        ->Repetitions(NUM_REPETITIONS)    // repetitions of the whole benchmark
+        ->Arg(BUFFER_SIZE)                // the buffer size, state.range(0)
+        ->UseManualTime();                // the loop times itself
 
-The key parameters are:
+- ``initialize_repetition(model, hard, plan, sleep)`` sets the fixture up over the prepared handler:
+  it sizes the input buffer (the anchor input's channels times the buffer size, one planar float32
+  tensor), resets the statistics and prints the run's header when the model, the contract (its
+  ``host_block_max`` and ``host_rate``), the plan or its backend changed, and with ``sleep`` sleeps
+  after each repetition as long as it took, for thermal stability.
+- :cpp:func:`anira::PlanReport::find` returns the first plan on an engine (a custom one by its id),
+  ``std::nullopt`` when the report has none; a pipeline with one candidate has one plan, plan 0.
+- ``process_buffer()`` returns ``process``'s status. The inference runs asynchronously, so the loop
+  waits for ``buffer_processed()`` before it stops the clock: the time is the whole round trip.
 
-- **Unit**: Specify the time unit for results (e.g., ``benchmark::kMillisecond``)
-- **Iterations**: Number of :cpp:func:`anira::InferenceHandler::process` calls per repetition
-- **Repetitions**: Number of times to repeat the entire benchmark
-- **Arg**: The buffer size of the run (``state.range(0)``)
-- **UseManualTime**: Required since we manually measure processing time
+.. _benchmarking-output:
 
-4. CMake Configuration
-~~~~~~~~~~~~~~~~~~~~~~
+What it prints
+--------------
 
-Inside this repository, ``ANIRA_WITH_BENCHMARK`` builds the benchmark examples and the fixture target, which a benchmark links beside anira:
+The run's header names the model (its file), the engine (a custom engine's id), the host rate and
+buffer, and what prepare found for the plan (:ref:`usage-plan-report`): the budget (the measured
+figure, or the contract's under an explicit budget) and the warm-up's outcome (``measured over N
+inferences,`` then ``stable``, ``fixed`` or ``capped before stable``; ``the model's figure, measured
+at an earlier prepare``; or ``explicit, no warm-up``), and the plan's real-time factor of its
+parallel inferences with the verdict. Nothing is held whatever the verdict: a benchmark measures.
+
+.. code-block:: text
+
+    Model: model.onnx | Backend: onnx | Host Sample Rate: 44100 Hz | Host Buffer Size: 2048 = 46.4399 ms
+    Budget 7.90 ms (measured over 6 inferences, stable); real-time factor 0.17 of 4: comfortable
+
+Each iteration then prints its time and its **real-time factor** (RTF: the time over the buffer
+period), marked ``[underrun]`` above 1.0. With the total of repetitions passed to
+``repetition_step``, a ``Summary/...`` line after the last one reports ``rtf_mean``, ``rtf_max`` and
+the underruns over every iteration of the benchmark instance; ``repetition_step()`` without an
+argument prints none. Google Benchmark adds its mean, median and standard deviation per
+configuration; the bundled benchmarks add the minimum, the maximum and a percentile with
+``ComputeStatistics`` and the fixture's ``calculate_min`` / ``calculate_max`` /
+``calculate_percentile``.
+
+.. note::
+    The iteration RTF is a single blocking round trip against one buffer period, the strictest
+    criterion: anira's scheduler absorbs inference times of several buffer periods in exchange for
+    latency (:doc:`latency`), so an RTF above 1.0 is not necessarily a dropout in a real host. The
+    header's factor is the plan's own, over the hop period, the one the verdict judges.
+
+.. _benchmarking-cmake:
+
+CMake
+-----
+
+Inside this repository a benchmark links the fixture target beside anira:
 
 .. code-block:: cmake
 
     add_executable(benchmark_target benchmark.cpp)
     target_link_libraries(benchmark_target anira::anira anira_benchmark_fixture)
 
-A project of your own copies ``ProcessBlockFixture.h`` and ``ProcessBlockFixture.cpp`` from ``examples/benchmark/fixture/`` and builds them with Google Benchmark next to its benchmark (the fixture needs nothing of anira but ``anira/anira.hpp``):
+A project of your own copies ``ProcessBlockFixture.h`` and ``.cpp`` and builds them with Google
+Benchmark (the fixture needs nothing of anira but ``anira/anira.hpp``). As a Google Test executable
+it links ``GTest::gtest_main`` from your project's Google Test, and the test below calls tanh-lib's
+thread API, so the project fetches tanh-lib's core and links ``tanh::Core`` itself: a tanh-lib of
+its own, which never meets anira's private copy (``thl::anira``, :ref:`host-tanh-lib`).
 
 .. code-block:: cmake
 
@@ -167,55 +150,6 @@ A project of your own copies ``ProcessBlockFixture.h`` and ``ProcessBlockFixture
     set(BENCHMARK_ENABLE_TESTING OFF)
     FetchContent_MakeAvailable(benchmark)
 
-    # Create benchmark executable with the copied fixture
-    add_executable(benchmark_target benchmark.cpp
-        fixture/ProcessBlockFixture.cpp fixture/ProcessBlockFixture.h)
-    target_include_directories(benchmark_target PRIVATE fixture)
-    target_compile_features(benchmark_target PRIVATE cxx_std_20)
-    target_link_libraries(benchmark_target anira::anira benchmark::benchmark)
-
-5. Run the Benchmark
-~~~~~~~~~~~~~~~~~~~~
-
-You can then simply execute your benchmark executable:
-
-.. code-block:: bash
-
-    ./build/benchmark_target
-
-Or use Google Test to integrate it with your test suite:
-
-Create Unit Test Integration
-----------------------------
-
-Write a Google Test case
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-Integrate the benchmark with Google Test for easy execution:
-
-.. code-block:: cpp
-    :caption: test.cpp
-
-    #include <benchmark/benchmark.h>
-    #include <gtest/gtest.h>
-    #include <tanh/core/threading/Thread.h>
-
-    TEST(Benchmark, Simple) {
-        // Elevate this thread's priority for more consistent timing (tanh-lib's thread API: the
-        // benchmark links tanh-lib itself, since anira's copy is private to libanira)
-        thl::core::Thread::set_current_priority(thl::core::ThreadPriority::RealTime);
-
-        // Execute the benchmark
-        benchmark::RunSpecifiedBenchmarks();
-    }
-
-Integrate via CMake
-~~~~~~~~~~~~~~~~~~~
-
-Extend the project of *CMake Configuration* above to include the test and find it. The benchmark is a Google Test executable, so it links ``gtest_main`` (``GTest::gtest_main`` from your project's Google Test; anira itself links no test library). ``test.cpp`` calls tanh-lib's thread API, and anira's tanh-lib is private to ``libanira``, so the project fetches tanh-lib's core and links ``tanh::Core`` itself. It is a tanh-lib of its own: anira builds its private copy under another FetchContent name and in its own namespace (``thl::anira``), so the two never meet, whatever the order, shape or version (:ref:`host-tanh-lib`):
-
-.. code-block:: cmake
-
     # tanh-lib's core component, for the thread priority of test.cpp
     FetchContent_Declare(tanh-lib
         GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
@@ -228,68 +162,49 @@ Extend the project of *CMake Configuration* above to include the test and find i
     set(TANH_WITH_EXAMPLES OFF)
     FetchContent_MakeAvailable(tanh-lib)
 
-    # Create benchmark executable with the copied fixture and the test
     add_executable(benchmark_target benchmark.cpp test.cpp
         fixture/ProcessBlockFixture.cpp fixture/ProcessBlockFixture.h)
     target_include_directories(benchmark_target PRIVATE fixture)
     target_compile_features(benchmark_target PRIVATE cxx_std_20)
     target_link_libraries(benchmark_target anira::anira benchmark::benchmark GTest::gtest_main tanh::Core)
 
-    # Add Google Test support
     enable_testing()
     gtest_discover_tests(benchmark_target)
 
-Run the Test
-~~~~~~~~~~~~
+Running it
+----------
 
-Execute your benchmark using CTest:
+Run the executable directly (``./build/benchmark_target``), or wrap the benchmarks in a Google Test
+case that raises the thread's priority first, for steadier timings:
+
+.. code-block:: cpp
+    :caption: test.cpp
+
+    #include <benchmark/benchmark.h>
+    #include <gtest/gtest.h>
+    #include <tanh/core/threading/Thread.h>
+
+    TEST(Benchmark, Simple) {
+        thl::core::Thread::set_current_priority(thl::core::ThreadPriority::RealTime);
+        benchmark::RunSpecifiedBenchmarks();
+    }
 
 .. code-block:: bash
 
-    # Run all tests with verbose output
-    ctest -VV
+    ctest -R Benchmark.Simple -VV           # -VV shows the results; they are kept in Testing/
+    ctest --timeout 100000 -VV              # long benchmarks need a longer timeout
 
-    # Run specific benchmark test
-    ctest -R Benchmark.Simple -VV
+The benchmarks of this repository are such tests: ``cmake --preset desktop-benchmark-tests-debug``,
+then ``ctest --preset desktop-benchmark-tests-debug -R '^Benchmark' -j 1`` (one at a time, so they do
+not compete for the cores).
 
-    # For long-running benchmarks, increase timeout
-    ctest --timeout 100000 -VV
+Several configurations
+----------------------
 
-The benchmarks of this repository are such tests: ``cmake --preset desktop-benchmark-tests-debug``, then ``ctest --preset desktop-benchmark-tests-debug -R '^Benchmark' -j 1`` (one at a time, so they do not compete for the cores).
-
-.. note::
-    Test outputs are stored in the ``Testing`` directory of your build folder. Use the ``-VV`` flag to see detailed benchmark results in the console.
-
-Multiple Configuration Benchmarking
-------------------------------------
-
-For comprehensive performance analysis, you can benchmark multiple configurations by passing arguments to your benchmark functions.
-
-Single Argument Benchmarks
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Test different buffer sizes by passing arguments during registration:
+A list of arguments sweeps the buffer size; each run prepares the handler for its own
+(``BM_MULTIPLE_BUFFER_SIZES`` is ``BM_SIMPLE``'s body under another name):
 
 .. code-block:: cpp
-    :caption: benchmark.cpp
-
-    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_BUFFER_SIZES)(::benchmark::State& state) {
-        // state.range(0) is the buffer size argument: the host blocks of this run
-        const auto block = static_cast<double>(get_buffer_size());
-        my_contract.hard_host_blocks(block, block, SAMPLE_RATE);
-
-        m_context = std::make_unique<anira::Context>(anira::ContextConfig{});
-        anira::Pipeline pipeline;
-        pipeline.add_inference(my_model_config);
-        m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
-        const anira::PlanReport report = m_inference_handler->prepare(my_contract);
-        const uint32_t plan = report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}}).value();
-        m_inference_handler->set_plan(plan);
-
-        initialize_repetition(my_model_config, my_contract.hard(), plan);
-
-        // ... measurement loop (same as single configuration)
-    }
 
     BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_MULTIPLE_BUFFER_SIZES)
         ->Unit(benchmark::kMillisecond)
@@ -299,25 +214,18 @@ Test different buffer sizes by passing arguments during registration:
         ->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096);
 
 .. warning::
-    Currently, the fixture requires buffer sizes that are multiples of the model output size. The ``buffer_processed`` function may not return ``true`` for other buffer sizes.
+    The fixture needs buffer sizes that are multiples of the model's output hop; for other sizes
+    ``buffer_processed`` may not return ``true``.
 
-Multiple Argument Benchmarks
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For complex configuration testing, define argument combinations using a custom function:
+Argument tuples select the model and the backend too. ``examples/benchmark/advanced-benchmark``
+sweeps buffer sizes, three models (built in code, since their shapes follow the buffer size, with the
+builders of ``extras/models/cnn/CNNConfig.h`` and friends, and their contract files) and every engine
+of the build plus a custom engine as the baseline:
 
 .. code-block:: cpp
-    :caption: benchmark.cpp
 
-    // Define test configurations: the buffer sizes, and the engines of this build plus a
-    // custom engine (examples/benchmark/advanced-benchmark measures its ClearEngine, which
-    // runs no model, as the baseline)
     std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
     const std::vector<anira::BackendId>& benchmark_backends();  // anira::enabled_engines() + the clear engine
-    // One model per index. The shapes follow the buffer size, which the fixed windows of the
-    // configuration files cannot, so the benchmark builds each model config in code (the
-    // builders of extras/models/cnn/CNNConfig.h and friends) and loads the model's contract
-    // file (see examples/benchmark/advanced-benchmark)
     constexpr int num_models = 3;
     struct ModelAndContract {
         anira::ModelConfig m_model_config;
@@ -325,7 +233,6 @@ For complex configuration testing, define argument combinations using a custom f
     };
     ModelAndContract model_and_contract(int model, int buffer_size);
 
-    // Define argument combinations
     static void Arguments(::benchmark::internal::Benchmark* b) {
         for (int i = 0; i < buffer_sizes.size(); ++i) {
             for (int j = 0; j < num_models; ++j) {
@@ -340,19 +247,17 @@ For complex configuration testing, define argument combinations using a custom f
     }
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)(::benchmark::State& state) {
-        // Extract configuration from arguments
         const anira::BackendId backend = benchmark_backends()[state.range(2)];
         auto [model, contract] = model_and_contract(state.range(1), get_buffer_size());
         contract.hard_host_blocks(get_buffer_size(), get_buffer_size(), SAMPLE_RATE);
 
-        // Setup with selected configuration: the one backend as the single candidate
+        // The one backend as the single candidate: plan 0
         m_context = std::make_unique<anira::Context>(anira::ContextConfig{});
         anira::Pipeline pipeline;
         pipeline.add_engine(std::make_shared<ClearEngine>()).add_inference(model, {backend});
         m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
         m_inference_handler->prepare(contract);
-
-        initialize_repetition(model, contract.hard(), 0);  // the one candidate: plan 0
+        initialize_repetition(model, contract.hard(), 0);
 
         // ... measurement loop
     }
@@ -364,66 +269,30 @@ For complex configuration testing, define argument combinations using a custom f
         ->UseManualTime()
         ->Apply(Arguments);
 
-Specialized Benchmarking Scenarios
------------------------------------
+Without inference, and custom engines
+-------------------------------------
 
-Benchmarking Without Inference
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-To measure only pre/post-processing overhead without actual inference, run a custom engine that runs no model: the advanced benchmark's ``ClearEngine`` (``org.anira.examples.clear``, ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``) zeroes the outputs, and the extras' ``BypassEngine`` (``org.anira.examples.bypass``) passes the input through:
+To measure the pipeline's own overhead, run an engine that runs no model: the advanced benchmark's
+``ClearEngine`` (``org.anira.examples.clear``, ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``) zeroes the
+outputs, the extras' ``BypassEngine`` (``org.anira.examples.bypass``) passes the input through. Its
+plan is selected by its id:
 
 .. code-block:: cpp
-    :caption: benchmark.cpp
 
-    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_NO_INFERENCE)(::benchmark::State& state) {
-        // ... setup code: the model config names the engine (model.add_model(k_clear_engine_id)) ...
-        anira::Pipeline pipeline;
-        pipeline.add_engine(std::make_shared<ClearEngine>());
-        pipeline.add_inference(model);
-        m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
-        const anira::PlanReport report = m_inference_handler->prepare(hard);
-        m_inference_handler->set_plan(
-            report.find({.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = k_clear_engine_id}})
-                .value());
+    // the model config names the engine: model.add_model(k_clear_engine_id)
+    anira::Pipeline pipeline;
+    pipeline.add_engine(std::make_shared<ClearEngine>());
+    pipeline.add_inference(model);
+    m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
+    const anira::PlanReport report = m_inference_handler->prepare(hard);
+    m_inference_handler->set_plan(
+        report.find({.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = k_clear_engine_id}})
+            .value());
 
-        // ... measurement loop ...
-    }
+Any custom engine is benchmarked the same way: an :cpp:class:`anira::Engine` added to the pipeline,
+named by a model entry, its plan selected by its id (:doc:`custom_engines`).
 
-This configuration measures the overhead of anira's processing pipeline without the neural network inference step.
-
-Benchmarking Custom Inference
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-A custom engine is benchmarked like a built-in one: it is an :cpp:class:`anira::Engine` added to the pipeline (``Pipeline::add_engine``, or ``anira_custom_engine_create`` and ``anira_pipeline_add_engine`` in C; :doc:`custom_engines`), named by a model entry, and its plan is selected by its id, as in the scenario above.
-
-Best Practices
---------------
-
-1. **Consistent Environment**: Run benchmarks on a dedicated system with minimal background processes
-2. **Thermal Management**: Use the sleep option in ``initialize_repetition`` for thermal stability
-3. **Multiple Repetitions**: Use sufficient repetitions to account for system variability
-4. **Priority Elevation**: Always elevate process priority for consistent timing measurements
-5. **Warm-up Analysis**: Compare first vs. subsequent iterations to identify warm-up requirements
-6. **Configuration Coverage**: Test realistic buffer sizes and configurations for your target use case
-
-Interpreting Results
---------------------
-
-Benchmark results include:
-
-- **Mean Processing Time**: Average time per process call
-- **Standard Deviation**: Timing variability indicator
-- **Min/Max Times**: Best and worst case performance
-- **Iterations/Repetitions**: Statistical confidence measures
-- **Real-Time Factor (RTF)**: Measured runtime divided by the host buffer period, printed per iteration. An RTF above ``1.0`` means the block took longer to process than the audio it represents — such iterations are marked ``[underrun]``.
-- **Underruns**: Number of iterations that exceeded the buffer period, reported in the ``Summary/...`` line per benchmark instance (see above).
-
-Use these metrics to:
-
-- Verify real-time constraints are met
-- Compare engine performance
-- Identify optimal buffer sizes
-- Detect performance regressions
-
-.. note::
-    The RTF compares a single blocking round-trip (``process()`` call plus waiting for the result) against one buffer period. This is the strictest real-time criterion: anira's scheduler tolerates inference latencies of multiple buffer periods in exchange for added latency, so an RTF above ``1.0`` does not necessarily mean audible dropouts in a real host — see :doc:`latency` for details.
+Run on a quiet machine, with enough repetitions for its variability, the priority raised and the
+sleep between repetitions on; measure the buffer sizes and engines your host will use. Since prepare
+warms the model up (under any contract but an explicit budget with ``ANIRA_WARMUP_NONE``), the first
+iteration is no longer a cold start: what the warm-up found is in the header.

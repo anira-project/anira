@@ -13,7 +13,7 @@ or a pull request on `GitHub <https://github.com/anira-project/anira>`_.
 Development setup
 -----------------
 
-You need a C++20 compiler (clang 20 for the real-time checks), CMake 3.15 or later (3.25 or later
+You need a C++20 compiler (clang 20 for the real-time checks), CMake 3.18 or later (3.25 or later
 for the presets), Ninja, Python 3 with ``pyyaml`` (the ABI generator) and, for the web package,
 Node.js 20.19 or 22.12 and later.
 

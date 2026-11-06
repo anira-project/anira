@@ -157,7 +157,24 @@ Static tensors
 
 A Static tensor travels whole, in the spec's shape and dtype, any dtype, a Channel axis of any
 extent included; one ``Tensor::from_host`` over the spec's extents builds it (all-zero strides are
-packed row-major; other strides are read and written as given).
+packed row-major; other strides are read and written as given). The example's model has a
+Streamed audio tensor at slot 0 of each side, a Static ``control`` input ``[1, 1, 4]`` at input slot
+1 and a Static ``confidence`` output ``[1, 1, 1]`` at output slot 1:
+
+.. code-block:: json
+
+    {
+      "inputs": [
+        { "name": "audio_in", "axes": [["batch", 1], ["channel", 1], ["time", 2048]],
+          "window": { "min": 2048, "max": 2048 } },
+        { "name": "control", "role": "static", "axes": [["batch", 1], ["channel", 1], ["any", 4]] }
+      ],
+      "outputs": [
+        { "name": "audio_out", "axes": [["batch", 1], ["channel", 1], ["time", 2048]],
+          "window": { "min": 2048, "max": 2048 } },
+        { "name": "confidence", "role": "static", "axes": [["batch", 1], ["channel", 1], ["any", 1]] }
+      ]
+    }
 
 .. code-block:: cpp
 
