@@ -48,15 +48,15 @@
  * PrepareInfo, the C records as views, whose handler is the anira_handler* (a processor of a
  * handler created through C has no InferenceHandler object); a Processor states the phases
  * it fills in phases(), because the C descriptor tells a filled phase from a NULL one, and its
- * real-time promise in flags() (anira_processor_desc::flags); ProcessorContext has
- * input_tensor / output_tensor filling a Tensor, the C accessors, in place of model_input /
- * model_output references, every accessor returning the C status and filling an out-parameter
- * (asking for what a slot does not have in a phase is the processor's bug, and is recorded), and
- * entry() for the chunk's entry; the RingView calls take a std::span; the document's custom
- * stage is the Processor, which takes no domains and has no single-callable form (a processor
- * works at the host end of every slot and never crosses a domain), and a Pipeline holds at most
- * one; the Pipeline has one member per C entry (add_inference, add_processor, add_engine) in
- * place of the document's stage objects; a custom engine is anira::Engine, added to the pipeline
+ * real-time promise per phase in realtime_phases() (anira_processor_desc::realtime_phases);
+ * ProcessorContext has input_tensor / output_tensor filling a Tensor, the C accessors, in place
+ * of model_input / model_output references, every accessor returning the C status and filling an
+ * out-parameter (asking for what a slot does not have in a phase is the processor's bug, and is
+ * recorded), and entry() for the chunk's entry; the RingView calls take a std::span; the document's
+ * custom stage is the Processor, which takes no domains and has no single-callable form (a
+ * processor works at the host end of every slot and never crosses a domain), and a Pipeline holds
+ * at most one; the Pipeline has one member per C entry (add_inference, add_processor, add_engine)
+ * in place of the document's stage objects; a custom engine is anira::Engine, added to the pipeline
  * under its id and shaped like Processor with one level more, with Engine::Loaded what its load
  * returns per loaded model (EngineLoadInfo the record), Engine::Prepared what the Loaded's
  * prepare returns per handler (PrepareInfo the record, the processor's) and EngineContext the
@@ -2600,8 +2600,8 @@ private:
  * Pipeline::add_processor(std::make_shared<YourProcessor>(...)). It is anira_processor_desc with
  * virtual functions in place of the function pointers, and the semantics are those of
  * anira/abi/processor.h, whose lifecycle it follows: the registration is one object shared by the
- * pipeline and every handler created from it (phases(), flags() and consumed_kinds() are read once,
- * when the processor is added); init() is called once per registration, by the first
+ * pipeline and every handler created from it (phases(), realtime_phases() and consumed_kinds() are
+ * read once, when the processor is added); init() is called once per registration, by the first
  * anira_handler_prepare of a handler of the pipeline, with the facts of the core in effect
  * (InitInfo); prepare() is called once per anira_handler_prepare of each handler and returns that
  * handler's Processor::Prepared, the C lifecycle's prepared pointer as a class: the four phases and
@@ -2632,21 +2632,19 @@ private:
  * the default through the base class ("call super"): Prepared::pre_process(ctx) is
  * anira_processor_default_pre_process, Prepared::post_process(ctx) is
  * anira_processor_default_post_process. A virtual function is never NULL, so the mask says which
- * of the four this processor takes part in: only those reach the descriptor, the others stay NULL
- * and are never called. reset reaches it with k_reset in the mask, and with pre_process or
- * post_process, on whose thread it runs (a processor of those phases need not name it); a
- * processor of before_inference or after_inference alone whose Prepared overrides reset names
- * k_reset, else its reset is never called.
+ * of the four phases and reset this processor takes part in: only those reach the descriptor, the
+ * others stay NULL and are never called (a Prepared that overrides reset names k_reset, else its
+ * reset is never called).
  *
- * flags() is the processor's real-time promise (anira_processor_desc::flags):
- * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST says pre_process, post_process and reset allocate nothing,
- * lock nothing and block on nothing, ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS says the same of
- * before_inference and after_inference; the default promises nothing. anira_handler_prepare
- * checks the promise against the placement: under a Hard contract a filled pre_process,
- * post_process or reset runs on the driving thread and requires
- * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST, else prepare fails with ANIRA_ERROR_CONFIG naming the
- * flag. A processor of inference hooks alone (without k_reset) fills none of the three and needs
- * no such promise. The phase functions and reset are
+ * realtime_phases() is the processor's real-time promise, per phase
+ * (anira_processor_desc::realtime_phases), in the bits of phases(): the bit of a phase says that
+ * phase allocates nothing, locks nothing and blocks on nothing; the default promises nothing.
+ * anira_handler_prepare checks the promise against the placement: every filled phase that the
+ * contract runs on the driving thread must carry its bit, else prepare fails with
+ * ANIRA_ERROR_CONFIG naming the phase. Under a Hard contract those are pre_process, post_process
+ * and reset, so a processor of inference hooks alone needs no promise; a promised phase that is
+ * not filled is no error. A processor whose bodies are all real-time says so in one line:
+ * realtime_phases() returns phases(). The phase functions and reset are
  * noexcept (an override that throws does not compile without it, and terminates with it) and
  * carry no real-time attribute of their own; everything ProcessorContext, RingView and Tensor offer
  * is nonblocking, so a body that keeps its promise is composed of those calls. A status other
@@ -2666,7 +2664,7 @@ private:
  */
 class Processor {
 public:
-    /// The bit of one phase in phases().
+    /// The bit of one phase in phases() and realtime_phases(), ANIRA_PHASE_BIT(phase).
     static constexpr uint32_t phase_bit(anira_phase phase) noexcept {
         return uint32_t{1} << static_cast<uint32_t>(phase);
     }
@@ -2674,10 +2672,9 @@ public:
     static constexpr uint32_t k_post_process = uint32_t{1} << ANIRA_PHASE_POST_PROCESS;
     static constexpr uint32_t k_before_inference = uint32_t{1} << ANIRA_PHASE_BEFORE_INFERENCE;
     static constexpr uint32_t k_after_inference = uint32_t{1} << ANIRA_PHASE_AFTER_INFERENCE;
-    /// reset, for a processor that fills neither pre_process nor post_process (with either the
-    /// reset slot is filled anyway): its Prepared overrides reset.
+    /// reset: its Prepared overrides reset, which is called only with this bit in phases().
     static constexpr uint32_t k_reset = uint32_t{1} << ANIRA_PHASE_RESET;
-    /// Every bit phases() may carry.
+    /// Every bit phases() and realtime_phases() may carry.
     static constexpr uint32_t k_all_phases =
         k_pre_process | k_post_process | k_before_inference | k_after_inference | k_reset;
 
@@ -2746,19 +2743,20 @@ public:
     const std::string& id() const noexcept { return m_id; }
 
     /// The phases this processor fills: an OR of k_pre_process, k_post_process, k_before_inference,
-    /// k_after_inference and k_reset (reset comes with pre_process or post_process unnamed; a
-    /// processor of inference hooks alone names it when its Prepared overrides reset). Read once,
-    /// when the processor is added to a Pipeline; 0 is a processor of prepare, unprepare and
-    /// release alone.
+    /// k_after_inference and k_reset (a Prepared that overrides reset names k_reset, else its reset
+    /// is never called). Read once, when the processor is added to a Pipeline; 0 is a processor of
+    /// prepare, unprepare and release alone.
     virtual uint32_t phases() const noexcept = 0;
-    /// The processor's real-time promise, written into anira_processor_desc::flags by
-    /// Pipeline::add_processor: an OR of ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST and
-    /// ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS; 0 (the default) promises nothing. Under a Hard contract
-    /// a processor that fills pre_process, post_process or reset (k_reset) must promise
-    /// ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST, else anira_handler_prepare refuses it with
-    /// ANIRA_ERROR_CONFIG; one of before_inference and after_inference alone needs no promise
-    /// there. Read once, when the processor is added to a Pipeline.
-    virtual uint32_t flags() const noexcept { return 0; }
+    /// The processor's real-time promise, per phase, written into
+    /// anira_processor_desc::realtime_phases by Pipeline::add_processor: an OR of the k_* bits of
+    /// phases() whose bodies allocate nothing, lock nothing and block on nothing; 0 (the default)
+    /// promises nothing. Every filled phase the contract runs on the driving thread must carry its
+    /// bit, else anira_handler_prepare refuses the processor with ANIRA_ERROR_CONFIG naming the
+    /// phase: under a Hard contract k_pre_process, k_post_process and k_reset, so one of
+    /// before_inference and after_inference alone needs no promise there. A promised phase that is
+    /// not filled is no error; a processor whose bodies are all real-time returns phases(). Read
+    /// once, when the processor is added to a Pipeline.
+    virtual uint32_t realtime_phases() const noexcept { return 0; }
     /// The extensions the processor reads at prepare, as "<host>:<kind>" strings (hosts:
     /// tensor_spec, model, model_config, context, contract); they join the consumed-or-fail
     /// walk. Read once, when the processor is added; the strings are copied.
@@ -2813,8 +2811,8 @@ struct ProcessorTrampolines {
     }
 
     // The four phase trampolines and the reset carry no real-time attribute, like the C
-    // typedefs: the promise is the processor's flags(), not a property of the type. They run on the
-    // handler's Prepared; the registration in user_data is not read on a per-chunk path.
+    // typedefs: the promise is the processor's realtime_phases(), not a property of the type. They
+    // run on the handler's Prepared; the registration in user_data is not read on a per-chunk path.
     static anira_status ANIRA_CALL pre_process(const anira_processor_ctx* ctx,
                                                void* prepared,
                                                void* /*user_data*/) noexcept {
@@ -3744,8 +3742,8 @@ public:
 
     /**
      * @brief Adds the pipeline's one Processor (anira_pipeline_add_processor), read once, here:
-     * its phases(), flags() and consumed_kinds() fill an anira_processor_desc, and only the
-     * phases of the mask reach it; its prepare runs per handler at anira_handler_prepare and
+     * its phases(), realtime_phases() and consumed_kinds() fill an anira_processor_desc, and only
+     * the phases of the mask reach it; its prepare runs per handler at anira_handler_prepare and
      * the Prepared it returns runs the phases and the reset of that handler until the C
      * unprepare deletes it. The pipeline's carrier holds a copy of the shared_ptr, which the
      * pipeline and every handler created from it share, so the object lives at least until the
@@ -3753,8 +3751,8 @@ public:
      * Processor::release answers this addition once. The order relative to the inference stage
      * means nothing.
      * @throws Error ANIRA_ERROR_INVALID_STATE for a second processor; ANIRA_ERROR_INVALID_ARGUMENT
-     * for a null one, a phases() bit that names none of the four phases and reset or a flags()
-     * bit anira/abi/processor.h does not define.
+     * for a null one, or a phases() or realtime_phases() bit that names none of the four phases
+     * and reset.
      */
     Pipeline& add_processor(const std::shared_ptr<Processor>& processor) {
         if (processor == nullptr) {
@@ -3767,11 +3765,17 @@ public:
                         "anira::Processor::phases: a bit that names none of the four phases "
                         "and reset");
         }
+        const uint32_t realtime_phases = processor->realtime_phases();
+        if ((realtime_phases & ~Processor::k_all_phases) != 0U) {
+            throw Error(ANIRA_ERROR_INVALID_ARGUMENT,
+                        "anira::Processor::realtime_phases: a bit that names none of the four "
+                        "phases and reset");
+        }
         const std::span<const char* const> kinds = processor->consumed_kinds();
         anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
         desc.consumed_kinds = kinds.empty() ? nullptr : kinds.data();
         desc.num_consumed_kinds = static_cast<uint32_t>(kinds.size());
-        desc.flags = processor->flags();  // the C entry refuses a bit it does not define
+        desc.realtime_phases = realtime_phases;
         desc.id = processor->id().empty() ? nullptr : processor->id().c_str();  // copied
         // A NULL phase slot means "not taking part": only the phases of the mask are filled, so
         // that a processor of other phases leaves anira's default pre_process / post_process
@@ -3788,11 +3792,7 @@ public:
         if ((phases & Processor::k_after_inference) != 0U) {
             desc.after_inference = &detail::ProcessorTrampolines::after_inference;
         }
-        // reset on the handler's Prepared, with k_reset or with pre_process or post_process (its
-        // thread, the driving one): a filled reset needs the pre/post promise under Hard, so a
-        // processor of inference hooks alone leaves it NULL unless it names it.
-        if ((phases &
-             (Processor::k_reset | Processor::k_pre_process | Processor::k_post_process)) != 0U) {
+        if ((phases & Processor::k_reset) != 0U) {
             desc.reset = &detail::ProcessorTrampolines::reset;
         }
         // The shared lifecycle: prepare returning the Prepared, unprepare deleting it, init and
