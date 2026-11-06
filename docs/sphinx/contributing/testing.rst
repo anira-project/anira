@@ -126,7 +126,7 @@ WebAssembly allows. It needs the emsdk of :doc:`../web-api/installation_building
 
 .. code-block:: bash
 
-    cmake -P extras/fetch-models.cmake   # the model fixtures (anira_em_oom, the browser test)
+    cmake -P extras/fetch-models.cmake   # the model fixtures: anira_em_oom, the browser test and the model-file example read them
     cmake --preset wasm-abi && cmake --build --preset wasm-abi
     cmake --build --preset wasm-abi --target anira_abi_wasm_gates   # the ABI gates under node
 
@@ -137,6 +137,7 @@ WebAssembly allows. It needs the emsdk of :doc:`../web-api/installation_building
     node test/browser/run.mjs chromium # or firefox; needs Playwright (CI: 1.64.1)
 
 The browser test renders the package's pages and the examples' check pages (processor-and-engine's
-also under Vite's dev server), offline contexts of several render sizes, and in Chromium a live
+also under Vite's dev server), offline contexts of render sizes 256 and 480 where the browser takes
+``renderSizeHint``, and in Chromium a live
 ``AudioContext`` (``live.html``); headless Firefox keeps a live context suspended. The wasm gates
 are listed in :doc:`abi`.
