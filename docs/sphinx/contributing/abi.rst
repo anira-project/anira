@@ -12,7 +12,7 @@ The headers under ``include/anira/abi/`` are generated, never edited by hand. Th
     pip install pyyaml
     python3 -B tools/abi/gen.py --repo . --write     # or the anira_abi_regen build target
     python3 -B tools/abi/gen.py --repo . --check     # exit 2 on any drift
-    python3 -B tools/abi/gen.py --repo . --diff-against v3.0.0-alpha.2   # additions and BREAKING lines
+    python3 -B tools/abi/gen.py --repo . --diff-against v3.0.0-alpha.3   # additions and BREAKING lines
 
 ``--write`` validates the registry against the header conventions of
 ``docs/anira-v3-architecture.md`` and rewrites:

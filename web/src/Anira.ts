@@ -142,7 +142,7 @@ export class Anira {
     return anira
   }
 
-  /** The library's release identity (`anira_version_string`), e.g. "3.0.0-alpha.2". */
+  /** The library's release identity (`anira_version_string`), e.g. "3.0.0-alpha.3". */
   get version(): string {
     return this.abi.anira_version_string() ?? ''
   }
