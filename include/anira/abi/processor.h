@@ -706,19 +706,20 @@ typedef void (ANIRA_CALL* anira_processor_release_fn)(void* user_data);
  * @brief The one processor of a pipeline, handed once to anira_pipeline_add_processor and
  * copied within struct_size into a refcounted carrier that the pipeline and every
  * handler created from it share. Tier 2: struct_size first, user_data third (its offset
- * never moves), no implicit padding (LP64 104 bytes, ILP32 60), growth at the tail. The
+ * never moves), no implicit padding (LP64 112 bytes, ILP32 64), growth at the tail. The
  * slots, from the innermost level out: the four phases, reset, prepare, unprepare, init,
  * release; every per-chunk slot receives (ctx, prepared, user_data), prepare hands
  * prepared back per handler and unprepare gets it back, init runs once per registration
  * with the shared init record, the shape the engine descriptor of anira/abi/engine.h
  * shares (with its model level, load and unload, between prepare and init). The
  * processor has no name: a pipeline holds one, so a name identifies nothing, and every
- * record about it says "the processor". A NULL phase slot means anira's default body
- * runs for that phase; a filled slot means the processor owns the phase for every slot
- * with a host end and calls the default itself for what it does not handle. The
- * descriptor carries no domain: the processor works at the host end of every slot, in
- * the host domain the contract declares for that tensor
- * (anira_contract_set_host_domain), and never crosses one.
+ * record about it says "the processor". Its optional id names its inference hooks for
+ * the model's figure (below). A NULL phase slot means anira's default body runs for that
+ * phase; a filled slot means the processor owns the phase for every slot with a host end
+ * and calls the default itself for what it does not handle. The descriptor carries no
+ * domain: the processor works at the host end of every slot, in the host domain the
+ * contract declares for that tensor (anira_contract_set_host_domain), and never crosses
+ * one.
  */
 typedef struct anira_processor_desc {
     uint32_t struct_size;  /**< sizeof(anira_processor_desc) of the caller's header. */
@@ -799,11 +800,22 @@ typedef struct anira_processor_desc {
      * Called once, when the last carrier dies, after every unprepare; NULL for none.
      */
     anira_processor_release_fn release;
+    /**
+     * What the processor's before_inference and after_inference are, for the model's figure: a
+     * prepare's warm-up pass times them with the engine call, so the figure of a pipeline whose
+     * processor fills either hook is the model's with these hooks, and is shared by every
+     * handler whose processor gives the same id (identical plugins register the same id, a
+     * reverse-URI name such as "com.example.myplugin.window", and so report identical latency).
+     * NULL or empty: a processor with an inference hook is told apart by its registration, so
+     * each one measures its own figure; a processor without one never enters the figure's key.
+     * Copied. A tail field: a caller whose header ends before it registers no id.
+     */
+    const char* id;
 } anira_processor_desc;
 /**
  * @brief A processor without a callback and without a real-time promise (flags 0).
  */
-#define ANIRA_PROCESSOR_DESC_INIT ANIRA_INIT(anira_processor_desc, sizeof(anira_processor_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+#define ANIRA_PROCESSOR_DESC_INIT ANIRA_INIT(anira_processor_desc, sizeof(anira_processor_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
 
 /**
  * @brief The default pre_process, for a processor that wants it ("call super"): for every

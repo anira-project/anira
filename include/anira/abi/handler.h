@@ -779,7 +779,16 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * prepare). Then the contract's warm-up pass, unless the warm-up is ANIRA_WARMUP_NONE or
  * FIXED 0: ordinary inferences of every plan through the session on the inference
  * threads, each timed on its thread (anira_warmup_mode); under a MEASURED budget each
- * plan's row takes its figure and the session the slowest. The warm-up pass also
+ * plan's row takes its figure and the session the slowest. The core keeps what every
+ * pass measured as the model's figure (the pooled model, a registered engine's
+ * registration and the processor's inference hooks: anira_processor_desc.id), under
+ * either budget kind, for as long as its state lives: a plan whose model has a figure at
+ * least as thorough as the contract's warm-up (UNTIL_STABLE answers every warm-up, FIXED
+ * n a FIXED m <= n) runs no pass and reports ANIRA_WARMUP_OUTCOME_REUSED with that
+ * measurement's counts and times, so identical handlers report identical latency, and a
+ * prepare whose every plan reuses its figure sizes the session once and needs no running
+ * inference thread; two prepares of one model on two threads measure it once.
+ * ANIRA_WARMUP_NONE neither measures nor reads the figure. The warm-up pass also
  * measures the inference time; a measured budget is the maximum of its last four
  * inferences; under an explicit budget the timings are only reported. The session is
  * then sized again for the budget, which drains it, starts the stream over (a new

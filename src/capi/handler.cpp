@@ -71,6 +71,7 @@
 #include "../engines/DescriptorAdapter.h"
 #include "../platform/memory_probe.h"
 #include "../scheduler/Core.h"
+#include "../scheduler/FigureKey.h"
 #include "../scheduler/InferenceManager.h"
 #include "../scheduler/InferenceThread.h"
 #include "../scheduler/LatencyCalculator.h"
@@ -1740,12 +1741,15 @@ anira_rt_verdict rt_verdict_of(double rt_factor, uint32_t rt_parallel) noexcept 
     return ANIRA_RT_COMFORTABLE;
 }
 
-// The warm-up and real-time fields of one plan row: what the pass measured (nothing without
-// one), the real-time factor of the plan's inference time (the measurement, else the row's
-// budget) over the anchor's hop period (LatencyCalculator::hop_periods, the latency model's
-// kappa), the session's parallel inferences and the verdict (UNMEASURED without a measurement).
+// The warm-up and real-time fields of one plan row: what the pass measured, or the model's figure
+// an earlier prepare measured (`reused`; ANIRA_WARMUP_OUTCOME_REUSED, the stored measurement's
+// counts and times), nothing without either; the real-time factor of the plan's inference time (the
+// measurement, else the row's budget) over the anchor's hop period (LatencyCalculator::hop_periods,
+// the latency model's kappa), the session's parallel inferences and the verdict (UNMEASURED without
+// a measurement).
 void set_real_time(anira_plan_info& info,
                    const anira::WarmupFigure* figure,
+                   bool reused,
                    const anira::capi::Derived& derived,
                    const anira::capi::HardContract& hard,
                    uint32_t parallel) noexcept {
@@ -1760,11 +1764,84 @@ void set_real_time(anira_plan_info& info,
         return;
     }
     info.warmup_iterations = figure->m_iterations;
-    info.warmup_outcome = static_cast<uint32_t>(figure->m_outcome);
+    info.warmup_outcome =
+        static_cast<uint32_t>(reused ? ANIRA_WARMUP_OUTCOME_REUSED : figure->m_outcome);
     info.measured_ms = figure->m_measured_ms;
     info.median_ms = figure->m_median_ms;
     info.rt_factor = anira::LatencyCalculator::hop_periods(derived, hard, figure->m_measured_ms);
     info.rt_verdict = static_cast<uint32_t>(rt_verdict_of(info.rt_factor, info.rt_parallel));
+}
+
+// What a prepare knows of one plan's inference time: nothing (no warm-up, or not yet), what its
+// pass measured now, or the model's figure an earlier prepare measured.
+struct PlanMeasurement {
+    enum class Source : uint8_t { None, Measured, Reused };
+    Source m_source = Source::None;
+    anira::ModelFigure m_figure;
+};
+
+// A claim on one key of the figure index for the length of one plan's pass: published with what
+// the pass measured, abandoned when it does not get there (the pass threw), so that the next
+// prepare of the key measures and nobody waits for it in vain.
+class FigureClaim {
+public:
+    explicit FigureClaim(const anira::FigureKey& key) : m_key(key) {}
+    ~FigureClaim() {
+        if (m_claimed) { anira::Core::abandon_figure(m_key); }
+    }
+    FigureClaim(const FigureClaim&) = delete;
+    FigureClaim& operator=(const FigureClaim&) = delete;
+    FigureClaim(FigureClaim&&) = delete;
+    FigureClaim& operator=(FigureClaim&&) = delete;
+
+    // The figure another prepare stored meanwhile, or the claim (nothing: measure now).
+    std::optional<anira::ModelFigure> take(anira_warmup_mode mode, uint32_t iterations) {
+        std::optional<anira::ModelFigure> known =
+            anira::Core::claim_figure(m_key, mode, iterations);
+        m_claimed = !known.has_value();
+        return known;
+    }
+    void publish(const anira::ModelFigure& figure) {
+        anira::Core::publish_figure(m_key, figure);
+        m_claimed = false;
+    }
+
+private:
+    const anira::FigureKey& m_key;
+    bool m_claimed = false;
+};
+
+// The key of one plan's figure (FigureKey): its loaded model's record (its bytes' owner held
+// weakly, so the index keeps no model in memory), the registered engine's carrier where the row is
+// a custom one, and the identity of the processor's inference hooks: its id, else its
+// registration, and nothing for a processor that fills neither hook.
+anira::FigureKey figure_key(const anira_handler& handler,
+                            const anira::SessionElement& session,
+                            uint32_t plan) {
+    anira::FigureKey key;
+    key.m_model = session.m_plans[plan].m_loaded->model();
+    key.m_bytes_owner = key.m_model.m_bytes_owner;
+    key.m_has_bytes = key.m_model.m_bytes_owner != nullptr;
+    key.m_model.m_bytes_owner.reset();
+    const anira::capi::ModelEntry& row =
+        handler.m_pipeline.m_variants[0].m_models[handler.m_plans[plan].m_row];
+    if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
+            registered_engine(handler.m_pipeline, row)) {
+        key.m_carrier = engine;
+        key.m_registered = true;
+    }
+    const std::shared_ptr<anira::capi::ProcessorCarrier>& processor =
+        handler.m_pipeline.m_processor;
+    if (processor != nullptr && (processor->desc().before_inference != nullptr ||
+                                 processor->desc().after_inference != nullptr)) {
+        if (processor->desc().id != nullptr && processor->desc().id[0] != '\0') {
+            key.m_hook_id = processor->desc().id;
+        } else {
+            key.m_hook_owner = processor;
+            key.m_hooks_by_registration = true;
+        }
+    }
+    return key;
 }
 
 #ifdef ENABLE_LOGGING
@@ -1798,7 +1875,7 @@ int verdict_rank(uint32_t verdict) {
 // latency of every Streamed output and the entries; Warning when the pool cannot keep up with the
 // budget the session is sized for (one host block's burst, so the stream misses blocks).
 void log_measurement([[maybe_unused]] const anira_handler& handler,
-                     [[maybe_unused]] const std::vector<anira::WarmupFigure>& figures) {
+                     [[maybe_unused]] const std::vector<PlanMeasurement>& measurements) {
 #ifdef ENABLE_LOGGING
     const anira::capi::HardContract& hard = *handler.m_contract.hard();
     const bool measured = hard.m_budget == ANIRA_BUDGET_MEASURED;
@@ -1829,10 +1906,15 @@ void log_measurement([[maybe_unused]] const anira_handler& handler,
                            info.budget_ms);
             continue;
         }
-        const bool fixed = info.warmup_outcome == ANIRA_WARMUP_OUTCOME_FIXED;
-        const char* ended = info.warmup_outcome == ANIRA_WARMUP_OUTCOME_CAPPED ? ", capped"
-                            : fixed                                            ? ""
-                                                                               : ", stable";
+        const bool reused = info.warmup_outcome == ANIRA_WARMUP_OUTCOME_REUSED;
+        // How the measurement ended: this pass's, or the stored one's for a reused figure.
+        const anira_warmup_outcome stored =
+            i < measurements.size() ? measurements[i].m_figure.m_figure.m_outcome
+                                    : static_cast<anira_warmup_outcome>(info.warmup_outcome);
+        const bool fixed = stored == ANIRA_WARMUP_OUTCOME_FIXED;
+        const char* ended = stored == ANIRA_WARMUP_OUTCOME_CAPPED ? ", capped"
+                            : fixed                               ? ""
+                                                                  : ", stable";
         const int headroom = static_cast<int>(std::lround(std::max(0.0, 1.0 - load) * 100.0));
         std::string verdict = rt_verdict_word(info.rt_verdict);
         if (info.rt_verdict == ANIRA_RT_COMFORTABLE) {
@@ -1848,31 +1930,56 @@ void log_measurement([[maybe_unused]] const anira_handler& handler,
         const bool warn =
             info.rt_verdict == ANIRA_RT_MARGINAL || info.rt_verdict == ANIRA_RT_NOT_REALTIME;
         std::array<char, 512> line{};
-        static_cast<void>(std::snprintf(line.data(),
-                                        line.size(),
-                                        "anira_handler_prepare: plan %u (%s, %s): warm-up %s, %u "
-                                        "inferences%s; measured %.3f ms (median %.3f ms) on the "
-                                        "inference threads; real-time factor %.2f of %u %s (load "
-                                        "%.2f): %s",
-                                        i,
-                                        engine.c_str(),
-                                        provider.c_str(),
-                                        fixed ? "fixed" : "until_stable",
-                                        info.warmup_iterations,
-                                        ended,
-                                        info.measured_ms,
-                                        info.median_ms,
-                                        info.rt_factor,
-                                        info.rt_parallel,
-                                        parallel,
-                                        load,
-                                        verdict.c_str()));
+        if (reused) {
+            const auto age = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - measurements[i].m_figure.m_when);
+            static_cast<void>(std::snprintf(line.data(),
+                                            line.size(),
+                                            "anira_handler_prepare: plan %u (%s, %s): the model's "
+                                            "figure from an earlier prepare (%u inferences%s, %lld "
+                                            "s ago): %.3f ms (median %.3f ms); real-time factor "
+                                            "%.2f of %u %s (load %.2f): %s",
+                                            i,
+                                            engine.c_str(),
+                                            provider.c_str(),
+                                            info.warmup_iterations,
+                                            ended,
+                                            static_cast<long long>(age.count()),
+                                            info.measured_ms,
+                                            info.median_ms,
+                                            info.rt_factor,
+                                            info.rt_parallel,
+                                            parallel,
+                                            load,
+                                            verdict.c_str()));
+        } else {
+            static_cast<void>(std::snprintf(line.data(),
+                                            line.size(),
+                                            "anira_handler_prepare: plan %u (%s, %s): warm-up %s, "
+                                            "%u inferences%s; measured %.3f ms (median %.3f ms) on "
+                                            "the inference threads; real-time factor %.2f of %u %s "
+                                            "(load %.2f): %s",
+                                            i,
+                                            engine.c_str(),
+                                            provider.c_str(),
+                                            fixed ? "fixed" : "until_stable",
+                                            info.warmup_iterations,
+                                            ended,
+                                            info.measured_ms,
+                                            info.median_ms,
+                                            info.rt_factor,
+                                            info.rt_parallel,
+                                            parallel,
+                                            load,
+                                            verdict.c_str()));
+        }
         if (warn) {
             ANIRA_LOG_WARNING(anira::log_group::k_capi, "%s", line.data());
         } else {
             ANIRA_LOG_INFO(anira::log_group::k_capi, "%s", line.data());
         }
-        if (info.warmup_outcome == ANIRA_WARMUP_OUTCOME_CAPPED && i < figures.size()) {
+        // A pass that did not settle said so at the prepare that ran it; a reuse does not.
+        if (info.warmup_outcome == ANIRA_WARMUP_OUTCOME_CAPPED && i < measurements.size()) {
             ANIRA_LOG_WARNING(anira::log_group::k_capi,
                               "anira_handler_prepare: plan %u (%s, %s): the warm-up did not settle "
                               "in %u inferences (the last four %.3f-%.3f ms); %s their maximum, "
@@ -1881,7 +1988,7 @@ void log_measurement([[maybe_unused]] const anira_handler& handler,
                               engine.c_str(),
                               provider.c_str(),
                               info.warmup_iterations,
-                              figures[i].m_fastest_ms,
+                              measurements[i].m_figure.m_figure.m_fastest_ms,
                               info.measured_ms,
                               measured ? "the budget is" : "the measurement is",
                               info.measured_ms);
@@ -2154,16 +2261,47 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         handler.m_output_tensors = empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);
     };
 
-    // The contract's warm-up (validate refused a MEASURED budget without one): a pass runs every
-    // plan through the session on the inference threads, and its figures are what a MEASURED
-    // budget sizes the session for. The pass runs at a provisional sizing: the explicit budget,
-    // or under a MEASURED one a single clock step, the smallest figure there is (it sizes the
-    // session as every figure below the first struct edge does, so the second sizing below
-    // usually keeps the entry count).
+    // The contract's warm-up (validate refused a MEASURED budget without one): what decides each
+    // plan's inference time, and with it a MEASURED budget. The model's figure comes first: the
+    // core's figure index (FigureKey) keeps what every pass measured for a model, under either
+    // budget kind, and a plan whose model has a figure at least as thorough as this contract's
+    // warm-up asks for reuses it and runs no pass. A contract without a warm-up neither measures
+    // nor reads the index (its plans stay UNMEASURED).
     const bool warms = prepared_hard.warms_up();
     const bool measured = prepared_hard.m_budget == ANIRA_BUDGET_MEASURED;
-    size_session(measured ? static_cast<double>(anira::clock_step_ns()) / 1e6
-                          : prepared_hard.m_budget_ms);
+    const auto num_plans = static_cast<uint32_t>(handler.m_plans.size());
+    std::vector<anira::FigureKey> keys;
+    std::vector<PlanMeasurement> measurements(num_plans);
+    if (warms) {
+        keys.reserve(num_plans);
+        for (uint32_t plan = 0; plan < num_plans; ++plan) {
+            keys.push_back(figure_key(handler, session, plan));
+            if (const std::optional<anira::ModelFigure> known =
+                    anira::Core::find_figure(keys.back(),
+                                             prepared_hard.m_warmup,
+                                             prepared_hard.m_warmup_iterations)) {
+                measurements[plan] = {.m_source = PlanMeasurement::Source::Reused,
+                                      .m_figure = *known};
+            }
+        }
+    }
+    const bool pass = warms && std::ranges::any_of(measurements, [](const PlanMeasurement& m) {
+                          return m.m_source == PlanMeasurement::Source::None;
+                      });
+    // The first sizing: the explicit budget; under a MEASURED one the slowest plan's figure when
+    // every plan has one (no pass: this is the only sizing), else for the pass a single clock
+    // step, the smallest figure there is (it sizes the session as every figure below the first
+    // struct edge does, so the second sizing below usually keeps the entry count).
+    double first_budget_ms = prepared_hard.m_budget_ms;
+    if (measured) {
+        first_budget_ms = static_cast<double>(anira::clock_step_ns()) / 1e6;
+        if (!pass) {
+            for (const PlanMeasurement& known : measurements) {
+                first_budget_ms = std::max(first_budget_ms, known.m_figure.m_figure.m_measured_ms);
+            }
+        }
+    }
+    size_session(first_budget_ms);
 
     // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x host_block_max / host_rate, the block a
     // pop has no input to measure by.
@@ -2187,9 +2325,17 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     }
     // The report: its plan rows carry the budget of the contract, which reads 0 under a MEASURED
     // budget until the pass measured it, and no measurement yet (the real-time factor of the
-    // declared budget, UNMEASURED: a prepare without a pass keeps that).
-    for (anira::capi::Plan& plan : handler.m_plans) {
-        set_real_time(plan.m_info, nullptr, prepared, prepared_hard, session.m_num_instances);
+    // declared budget, UNMEASURED: a prepare without a warm-up keeps that); a plan that reuses the
+    // model's figure has it already.
+    for (uint32_t plan = 0; plan < num_plans; ++plan) {
+        anira_plan_info& row = handler.m_plans[plan].m_info;
+        if (measurements[plan].m_source == PlanMeasurement::Source::Reused) {
+            const anira::WarmupFigure& figure = measurements[plan].m_figure.m_figure;
+            if (measured) { row.budget_ms = figure.m_measured_ms; }
+            set_real_time(row, &figure, true, prepared, prepared_hard, session.m_num_instances);
+        } else {
+            set_real_time(row, nullptr, false, prepared, prepared_hard, session.m_num_instances);
+        }
     }
     build_report(handler,
                  model,
@@ -2259,21 +2405,41 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     };
     prepare_user_code();
 
-    std::vector<anira::WarmupFigure> figures;
-    if (warms) {
-        // The pass, plan by plan in table order: every plan runs, the selected one or not, so
-        // that a plan selected later runs at the budget the session is sized for. A failed
-        // inference or one that never completes fails the prepare (Core::warm_up_plan).
+    if (pass) {
+        // The pass, plan by plan in table order, for every plan without the model's figure, the
+        // selected one or not, so that a plan selected later runs at the budget the session is
+        // sized for. A plan's key is claimed for its pass alone: a prepare of the same model on
+        // another thread waits for the figure instead of measuring twice, and one that stored it
+        // meanwhile is reused. A failed inference or one that never completes fails the prepare
+        // (Core::warm_up_plan), and the claim goes back unpublished.
         double slowest_ms = 0.0;
-        for (uint32_t plan = 0; plan < handler.m_plans.size(); ++plan) {
-            figures.push_back(handler.m_manager->warm_up_plan(plan));
-            const anira::WarmupFigure& figure = figures.back();
+        for (uint32_t plan = 0; plan < num_plans; ++plan) {
+            PlanMeasurement& measurement = measurements[plan];
+            if (measurement.m_source == PlanMeasurement::Source::None) {
+                FigureClaim claim(keys[plan]);
+                if (std::optional<anira::ModelFigure> known =
+                        claim.take(prepared_hard.m_warmup, prepared_hard.m_warmup_iterations)) {
+                    measurement = {.m_source = PlanMeasurement::Source::Reused, .m_figure = *known};
+                } else {
+                    measurement = {.m_source = PlanMeasurement::Source::Measured,
+                                   .m_figure = {.m_figure = handler.m_manager->warm_up_plan(plan),
+                                                .m_mode = prepared_hard.m_warmup,
+                                                .m_when = std::chrono::steady_clock::now()}};
+                    claim.publish(measurement.m_figure);
+                }
+            }
+            const anira::WarmupFigure& figure = measurement.m_figure.m_figure;
             slowest_ms = std::max(slowest_ms, figure.m_measured_ms);
             // A MEASURED plan's budget is its figure; the session runs the slowest plan's. The
-            // row takes what the pass measured, its real-time factor and its verdict.
+            // row takes the figure, its real-time factor and its verdict.
             anira_plan_info& row = handler.m_plans[plan].m_info;
             if (measured) { row.budget_ms = figure.m_measured_ms; }
-            set_real_time(row, &figure, prepared, prepared_hard, session.m_num_instances);
+            set_real_time(row,
+                          &figure,
+                          measurement.m_source == PlanMeasurement::Source::Reused,
+                          prepared,
+                          prepared_hard,
+                          session.m_num_instances);
             handler.m_report.m_plans[plan] = row;
         }
         // The session again, sized for what the pass measured (an explicit budget sizes it as
@@ -2300,7 +2466,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         zero_state_ports(handler);
     }
 
-    log_measurement(handler, figures);
+    log_measurement(handler, measurements);
     log_report(handler, model);
     const uint32_t suppressed = handler.m_rt.rearm();
     if (suppressed > 0) {

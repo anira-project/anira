@@ -25,6 +25,7 @@
 #include <anira/abi/enums.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 
 namespace anira {
@@ -38,6 +39,14 @@ struct WarmupFigure {
     double m_measured_ms = 0.0;  ///< the maximum of the last min(4, m_iterations) times, in ms
     double m_median_ms = 0.0;    ///< their median, in ms
     double m_fastest_ms = 0.0;   ///< their minimum, in ms (what a CAPPED pass's record spans)
+};
+
+/// A model's figure: what a warm-up pass measured for one key of the core's figure index
+/// (FigureKey), kept while the core lives.
+struct ModelFigure {
+    WarmupFigure m_figure;                                 ///< the pass's figure and outcome
+    anira_warmup_mode m_mode = ANIRA_WARMUP_UNTIL_STABLE;  ///< the warm-up that measured it
+    std::chrono::steady_clock::time_point m_when;          ///< when (for the log)
 };
 
 /**

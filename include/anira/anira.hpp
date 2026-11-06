@@ -2651,7 +2651,8 @@ private:
  *
  * A processor has no name: a Pipeline holds one, so a name would identify nothing; every record
  * about it says "the processor", and the consumer column of its anira_plan_ext rows reads
- * "processor".
+ * "processor". Its optional id (the constructor's) names its inference hooks for the model's
+ * figure, which a prepare's warm-up pass measures with them: processors of one id share it.
  */
 class Processor {
 public:
@@ -2715,11 +2716,21 @@ public:
     };
 
     Processor() = default;
+    /// A processor with an id (anira_processor_desc::id), a reverse-URI name: what its
+    /// before_inference and after_inference are for the model's figure. A prepare's warm-up pass
+    /// times those hooks with the engine call, so every handler whose processor gives the same id
+    /// shares one figure of the model (identical plugins report identical latency); without an
+    /// id, a processor that fills an inference hook measures its own. A processor without
+    /// inference hooks needs none.
+    explicit Processor(std::string id) : m_id(std::move(id)) {}
     virtual ~Processor() = default;
     Processor(const Processor&) = delete;
     Processor& operator=(const Processor&) = delete;
     Processor(Processor&&) = delete;
     Processor& operator=(Processor&&) = delete;
+
+    /// The id the constructor took; empty for none.
+    const std::string& id() const noexcept { return m_id; }
 
     /// The phases this processor fills: an OR of k_pre_process, k_post_process, k_before_inference
     /// and k_after_inference. Read once, when the processor is added to a Pipeline; 0 is a
@@ -2763,6 +2774,9 @@ public:
     /// it was deleted, whether or not init ever ran; no callback of that chain runs afterwards.
     /// The object itself lives as long as a shared_ptr to it does.
     virtual void release() noexcept {}
+
+private:
+    std::string m_id;
 };
 
 namespace detail {
@@ -3739,6 +3753,7 @@ public:
         desc.consumed_kinds = kinds.empty() ? nullptr : kinds.data();
         desc.num_consumed_kinds = static_cast<uint32_t>(kinds.size());
         desc.flags = processor->flags();  // the C entry refuses a bit it does not define
+        desc.id = processor->id().empty() ? nullptr : processor->id().c_str();  // copied
         // A NULL phase slot means "not taking part": only the phases of the mask are filled, so
         // that a processor of other phases leaves anira's default pre_process / post_process
         // running.

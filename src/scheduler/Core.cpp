@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -18,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -26,6 +28,7 @@
 
 #include "../utils/Logger.h"
 #include "../utils/RtLatch.h"
+#include "FigureKey.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"
 #include "Warmup.h"
@@ -178,7 +181,7 @@ struct Core::State {
      *
      * The key is the record and the carrier: two sessions whose plans describe the same
      * model for the same backend (engine and provider, and the provider options the engine
-     * reads) with the same tensors, shared slots, warm-up and entry share
+     * reads) with the same tensors, shared slots and entry share
      * the entry's loaded model (per-slot dims, dtype, the path or the bytes' identity are in
      * the record, so two handlers with different resolved windows never share), exclusive
      * sessions included (their record says no shared slot, and each keeps an executor of
@@ -203,6 +206,26 @@ struct Core::State {
         std::shared_ptr<InstanceWaitList> m_waiting;
     };
     std::vector<PoolEntry> m_loaded_models;  ///< The pool of loaded models
+
+    /**
+     * @brief The models' figures: what a warm-up pass measured, per key (FigureKey)
+     *
+     * Beside the pool, not on the loaded model: a handler's re-prepare releases its session
+     * before it builds the next, and the pool erases an entry no other session holds, so a
+     * single plugin's re-prepare loads its model anew; the figure outlives that, for the core's
+     * life (until release_core_if_idle() frees the state). An entry is `measuring` while a
+     * prepare holds its claim; m_figures_changed wakes the prepares that wait for it. Entries
+     * whose carrier or registration died are dropped at the next claim. Under m_figures_mutex,
+     * a leaf lock.
+     */
+    struct FigureEntry {
+        FigureKey m_key;
+        std::optional<ModelFigure> m_figure;
+        bool m_measuring = false;
+    };
+    std::mutex m_figures_mutex;
+    std::condition_variable m_figures_changed;
+    std::vector<FigureEntry> m_figures;
 };
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
@@ -1709,6 +1732,112 @@ int64_t Core::warm_up_inference(const std::shared_ptr<SessionElement>& session, 
                               " failed; the log record of the inference says why");
     }
     return inference_ns;
+}
+
+namespace {
+
+/// Whether two weak pointers name the same object (or both none), by owner: an expired one
+/// still answers for the object it named.
+bool same_owner(const std::weak_ptr<const void>& a, const std::weak_ptr<const void>& b) noexcept {
+    return !a.owner_before(b) && !b.owner_before(a);
+}
+
+bool same_key(const FigureKey& a, const FigureKey& b) {
+    return a.m_registered == b.m_registered && a.m_has_bytes == b.m_has_bytes &&
+           a.m_hooks_by_registration == b.m_hooks_by_registration && a.m_hook_id == b.m_hook_id &&
+           same_owner(a.m_carrier, b.m_carrier) && same_owner(a.m_hook_owner, b.m_hook_owner) &&
+           same_owner(a.m_bytes_owner, b.m_bytes_owner) && a.m_model == b.m_model;
+}
+
+/// Whether a key names an object that died (its figure can never be asked for again).
+bool dead_key(const FigureKey& key) noexcept {
+    return (key.m_registered && key.m_carrier.expired()) ||
+           (key.m_hooks_by_registration && key.m_hook_owner.expired()) ||
+           (key.m_has_bytes && key.m_bytes_owner.expired());
+}
+
+/// Whether a figure answers a warm-up: UNTIL_STABLE asks for one UNTIL_STABLE measured, FIXED n
+/// for one of UNTIL_STABLE or of FIXED m >= n.
+bool answers(const ModelFigure& figure, anira_warmup_mode mode, uint32_t iterations) {
+    if (figure.m_mode == ANIRA_WARMUP_UNTIL_STABLE) { return true; }
+    return mode == ANIRA_WARMUP_FIXED && figure.m_figure.m_iterations >= iterations;
+}
+
+}  // namespace
+
+std::optional<ModelFigure> Core::find_figure(const FigureKey& key,
+                                             anira_warmup_mode mode,
+                                             uint32_t iterations) {
+    State& state = get_state();
+    const std::scoped_lock<std::mutex> lock(state.m_figures_mutex);
+    for (const State::FigureEntry& entry : state.m_figures) {
+        if (!same_key(entry.m_key, key)) { continue; }
+        if (entry.m_figure.has_value() && answers(*entry.m_figure, mode, iterations)) {
+            return entry.m_figure;
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::optional<ModelFigure> Core::claim_figure(const FigureKey& key,
+                                              anira_warmup_mode mode,
+                                              uint32_t iterations) {
+    State& state = get_state();
+    std::unique_lock<std::mutex> lock(state.m_figures_mutex);
+    std::erase_if(state.m_figures, [](const State::FigureEntry& entry) {
+        return !entry.m_measuring && dead_key(entry.m_key);
+    });
+    const auto find = [&state, &key] {
+        return std::ranges::find_if(state.m_figures, [&key](const State::FigureEntry& entry) {
+            return same_key(entry.m_key, key);
+        });
+    };
+    auto entry = find();
+    while (entry != state.m_figures.end() && entry->m_measuring) {
+        state.m_figures_changed.wait(lock);
+        entry = find();
+    }
+    if (entry == state.m_figures.end()) {
+        state.m_figures.push_back(
+            State::FigureEntry{.m_key = key, .m_figure = {}, .m_measuring = true});
+        return std::nullopt;
+    }
+    if (entry->m_figure.has_value() && answers(*entry->m_figure, mode, iterations)) {
+        return entry->m_figure;
+    }
+    entry->m_measuring = true;
+    return std::nullopt;
+}
+
+void Core::publish_figure(const FigureKey& key, const ModelFigure& figure) {
+    State& state = get_state();
+    {
+        const std::scoped_lock<std::mutex> lock(state.m_figures_mutex);
+        for (State::FigureEntry& entry : state.m_figures) {
+            if (!same_key(entry.m_key, key)) { continue; }
+            entry.m_figure = figure;
+            entry.m_measuring = false;
+            break;
+        }
+    }
+    state.m_figures_changed.notify_all();
+}
+
+void Core::abandon_figure(const FigureKey& key) {
+    State& state = get_state();
+    {
+        const std::scoped_lock<std::mutex> lock(state.m_figures_mutex);
+        for (State::FigureEntry& entry : state.m_figures) {
+            if (!same_key(entry.m_key, key)) { continue; }
+            entry.m_measuring = false;
+            break;
+        }
+        std::erase_if(state.m_figures, [](const State::FigureEntry& entry) {
+            return !entry.m_measuring && !entry.m_figure.has_value();
+        });
+    }
+    state.m_figures_changed.notify_all();
 }
 
 void Core::start_thread_pool_locked(State& state) {

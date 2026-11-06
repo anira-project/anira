@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "../utils/RealtimeSanitizer.h"
@@ -36,6 +37,9 @@ namespace anira {
 /// The core-owned real-time log drain thread (src/scheduler/LogDrainLoop.h); anira's own, not
 /// tanh-lib's.
 class LogDrainLoop;
+/// What a model's figure is a figure of (src/scheduler/FigureKey.h): a parameter type here,
+/// complete in Core.cpp and at every caller.
+struct FigureKey;
 
 namespace detail {
 struct UnloadHook;
@@ -436,6 +440,42 @@ public:
     /// How long the warm-up pass waits on a semaphore before it kicks an exclusive session's
     /// dispatch chain again (warm_up_inference()).
     static constexpr std::chrono::milliseconds k_warm_up_kick{1};
+
+    /**
+     * @brief The figure the index holds for a key, when it answers a warm-up
+     *
+     * A figure answers UNTIL_STABLE when UNTIL_STABLE measured it, and FIXED n when UNTIL_STABLE
+     * or FIXED m >= n did; a weaker one is measured again. Does not wait for a prepare that is
+     * measuring the key (claim_figure() does). Any control thread.
+     *
+     * @param key What the figure is a figure of
+     * @param mode The contract's warm-up (UNTIL_STABLE or FIXED)
+     * @param iterations FIXED's count
+     * @return The figure, or nothing (none, or a weaker one)
+     */
+    static std::optional<ModelFigure> find_figure(const FigureKey& key,
+                                                  anira_warmup_mode mode,
+                                                  uint32_t iterations);
+
+    /**
+     * @brief The figure for a key, or the right to measure it
+     *
+     * Waits while another prepare measures the key, then answers as find_figure(). Without an
+     * answer, the key is the caller's to measure: a later claim of it waits until the caller
+     * publishes (publish_figure()) or abandons (abandon_figure()) it. A caller holds one claim at
+     * a time and waits for none while it holds one, so two prepares never wait for each other.
+     *
+     * @return The figure, or nothing (the caller measures now)
+     */
+    static std::optional<ModelFigure> claim_figure(const FigureKey& key,
+                                                   anira_warmup_mode mode,
+                                                   uint32_t iterations);
+
+    /// The figure the claimer measured, for every later prepare of the key; ends the claim.
+    static void publish_figure(const FigureKey& key, const ModelFigure& figure);
+
+    /// Ends a claim without a figure (the pass failed): the next claim of the key measures.
+    static void abandon_figure(const FigureKey& key);
 
     /**
      * @brief Gets the number of registered inference sessions

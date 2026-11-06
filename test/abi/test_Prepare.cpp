@@ -12,6 +12,7 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
@@ -1575,11 +1576,11 @@ private:
 };
 
 /// The create-time defaults, a MEASURED budget and the UNTIL_STABLE warm-up, at host blocks of
-/// `block` at k_rate.
-ContractHandle measured_contract(uint32_t block = k_block) {
+/// `block` at `rate`.
+ContractHandle measured_contract(uint32_t block = k_block, double rate = k_rate) {
     return ContractHandle(Hard{.host_block_min = static_cast<double>(block),
                                .host_block_max = static_cast<double>(block),
-                               .host_rate = k_rate,
+                               .host_rate = rate,
                                .budget = anira::Budget::measured()});
 }
 
@@ -1918,4 +1919,258 @@ TEST(AbiWarmup, ThePassLeavesNoTraceInTheStream) {
     const std::vector<float> stream = waited_stream(twin_a.m_handler, 8);
     EXPECT_EQ(stream, waited_stream(twin_b.m_handler, 8));
     EXPECT_TRUE(std::ranges::any_of(stream, [](float x) { return x != 0.0F; }));
+}
+
+// ============================================================================================
+// The model's figure (the core's figure index)
+// ============================================================================================
+
+namespace {
+
+/// An inference hook that does nothing: what puts a processor's identity into the figure's key.
+anira_status ANIRA_CALL quiet_hook(const anira_processor_ctx* /*ctx*/,
+                                   void* /*prepared*/,
+                                   void* /*user_data*/) noexcept {
+    return ANIRA_OK;
+}
+
+/// A processor that fills before_inference, with `id` (NULL: none).
+anira_processor_desc hooked_processor(const char* id) {
+    anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
+    desc.before_inference = &quiet_hook;
+    desc.id = id;
+    return desc;
+}
+
+}  // namespace
+
+// Two handlers of one model and one contract on one context: the second reuses the figure the
+// first measured, runs no pass (the engine's count does not grow during its prepare) and reports
+// the same budget and latency, its outcome REUSED with the first's counts.
+TEST(AbiFigure, TwoHandlersOfOneModelShareItsFigure) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    Handler first(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(first.prepare(measured_contract()), ANIRA_OK) << first.m_err.message;
+    const int calls = engine.m_calls.load();
+    ASSERT_GE(calls, 4);
+    Handler second(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(second.prepare(measured_contract()), ANIRA_OK) << second.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), calls) << "no pass";
+    const anira_plan_info& measured_row = plan_row(first);
+    const anira_plan_info& reused_row = plan_row(second);
+    EXPECT_NE(measured_row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    EXPECT_EQ(reused_row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    EXPECT_EQ(reused_row.warmup_iterations, measured_row.warmup_iterations);
+    EXPECT_DOUBLE_EQ(reused_row.measured_ms, measured_row.measured_ms);
+    EXPECT_DOUBLE_EQ(reused_row.budget_ms, measured_row.budget_ms);
+    EXPECT_EQ(anira_handler_get_latency(second.m_handler, 0),
+              anira_handler_get_latency(first.m_handler, 0));
+    expect_rows_follow_the_thresholds(second);
+}
+
+// A re-prepare of one handler at another host block of the same window reuses the model's
+// figure: no pass, REUSED, the same inference time.
+TEST(AbiFigure, ARePrepareReusesTheFigure) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    const int calls = engine.m_calls.load();
+    const double figure = plan_row(handler).measured_ms;
+    ASSERT_EQ(handler.prepare(measured_contract(k_block / 2)), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), calls) << "no pass";
+    EXPECT_EQ(plan_row(handler).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    EXPECT_DOUBLE_EQ(plan_row(handler).measured_ms, figure);
+    EXPECT_DOUBLE_EQ(plan_row(handler).budget_ms, figure);
+}
+
+// The figure is the model's, the factor the contract's: the same model at 48 and at 96 kHz has
+// one inference time and a real-time factor twice as large, and an inference of 6 ms on one
+// instance at a hop of 512 is not real-time at 96 kHz (5.3 ms per hop) by construction.
+TEST(AbiFigure, AnotherSampleRateKeepsTheTimeAndDoublesTheFactor) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 6.0; }, Wait::Sleep);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract(k_block, 48000.0)), ANIRA_OK)
+        << handler.m_err.message;
+    const anira_plan_info at_48k = plan_row(handler);
+    ASSERT_EQ(handler.prepare(measured_contract(k_block, 96000.0)), ANIRA_OK)
+        << handler.m_err.message;
+    const anira_plan_info at_96k = plan_row(handler);
+    EXPECT_EQ(at_96k.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    EXPECT_DOUBLE_EQ(at_96k.measured_ms, at_48k.measured_ms);
+    EXPECT_NEAR(at_96k.rt_factor, 2.0 * at_48k.rt_factor, 1e-9);
+    EXPECT_EQ(at_96k.rt_verdict, static_cast<uint32_t>(ANIRA_RT_NOT_REALTIME));
+}
+
+// A figure is reused only by a warm-up it answers: a FIXED 2 figure is measured again under
+// UNTIL_STABLE, which replaces it; the UNTIL_STABLE figure then answers both UNTIL_STABLE and
+// FIXED n.
+TEST(AbiFigure, AWeakerFigureIsMeasuredAgain) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ContractHandle fixed_two = measured_contract();
+    fixed_two.hard_warmup(ANIRA_WARMUP_FIXED, 2);
+    ASSERT_EQ(handler.prepare(fixed_two), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), 2);
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_GE(engine.m_calls.load(), 2 + 4) << "measured again";
+    EXPECT_NE(plan_row(handler).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    const int calls = engine.m_calls.load();
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(fixed_two), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), calls) << "the UNTIL_STABLE figure answers both";
+    EXPECT_EQ(plan_row(handler).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+}
+
+// Two prepares of one model on two threads at once: one measures, the other waits for its
+// figure and reuses it; the engine ran one pass.
+TEST(AbiFigure, TwoPreparesAtOnceMeasureTheModelOnce) {
+    const Context context(4);
+    const ScriptedEngine engine([](int /*call*/) { return 2.0; }, Wait::Sleep);
+    Handler first(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    Handler second(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    anira_status first_status = ANIRA_ERROR_INTERNAL;
+    anira_status second_status = ANIRA_ERROR_INTERNAL;
+    std::thread one([&] { first_status = first.prepare(measured_contract()); });
+    std::thread two([&] { second_status = second.prepare(measured_contract()); });
+    one.join();
+    two.join();
+    ASSERT_EQ(first_status, ANIRA_OK) << first.m_err.message;
+    ASSERT_EQ(second_status, ANIRA_OK) << second.m_err.message;
+    const bool first_reused =
+        plan_row(first).warmup_outcome == static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED);
+    const bool second_reused =
+        plan_row(second).warmup_outcome == static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED);
+    EXPECT_NE(first_reused, second_reused) << "exactly one measured";
+    const anira_plan_info& measured_row = first_reused ? plan_row(second) : plan_row(first);
+    EXPECT_EQ(engine.m_calls.load(), static_cast<int>(measured_row.warmup_iterations))
+        << "one pass";
+    EXPECT_DOUBLE_EQ(plan_row(first).budget_ms, plan_row(second).budget_ms);
+}
+
+// The processor's inference hooks are in the figure's key: two registrations of a processor
+// with a before_inference and one id share the figure; without an id each registration measures
+// its own; a processor without inference hooks never enters the key.
+TEST(AbiFigure, TheProcessorsInferenceHooksAreInTheKey) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    const auto prepared_calls = [&](const anira_processor_desc& processor) {
+        const std::array<anira_processor_desc, 1> processors{processor};
+        Handler handler(context,
+                        anira_test::mono_stream_model(k_block, 1),
+                        {},
+                        processors,
+                        engine.engine());
+        EXPECT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+        return engine.m_calls.load();
+    };
+    const int first = prepared_calls(hooked_processor("org.anira.test.window"));
+    ASSERT_GE(first, 4);
+    EXPECT_EQ(prepared_calls(hooked_processor("org.anira.test.window")), first)
+        << "one id: one figure";
+    const int without_id = prepared_calls(hooked_processor(nullptr));
+    EXPECT_GT(without_id, first) << "no id: the registration's own";
+    EXPECT_GT(prepared_calls(hooked_processor(nullptr)), without_id)
+        << "another registration without an id measures again";
+    const anira_processor_desc unhooked = ANIRA_PROCESSOR_DESC_INIT;
+    const int plain = prepared_calls(unhooked);
+    EXPECT_GT(plain, without_id) << "no hooks: the model's key alone, measured once";
+    EXPECT_EQ(prepared_calls(unhooked), plain) << "another processor without hooks reuses it";
+}
+
+// The figures live as long as the core's state: once the last context and handler are gone and
+// the core is shut down and freed (anira_release_core_if_idle), the next prepare of the model
+// measures again.
+TEST(AbiFigure, TheFiguresGoWithTheCore) {
+    const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    int calls = 0;
+    {
+        const Context context;
+        Handler handler(context,
+                        anira_test::mono_stream_model(k_block, 1),
+                        {},
+                        {},
+                        engine.engine());
+        ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+        calls = engine.m_calls.load();
+    }
+    ASSERT_EQ(anira_shutdown(), ANIRA_OK);
+    ASSERT_NE(anira_release_core_if_idle(), 0U) << "the core's state is freed";
+    const Context context;
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_GT(engine.m_calls.load(), calls) << "measured again";
+    EXPECT_NE(plan_row(handler).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+}
+
+// Every pass feeds the index, under either budget kind (D16): an explicit budget with
+// UNTIL_STABLE measures the model, and a measured budget then reuses it, its budget the figure.
+TEST(AbiFigure, AnExplicitPassFeedsALaterMeasuredBudget) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ContractHandle declared = measured_contract();
+    declared.hard_budget(ANIRA_BUDGET_EXPLICIT, std::chrono::milliseconds(5));
+    ASSERT_EQ(handler.prepare(declared), ANIRA_OK) << handler.m_err.message;
+    const int calls = engine.m_calls.load();
+    ASSERT_GE(calls, 4);
+    const double figure = plan_row(handler).measured_ms;
+    EXPECT_DOUBLE_EQ(plan_row(handler).budget_ms, 5.0);
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), calls) << "no pass";
+    EXPECT_EQ(plan_row(handler).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    EXPECT_DOUBLE_EQ(plan_row(handler).measured_ms, figure);
+    EXPECT_DOUBLE_EQ(plan_row(handler).budget_ms, figure);
+}
+
+// The reverse (D16): a measured budget's figure is reused by an explicit budget, which keeps
+// its declared budget and latency and reports the figure's factor and verdict.
+TEST(AbiFigure, AnExplicitBudgetReusesTheFigureAndKeepsItsSizing) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    Handler explicit_twin(context,
+                          anira_test::mono_stream_model(k_block, 1),
+                          {},
+                          {},
+                          engine.engine());
+    ASSERT_EQ(explicit_twin.prepare(explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS, 0.0, 5.0)),
+              ANIRA_OK)
+        << explicit_twin.m_err.message;
+    const uint32_t declared_latency = anira_handler_get_latency(explicit_twin.m_handler, 0);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    const int calls = engine.m_calls.load();
+    const anira_plan_info measured_row = plan_row(handler);
+    ContractHandle declared = measured_contract();
+    declared.hard_budget(ANIRA_BUDGET_EXPLICIT, std::chrono::milliseconds(5));
+    ASSERT_EQ(handler.prepare(declared), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), calls) << "no pass";
+    const anira_plan_info& row = plan_row(handler);
+    EXPECT_EQ(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+    EXPECT_DOUBLE_EQ(row.budget_ms, 5.0);
+    EXPECT_EQ(anira_handler_get_latency(handler.m_handler, 0), declared_latency);
+    EXPECT_DOUBLE_EQ(row.rt_factor, measured_row.rt_factor);
+    EXPECT_EQ(row.rt_verdict, measured_row.rt_verdict);
+}
+
+// NONE is the opt-out (D17): an explicit budget without a warm-up neither measures nor reads
+// the model's figure; its row is UNMEASURED, its factor the declared budget's.
+TEST(AbiFigure, AnExplicitBudgetWithoutAWarmUpIgnoresTheFigure) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 1.0; }, Wait::Busy);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    const int calls = engine.m_calls.load();
+    ASSERT_EQ(handler.prepare(explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS, 0.0, 5.0, 0)),
+              ANIRA_OK)
+        << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), calls) << "no pass";
+    const anira_plan_info& row = plan_row(handler);
+    EXPECT_EQ(row.rt_verdict, static_cast<uint32_t>(ANIRA_RT_UNMEASURED));
+    EXPECT_EQ(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_NONE));
+    EXPECT_DOUBLE_EQ(row.measured_ms, 0.0);
+    EXPECT_DOUBLE_EQ(row.rt_factor, 5.0 * k_rate / (1000.0 * k_block));
 }

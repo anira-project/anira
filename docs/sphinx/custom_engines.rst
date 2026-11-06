@@ -261,7 +261,10 @@ what it keeps and never keeps the pointers):
 
 The record carries no warm-up count: the contract's warm-up pass runs at
 ``anira_handler_prepare``, through the handler's session, and reaches a registered engine as
-ordinary ``process`` calls, which it times like every engine's (:doc:`usage` section 1.3). An
+ordinary ``process`` calls, which it times like every engine's (:doc:`usage` section 1.3). The
+figure it measures is the model's on this registration: a later handler on the same
+registration reuses it, while an engine registered anew (one object per plugin instance)
+measures its own. An
 engine that wants its first-run cost out of the way before the pass runs a warm inference
 itself, over the shared slots here and over an exclusive handler's own executor at its
 ``prepare``, as the built-in adapters do over every executor they make. A status other than ``ANIRA_OK`` fails ``anira_handler_prepare`` with it, the

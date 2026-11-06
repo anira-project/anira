@@ -442,6 +442,28 @@ minted again. On an Async handle it throws ``anira::Error`` with
   in ``anira_inference_thread_run_loop`` (``ANIRA_ERROR_INVALID_STATE`` otherwise); an inference
   of the pass that fails fails the prepare with ``ANIRA_ERROR_ENGINE``. Apart from the pass,
   every executor of a built-in engine runs one inference over its own scratch when it is made.
+
+  **The model's figure.** The inference time belongs to the model, not to the handler: the core
+  keeps what every pass measured, under either budget kind, keyed like its pool of loaded
+  models (the engine, the provider and its options, the model, its entry, its tensors at the
+  pinned window, its instances; for a registered engine its registration) plus the processor's
+  inference hooks (nothing for a processor that fills neither ``before_inference`` nor
+  ``after_inference``, else its id, ``anira_processor_desc.id`` or ``anira::Processor(id)``, else
+  its registration). A later prepare of the model, by another handler or the same one at another
+  block size or sample rate, reuses the figure and runs no pass (``ANIRA_WARMUP_OUTCOME_REUSED``):
+  identical plugins report identical latency, a re-prepare is quick and silent, and a prepare
+  whose every plan reuses its figure sizes the session once. The real-time factor and the verdict
+  are still the contract's (another sample rate, another factor). A figure answers a warm-up at
+  least as thorough as the one that measured it: ``UNTIL_STABLE`` answers every warm-up,
+  ``FIXED n`` a ``FIXED m`` with ``m <= n``, and a weaker one is measured again and replaced. Two
+  prepares of one model on two threads measure it once; ``ANIRA_WARMUP_NONE`` neither measures
+  nor reads it. The figures live as long as the core's state (until
+  ``anira_release_core_if_idle`` frees it). The limits: a figure taken on an idle machine can
+  underestimate the inference time under the load of later handlers (memory bandwidth, the clock
+  speed, SMT siblings), and it stays until the core is freed; the marginal verdict's headroom is
+  the margin for that, not a guarantee. Give a processor with inference hooks an id, so that the
+  handlers of identical plugins share their figure; a registered engine that each plugin instance
+  registers anew measures once per registration.
 - **Miss policy.** What a Hard entry delivers for a block whose inference has not completed
   when the block is popped (the entry returns ``ANIRA_MISSED``, a success, with a delivered
   count of ``0`` under every policy, so the miss is visible; the policy decides what the

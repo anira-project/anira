@@ -391,7 +391,8 @@ _Static_assert(sizeof(anira_processor_desc) ==
                    sizeof(((const anira_processor_desc*)0)->prepare) +
                    sizeof(((const anira_processor_desc*)0)->unprepare) +
                    sizeof(((const anira_processor_desc*)0)->init) +
-                   sizeof(((const anira_processor_desc*)0)->release),
+                   sizeof(((const anira_processor_desc*)0)->release) +
+                   sizeof(((const anira_processor_desc*)0)->id),
                "anira_processor_desc has no implicit padding");
 
 _Static_assert(offsetof(anira_engine_load_info, struct_size) == 0, "anira_engine_load_info.struct_size first");
