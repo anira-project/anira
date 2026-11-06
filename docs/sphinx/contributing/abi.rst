@@ -26,12 +26,15 @@ The headers under ``include/anira/abi/`` are generated, never edited by hand. Th
 - ``abi/layout-<major>.txt`` and the enum pages under ``docs/sphinx/api/enum/``.
 
 Commit the registry with every regenerated file. The ``anira_abi_generate`` test and the
-``build_web`` workflow run ``--check``. Exit codes: 0 clean, 1 a registry error, 2 drift, 3 usage.
+``build_web`` workflow run ``--check``. ``--diff-against <ref>`` says whether the registry changed
+since a tag by appending (a minor or a pre-release) or by breaking (a major). Exit codes: 0 clean,
+1 a registry error, 2 drift, 3 usage.
 
 The generated files carry a ``.clang-format`` with ``DisableFormat`` and a
 ``NOLINTBEGIN(readability-identifier-naming)`` block, so the pinned root configs stay untouched.
-``layout.ts`` is written the way prettier prints it, and ``web/.prettierignore`` lists
-``enums.ts`` and ``bindings.ts``.
+``layout.ts`` is written the way prettier prints it (``npx prettier --check src/abi/layout.ts``),
+and ``web/.prettierignore`` lists ``enums.ts`` and ``bindings.ts``, so ``npm run format`` leaves
+them as written.
 
 ``bindings.ts`` is the TypeScript face of the C ABI: the class ``AniraBindings``, one method per
 entry under its C name, derived from the registry's types. A new entry needs no TypeScript.
@@ -59,14 +62,16 @@ Writing a registry entry
   - ``arms`` (a named member of an unnamed union type, Tier-1 structs only).
 
   No truly anonymous struct, which ``-pedantic`` C++ refuses. The generator refuses a member name
-  repeated within one C scope (``duplicate field <name> in <scope>``).
+  repeated within one C scope (the fields of a struct, the arms of a union, the fields of one arm;
+  an ``ANIRA_PTR`` slot takes both ``name`` and ``name_bits``): ``duplicate field <name> in
+  <scope>``. Arms may reuse a name across arms.
 - **A union** is a Tier-1 record (``tier: 1`` with ``size`` and ``align``); the layout table has a
   row per member, written as its C designator (``field anira_sync_token.u.vk.value offset 16
   size 8``).
 - **Record attributes:**
 
-  - ``struct_id: ANIRA_STRUCT_<X>`` ties a record to ``anira_sizeof``, and every Tier-1 record
-    carries one;
+  - ``struct_id: ANIRA_STRUCT_<X>`` ties a record to ``anira_sizeof``; every Tier-1 record
+    carries one, and an id without a record is legal and answers 0;
   - ``function_type: true`` makes a callback a function type, for an ``ANIRA_PTR`` slot only;
   - ``forward: true`` pre-declares a struct;
   - ``padding_free: true`` on a Tier-2 struct makes ``test_layout.c`` assert ``sizeof`` equals the
@@ -75,27 +80,36 @@ Writing a registry entry
 
 - **Header kinds:**
 
-  - ``draft: true`` puts a header under ``include/anira/abi/draft/`` with ``status: draft``
-    functions only. Their names go to ``abi/symbols-draft.txt``, and no umbrella but
-    ``anira_all.h`` includes it. Promotion moves a name between the symbol lists without renaming
-    it. ``--diff-against`` lists a changed or promoted draft function as an addition, while a
-    changed frozen union arm, signature, thread tag or ``nonblocking``, and a removed
-    ``callback_safe``, are breaks.
+  - ``draft: true`` puts a header under ``include/anira/abi/draft/`` (``file: draft/<name>.h``,
+    guard ``ANIRA_ABI_DRAFT_*``) with ``status: draft`` functions only, no record, enum or handle.
+    Their names go to ``abi/symbols-draft.txt``, and no umbrella but ``anira_all.h`` includes it.
+    Promotion moves a name between the symbol lists and its declaration into a promised header,
+    without renaming it. A draft function is outside the promise, so ``--diff-against`` lists a
+    changed, removed or promoted one as an addition; a changed arm of a frozen union (an appended
+    one included), a changed signature, thread tag or ``nonblocking`` and a removed
+    ``callback_safe`` are breaks.
   - ``platform: emscripten`` makes a companion for one target (``file: anira_<name>.h``, its own
-    ``guard:``). Its body sits inside ``#if defined(__EMSCRIPTEN__) || defined(DOXYGEN)``, and it
-    declares functions, callbacks, typedefs and defines only. No header of the registry includes
-    it. Its names go to ``abi/symbols-emscripten.txt`` and the wasm export list.
+    ``guard:``). Its body sits inside ``#if defined(__EMSCRIPTEN__) || defined(DOXYGEN)``, so it is
+    an empty header natively and a native consumer may include it. It declares functions,
+    callbacks, typedefs and defines only, and no header of the registry includes it (the scope-all
+    umbrella ``anira_all.h`` does). Its names go to ``abi/symbols-emscripten.txt`` and the wasm
+    export list, never to ``abi/symbols-<major>.txt``, ``abi/symbols-draft.txt``, the link probe or
+    the layout test.
 
 - **Thread tags:** every function carries one from the architecture document's vocabulary
   (``main-thread``, ``driver-thread``, ``inference-thread``, ``thread-safe``, with qualifiers),
   ``callback_safe`` where it applies and ``nonblocking: true`` where the body is real-time. The tag
   becomes the ``@par Thread contract`` line.
 
-  - The generator refuses a nonblocking entry with a 64-bit argument or an ``anira_error*``.
-  - The dual tag ``driver-thread | inference-thread`` (a processor callback, the context accessors,
-    the default bodies) requires ``nonblocking: true`` on an entry, but no attribute on a callback
-    typedef: whether a processor or an engine body is real-time is its own promise (the
-    ``flags``).
+  - The generator refuses an entry without a tag, and a nonblocking entry with a 64-bit argument
+    or an ``anira_error*``.
+  - The dual tag ``driver-thread | inference-thread`` (a processor callback, the six context
+    accessors, the two default bodies) requires ``nonblocking: true`` on an entry, as
+    ``driver-thread`` does, but no attribute on the callback typedef ``anira_processor_fn``: whether
+    a processor body is real-time is its own promise (``anira_processor_desc.flags``, checked at
+    prepare).
+  - The ``inference-thread`` typedef ``anira_engine_process_fn`` carries no ``nonblocking`` for the
+    same reason: the engine's promise is ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``.
 
 - **The 64-bit allowlist** is closed: ``anira_now_ns``, ``anira_tensor_init_vulkan``,
   ``anira_tensor_init_opaque_fd``, ``anira_tensor_init_wgpu_buffer``, ``anira_tensor_init_dmabuf``
@@ -107,20 +121,26 @@ Writing a registry entry
     ``anira_engine_desc``, ``_ctx``, the ``_fn`` typedefs, ``anira::Processor`` /
     ``anira::Engine``);
   - no side on what both lifecycles share (``anira_init_info``, ``anira_prepare_info``,
-    ``anira_phase``);
-  - ``FLAG`` in every flag define;
+    ``anira::InitInfo`` / ``anira::PrepareInfo``, ``anira_phase``);
+  - the verb on the record of a level one side alone has (``anira_engine_load_info``,
+    ``anira::EngineLoadInfo``);
+  - ``FLAG`` in every flag define, so that no flag reads like a value of an enum;
   - ``Prepared`` / ``Loaded`` for what ``prepare`` / ``load`` hand back;
-  - callbacks shaped ``init(info, user_data)``, ``load(info, user_data, &loaded)``,
-    ``prepare(info, [loaded,] user_data, &prepared)`` and per chunk ``(ctx, prepared, user_data)``.
+  - one callback shape, from the outermost level in: ``init(info, user_data)`` and
+    ``release(user_data)``; ``load(info, user_data, &loaded)`` and ``unload(loaded, user_data)``
+    (the engine alone); ``prepare(info, user_data, &prepared)`` for the processor,
+    ``prepare(info, loaded, user_data, &prepared)`` for the engine, and
+    ``unprepare(prepared, user_data)``; every per-chunk callback ``(ctx, prepared, user_data)``.
 
-  The provider is the engine's twin wherever the backend pair travels (``provider`` /
-  ``provider_id`` beside ``engine`` / ``engine_id``, the pair rule). The JSON words of both enums
-  live in ``src/capi/words.h``.
+  The provider is the engine's twin wherever the backend pair travels: ``provider`` /
+  ``provider_id`` beside ``engine`` / ``engine_id``, and ``from_*`` / ``to_*`` on the two ends of
+  ``anira_edge_info``. The pair rule: an id if and only if the value is ``ANIRA_ENGINE_CUSTOM`` /
+  ``ANIRA_PROVIDER_CUSTOM``. The JSON words of both enums live in ``src/capi/words.h``.
 - **Layout:** while ``ANIRA_ABI_MAJOR`` is 0, ``--write`` rewrites ``abi/layout-0.txt`` with the
   headers. From the v3.0.0 freeze on, a Tier-1 layout changes only with the ABI major.
 
-Every entry needs its body in the same pull request, on Emscripten too: three presence gates link
-every promised and draft name on every leg (below).
+Every entry needs its body in the same pull request, on Emscripten too: three presence gates make
+sure every promised and draft name has a body on every leg (the first row below).
 
 The gates
 ---------
@@ -157,8 +177,9 @@ The gates
        first never sees anira's records) and a plugin-shaped module that exports no engine symbol.
    * - the RTSan leg, ``anira_abi_rt_contract``
      - The suite under RealtimeSanitizer (``desktop-tests-rtsan``, the unload harness excepted), and
-       ``-Werror=function-effects`` on the consumer-shaped C targets and the C++20 header gates
-       (clang 20 or later).
+       ``-Werror=function-effects`` on the consumer-shaped C targets (``anira_abi_rt_contract``,
+       ``anira_header_c11``, ``anira_abi_link``, ``consumer_c``) and on ``anira_header_cxx20`` /
+       ``anira_header_compat``, where the compiler has the analysis (upstream clang 20 or later).
    * - ``anira_abi_wasm_gates``
      - Under node, on the ``wasm-abi`` preset:
        ``anira_abi_layout`` (the wasm32 column of the layout), ``anira_em_smoke`` (a JavaScript

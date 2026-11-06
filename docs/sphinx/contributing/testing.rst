@@ -26,7 +26,9 @@ directory decides the binary (``test/CMakeLists.txt``).
 - ``scheduler/``, ``utils/`` and ``engines/`` (the adapters) map one to one; ``test/abi/`` covers
   the C ABI (``include/anira/abi/``, implemented under ``src/capi/``) and holds the header gates.
 - The ``anira.hpp`` handler (``test_InferenceHandler``), the 2.x face (``test_InferenceHandlerApi``)
-  and the cross-unit suites (``test_OneSidedStreaming``) are root-level ``test_*.cpp`` files.
+  and the cross-unit suites (``test_OneSidedStreaming``) are root-level ``test_*.cpp`` files. A
+  file's binary follows the API it targets: the white-box cases of a black-box suite go to a
+  white-box binary (``scheduler/test_OneSidedStreamingInternals.cpp`` in ``test_scheduler``).
 - ``test/contracts/`` checks the build, link and packaging contracts: engine linkage, the
   library-unload harness, the installed-package consumers. ``test/support/`` is shared
   infrastructure.
@@ -39,7 +41,8 @@ directory decides the binary (``test/CMakeLists.txt``).
   configure.
 - Do not re-test what tanh-lib covers upstream: the threading primitives are aliases over
   ``thl::core``, and each ring holds a ``thl::core::RingBuffer<T>``. anira tests its own contract on
-  top (the dtype tag, the refusals, the window pop).
+  top (the dtype tag, the refusals, the window pop); coverage of the container itself goes to
+  tanh-lib.
 
 The installed package
 ---------------------
@@ -63,7 +66,8 @@ that tree. The ``ci-install-*`` presets build ONNX Runtime only; ``desktop-insta
 CI tiers
 --------
 
-Which tests run when is defined in four places, each the file CI itself reads:
+Which tests run when is defined in four places, each what CI itself reads (three files and, last,
+the ruleset in the repository settings):
 
 - **PR or merge queue:** the ``"pr"`` flags of ``.github/*_matrix.json``; a row without
   ``"pr": true`` runs in the queue only. A guard in ``build_test``'s ``result`` job keeps the static
@@ -72,12 +76,15 @@ Which tests run when is defined in four places, each the file CI itself reads:
   status on a pull request without running; the merge queue is its gate.
 - **clang-tidy:** ``.github/workflows/clang_tidy.yml``. A pull request checks the ``.cpp`` files it
   changes (``CHANGED_FILES_ONLY``); the queue sweeps every source. A full sweep takes about an hour
-  of CPU time, most of it in the ``test/abi/`` files.
+  of CPU time, most of it in the test files.
 - **What the queue requires:** the ``<name> result`` contexts of the branch's ruleset, each made by
-  the ``result`` job at the bottom of its workflow.
+  the ``result`` job at the bottom of its workflow. The ruleset is authoritative, and the branches'
+  rulesets need not be identical.
 
 Sanitizers
 ----------
+
+Three sanitizer presets gate the merge queue; each reproduces locally:
 
 .. code-block:: bash
 
@@ -113,8 +120,13 @@ with ASan or LSan.
 The web package
 ---------------
 
+The ``wasm-abi`` preset is ``wasm-release`` plus ``ANIRA_WITH_ABI_TESTS``, the one test option
+WebAssembly allows. It needs the emsdk of :doc:`../web-api/installation_building` and ``tsc`` on the
+``PATH`` (``--emit-tsd`` runs it):
+
 .. code-block:: bash
 
+    cmake -P extras/fetch-models.cmake   # the model fixtures (anira_em_oom, the browser test)
     cmake --preset wasm-abi && cmake --build --preset wasm-abi
     cmake --build --preset wasm-abi --target anira_abi_wasm_gates   # the ABI gates under node
 
@@ -122,7 +134,6 @@ The web package
     npm test                           # unit tests under node, no build needed
     npm run build                      # tsc && vite build
     npm run examples                   # type-check and build web/examples/*
-    cmake -P ../extras/fetch-models.cmake
     node test/browser/run.mjs chromium # or firefox; needs Playwright (CI: 1.64.1)
 
 The browser test renders the package's pages and the examples' check pages (processor-and-engine's

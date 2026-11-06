@@ -22,30 +22,35 @@ Node.js 20.19 or 22.12 and later.
     git clone https://github.com/<you>/anira.git && cd anira
     git remote add upstream https://github.com/anira-project/anira.git
 
-    cmake --preset desktop-tests-debug              # build/desktop/Tests/Debug
+    cmake --preset desktop-tests-debug              # Ninja, into build/desktop/Tests/Debug
     cmake --build --preset desktop-tests-debug
     ctest --preset desktop-tests-debug
+
+    cmake --preset desktop-examples-debug           # the examples and the example models
+    cmake --build --preset desktop-examples-debug
 
 A test-enabled configure fetches the example models into ``extras/models/``, pinned by the
 ``ANIRA_MODELS_<NAME>_REF`` variables of ``extras/fetch-models.cmake``
 (``-DANIRA_MODELS_<NAME>_REF=<sha>`` overrides one). A fetched directory carries a
-``.anira-pin`` stamp and is fetched again when the pin moves, so anything written into it is lost
-at the next bump. The RAVE model is checked against its pinned SHA256.
+``.anira-pin`` stamp and is fetched again when the stamp is missing or names another commit, so
+anything written into it is lost at the next bump. The RAVE model is checked against its pinned
+SHA256.
 
-Every configure preset writes ``compile_commands.json`` into its tree. The development presets
-(``desktop-*``, ``wasm-debug``, ``wasm-release``) link the tree configured last to
-``build/compile_commands.json``, which ``.clangd`` reads (the ``clang-tidy``, ``docs``, ``ci-*``,
-sanitizer and mobile presets leave the link alone): configure ``desktop-tests-debug`` to work on
-the tests, ``wasm-debug`` for the Emscripten branches. For the wasm trees start clangd with
-``--query-driver=**/em++``.
+Every configure preset writes ``compile_commands.json`` into its tree. The presets over
+``desktop-base`` and the wasm presets set ``ANIRA_LINK_COMPILE_COMMANDS=ON``, which links the tree
+configured last to ``build/compile_commands.json``, the database ``.clangd`` reads; the
+``clang-tidy``, ``docs``, ``ci-*``, sanitizer (``desktop-tests-*san``) and mobile presets leave the
+link alone. Configure ``desktop-tests-debug`` to work on the tests, ``wasm-debug`` for the
+Emscripten branches. For the wasm trees start clangd with ``--query-driver=**/em++`` (a
+command-line flag, never a ``.clangd`` key).
 
 Code style
 ----------
 
 ``.clang-format``, ``.clang-tidy``, ``.clangd`` and everything under ``cmake/tanh/`` are installed
 verbatim from a pinned `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ release. Never
-edit them and never add a file to ``cmake/tanh/``: the ``tooling-config`` job of ``lint.yml``
-fails on any drift. Style changes go to tanh-tooling. To move to a new release, run its installer
+edit them and never add a file to ``cmake/tanh/``: the ``tooling-config`` job of ``lint.yml`` (in
+the merge queue) fails on any drift. Style changes go to tanh-tooling. To move to a new release, run its installer
 and bump the version and ``ref`` in ``.github/workflows/lint.yml`` in the same commit; the
 tanh-lib that anira fetches must pin the same tanh-tooling tag.
 
@@ -76,7 +81,18 @@ worth a look, CI's run is the gate):
 The generated ABI files are not clang-format's: ``tools/abi/gen.py`` formats them
 (:doc:`contributing/abi`). The merge queue sweeps every source of ``SOURCES`` in
 ``.github/workflows/clang_tidy.yml``, so a header change can fail there on a file the pull request
-did not touch; run that workflow by hand (``workflow_dispatch``) for a full sweep first.
+did not touch. Run that workflow by hand (``workflow_dispatch``) for a full sweep first, or locally
+over the same list:
+
+.. code-block:: bash
+
+    find src/engines/ src/capi/ src/scheduler/ src/utils/ examples/benchmark/fixture/ \
+         test/engines/ test/scheduler/ test/utils/ test/system/ test/support/ \
+         test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp \
+         test/contracts/test_EngineLinkage.cpp test/*.cpp -name '*.cpp' -type f \
+        | xargs -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
+
+Keep that list in step with ``SOURCES``.
 
 Branches and pull requests
 --------------------------
@@ -104,6 +120,7 @@ Building the documentation
     cmake --preset docs                 # -DANIRA_WITH_DOCS=ON, every engine off
     cmake --build --preset docs         # the sphinx-docs target
 
-The pages land in ``build/docs/docs/sphinx/html/``; on any other tree, ``-DANIRA_WITH_DOCS=ON`` and
-the ``sphinx-docs`` target do the same. The build runs Doxygen, Breathe and TypeDoc (through
-sphinx-js) in a virtual environment it creates under the build tree.
+The pages land in ``build/docs/docs/sphinx/html/``. On any other tree, ``-DANIRA_WITH_DOCS=ON`` and
+the ``sphinx-docs`` target build them into that tree's ``docs/sphinx/html/``. The build runs
+Doxygen, Breathe and TypeDoc (through sphinx-js), with the Python packages in a virtual
+environment it creates in the build tree.
