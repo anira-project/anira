@@ -1524,7 +1524,7 @@ headers:
         name: anira_tensor_spec_create
         returns: anira_status
         params:
-          - {type: const char*, name: name, doc: "The canonical name: your name for this tensor, UTF-8, copied. Every other part of the configuration refers to the tensor by it (the per-entry name and layout records, the anchor, error messages); it is never handed to an engine. Unique across the inputs and outputs of one model config."}
+          - {type: const char*, name: name, doc: "The canonical name: your name for this tensor, UTF-8, copied. Every other part of the configuration refers to the tensor by it (the per-entry name and layout records, the anchor, error messages). It reaches the engine too, for a slot the entry's tensors record does not name: a built-in engine whose side has names binds the slot by it (anira_plan_slot.binding), and a custom engine's load record carries it (anira_engine_load_info.input_names, output_names). Unique across the inputs and outputs of one model config."}
           - {type: anira_dtype, name: dtype, doc: "The model's true dtype (section 1)."}
           - {type: anira_role, name: role, doc: "STREAMED, BUFFER, STATIC or STATE (both halves of a declared state pair carry STATE)."}
           - {type: anira_tensor_spec**, name: out, doc: "Receives the handle on success."}
@@ -4880,7 +4880,7 @@ headers:
     draft: true
     guard: ANIRA_ABI_DRAFT_TENSOR_PLATFORM_H
     brief: "Draft: the tensor factories of the platform arms that have no measured edge yet."
-    doc: "Outside the ABI promise. The arms of anira_memory_handle and the domain and sync values these factories fill are frozen with anira/abi/tensor.h, because a Tier-1 layout cannot grow later; the factories are declarations, not promises, until their platform column is measured. Their names are listed in abi/symbols-draft.txt; promotion moves a name into the promised symbol list and its declaration into anira/abi/tensor.h and never renames it, while a signature may still change before that. No umbrella header includes this file: include it by its own path. In this pre-release every factory here is a field fill; no adapter consumes the arm."
+    doc: "Outside the ABI promise. The arms of anira_memory_handle and the domain and sync values these factories fill are frozen with anira/abi/tensor.h, because a Tier-1 layout cannot grow later; the factories are declarations, not promises, until their platform column is measured. Their names are listed in abi/symbols-draft.txt; promotion moves a name into the promised symbol list and its declaration into anira/abi/tensor.h and never renames it, while a signature may still change before that. anira/anira.h does not include this file: include it by its own path, or through anira/anira_all.h, which includes every header, the drafts among them. In this pre-release every factory here is a field fill; no adapter consumes the arm."
     includes: ["<stdint.h>", "export.h", "enums.h", "tensor.h"]
     entities:
       - kind: function

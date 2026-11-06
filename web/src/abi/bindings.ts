@@ -973,8 +973,11 @@ export class AniraBindings {
    *
    * @param name The canonical name: your name for this tensor, UTF-8, copied. Every other
    *   part of the configuration refers to the tensor by it (the per-entry name and layout
-   *   records, the anchor, error messages); it is never handed to an engine. Unique across
-   *   the inputs and outputs of one model config.
+   *   records, the anchor, error messages). It reaches the engine too, for a slot the
+   *   entry's tensors record does not name: a built-in engine whose side has names binds
+   *   the slot by it (anira_plan_slot.binding), and a custom engine's load record carries
+   *   it (anira_engine_load_info.input_names, output_names). Unique across the inputs and
+   *   outputs of one model config.
    * @param dtype The model's true dtype (section 1).
    * @param role STREAMED, BUFFER, STATIC or STATE (both halves of a declared state pair
    *   carry STATE).

@@ -384,10 +384,9 @@ const anira_tensor_spec& state_output_of(const anira_model_config& model,
 // output (state_source, stated once, on the input), every State output is named by exactly one
 // State input, and the two halves have the same dtype, rank and extents, because the handler
 // keeps one value per pair, on the input half's port, and copies it both ways. It runs on the
-// raw specs, ahead of check_spec, so that an unequal dtype is this rule's CONFIG and not the
-// float32 rule's NOT_SUPPORTED; what a State spec may not carry (a Time axis, a window, a time
-// ratio, a latency) is check_spec's, a ring dtype or the anchor naming one is the rule of those
-// two.
+// raw specs, ahead of check_spec, so that an unequal pair is this rule's CONFIG, named as a
+// pairing; what a State spec may not carry (a Time axis, a window, a time ratio, a latency) is
+// check_spec's, a ring dtype or the anchor naming one is the rule of those two.
 void check_state(const anira_model_config& model) {
     for (const anira_tensor_spec& spec : model.m_outputs) {
         if (!spec.m_state_source.empty()) {
