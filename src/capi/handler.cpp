@@ -167,9 +167,12 @@ bool matches(const anira_plan_info& plan,
 constexpr uint32_t k_processor_desc_head =
     offsetof(anira_processor_desc, user_data) + sizeof(void*);
 constexpr uint32_t k_engine_desc_head = offsetof(anira_engine_desc, user_data) + sizeof(void*);
-/// Every flags bit anira/abi/processor.h defines: a processor's real-time promise.
-constexpr uint32_t k_processor_flags =
-    ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+/// Every bit anira_processor_desc.realtime_phases may carry: the five per-chunk phases of a
+/// processor.
+constexpr uint32_t k_realtime_phases =
+    ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) |
+    ANIRA_PHASE_BIT(ANIRA_PHASE_BEFORE_INFERENCE) | ANIRA_PHASE_BIT(ANIRA_PHASE_AFTER_INFERENCE) |
+    ANIRA_PHASE_BIT(ANIRA_PHASE_RESET);
 /// Every flags bit anira/abi/engine.h defines: an engine's promises.
 constexpr uint32_t k_engine_flags = ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL |
                                     ANIRA_ENGINE_FLAG_REALTIME_SAFE |
@@ -897,33 +900,44 @@ void check_buffer_specs(const anira_model_config& model) {
                           side + " under a Hard contract");
 }
 
-// The real-time rule of prepare: the processor's flags are its promise, checked against where its
-// phases run. Under a Hard contract (the only contract of this pre-release) a filled
-// pre_process, post_process or reset runs on the driving thread (the reset right before the
-// first pre_process of a new stream), so the processor must promise
-// ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST for any of the three; the two hooks run on an inference
-// thread and need no promise here (a later contract option that puts them on the driving
-// thread requires ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS too). The default bodies are real-time by
-// construction, so a NULL slot needs nothing. anira's own side stays real-time whatever the
-// flags say.
-void check_processor_flags(const anira::capi::ProcessorCarrier* processor) {
+// The real-time rule of prepare: the processor's realtime_phases are its promise, per phase,
+// checked against where its phases run. Every filled phase the contract runs on the driving
+// thread must carry its bit. Under a Hard contract (the only contract of this pre-release)
+// those are pre_process, post_process and reset (the reset right before the first pre_process
+// of a new stream); the two hooks run on an inference thread and need no promise. The default
+// bodies are real-time by construction, so a NULL slot needs nothing, and a promised phase that
+// is not filled is no error. anira's own side stays real-time whatever the bits say.
+void check_realtime_phases(const anira::capi::ProcessorCarrier* processor) {
     if (processor == nullptr) { return; }
     const anira_processor_desc& desc = processor->desc();
-    const bool on_driving_thread =
-        desc.pre_process != nullptr || desc.post_process != nullptr || desc.reset != nullptr;
-    if (!on_driving_thread || (desc.flags & ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST) != 0) {
-        return;
+    struct DrivingPhase {
+        anira_phase m_phase;
+        bool m_filled;
+        const char* m_bit;  // the bit's spelling, for the message
+    };
+    const std::array<DrivingPhase, 3> driving{{
+        {ANIRA_PHASE_PRE_PROCESS,
+         desc.pre_process != nullptr,
+         "ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS)"},
+        {ANIRA_PHASE_POST_PROCESS,
+         desc.post_process != nullptr,
+         "ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS)"},
+        {ANIRA_PHASE_RESET, desc.reset != nullptr, "ANIRA_PHASE_BIT(ANIRA_PHASE_RESET)"},
+    }};
+    for (const DrivingPhase& phase : driving) {
+        if (!phase.m_filled || (desc.realtime_phases & ANIRA_PHASE_BIT(phase.m_phase)) != 0) {
+            continue;
+        }
+        const std::string word = anira::capi::phase_word(phase.m_phase);
+        throw StatusError(ANIRA_ERROR_CONFIG,
+                          "the processor: " + word +
+                              " is filled and runs on the driving thread under a Hard contract, "
+                              "which requires its bit, " +
+                              phase.m_bit +
+                              ", in anira_processor_desc.realtime_phases (the processor's "
+                              "promise that " +
+                              word + " allocates nothing, locks nothing and blocks on nothing)");
     }
-    const anira_phase filled = desc.pre_process != nullptr    ? ANIRA_PHASE_PRE_PROCESS
-                               : desc.post_process != nullptr ? ANIRA_PHASE_POST_PROCESS
-                                                              : ANIRA_PHASE_RESET;
-    throw StatusError(ANIRA_ERROR_CONFIG,
-                      std::string("the processor: ") + anira::capi::phase_word(filled) +
-                          " is filled and runs on the driving thread under a Hard contract, "
-                          "which requires ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in "
-                          "anira_processor_desc.flags (the processor's promise that pre_process, "
-                          "post_process and reset allocate nothing, lock nothing and block on "
-                          "nothing)");
 }
 
 // Whether a model entry is the variant's default engine (by id for a custom engine, by
@@ -2135,7 +2149,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                           handler.m_pipeline.m_default_set);
     const anira::capi::HardContract& hard = *snapshot.hard();  // validate refused Async
     check_buffer_specs(model);
-    check_processor_flags(processor);
+    check_realtime_phases(processor);
     const anira::RingDtypes ring_dtypes = anira::capi::ring_dtypes_of(snapshot, model);
     check_host_blocks(hard);
     check_miss_policy(hard, model, derived, ring_dtypes);
@@ -2816,14 +2830,14 @@ anira_status ANIRA_CALL anira_pipeline_add_processor(anira_pipeline* pipeline,
         "pipeline: the processor was compiled against ABI 0x%08x, which this library "
         "does not serve",
         value.abi_version);
-    ANIRA_CAPI_REQUIRE((value.flags & ~k_processor_flags) == 0,
+    ANIRA_CAPI_REQUIRE((value.realtime_phases & ~k_realtime_phases) == 0,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "pipeline: the processor's flags 0x%x carry a bit this library does not "
-                       "define (ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | "
-                       "ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS is 0x%x)",
-                       value.flags,
-                       k_processor_flags);
+                       "pipeline: the processor's realtime_phases 0x%x carry a bit of no "
+                       "per-chunk phase (ANIRA_PHASE_BIT of pre_process, post_process, "
+                       "before_inference, after_inference and reset is 0x%x)",
+                       value.realtime_phases,
+                       k_realtime_phases);
     ANIRA_CAPI_REQUIRE(value.consumed_kinds != nullptr || value.num_consumed_kinds == 0,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,

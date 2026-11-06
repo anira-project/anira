@@ -5716,9 +5716,9 @@ export class AniraBindings {
    * function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed
    * tensor, or one that differs from its spec's dtype while the processor does not fill
    * the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a processor
-   * whose filled pre_process, post_process or reset carries no
-   * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract
-   * those three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
+   * with a filled pre_process, post_process or reset whose bit is missing from its
+   * realtime_phases, since under a Hard contract those three phases run on the driving
+   * thread (ANIRA_ERROR_CONFIG naming the phase and realtime_phases).
    *
    * @param handler The handler.
    * @param contract A Hard contract, copied; the handle may be destroyed when the call
@@ -6742,11 +6742,11 @@ export class AniraBindings {
    * Fills a processor descriptor whose slots are the trampolines into the scope
    * registry's processor: one per bit of hook_mask, every other slot NULL, the release
    * slot always (it frees the record behind user_data, after the hook's release when
-   * ANIRA_EM_PROCESSOR_HOOK_RELEASE is set), and flags processor_flags. The promise is
+   * ANIRA_EM_PROCESSOR_HOOK_RELEASE is set), and realtime_phases as given. The promise is
    * stated, never derived from the hook bits: under a Hard contract a processor with a
    * pre_process, post_process or reset hook runs it on the driving thread (the audio
-   * worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG unless
-   * processor_flags carries ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST. The descriptor is for
+   * worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG, naming the
+   * phase, unless realtime_phases carries that phase's bit. The descriptor is for
    * anira_pipeline_add_processor; one that is never added keeps its record, so
    * anira_em_pipeline_add_js_processor is the call JavaScript makes.
    *
@@ -6755,13 +6755,12 @@ export class AniraBindings {
    *   registry.
    * @param hook_mask An OR of the ANIRA_EM_PROCESSOR_HOOK_* bits: the slots that cross
    *   into the scope registry's processor.
-   * @param processor_flags The descriptor's flags, the processor's real-time promise,
-   *   which JavaScript cannot write into the descriptor itself: an OR of
-   *   ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST (the pre_process, post_process and reset hooks
-   *   allocate nothing, lock nothing and block on nothing) and
-   *   ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS (before_inference and after_inference likewise),
-   *   or 0 for no promise. Stored as given: a bit the header does not define is refused by
-   *   anira_pipeline_add_processor.
+   * @param realtime_phases The descriptor's realtime_phases, the processor's real-time
+   *   promise per phase, which JavaScript cannot write into the descriptor itself: an OR of
+   *   ANIRA_PHASE_BIT(phase) over the hooks that allocate nothing, lock nothing and block
+   *   on nothing (of pre_process, post_process, before_inference, after_inference and
+   *   reset), or 0 for no promise. Stored as given: the bit of any other phase is refused
+   *   by anira_pipeline_add_processor.
    * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask
    *   does not define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated. A
    *   failed status throws an AniraError.
@@ -6771,12 +6770,12 @@ export class AniraBindings {
     desc: number,
     js_key: number,
     hook_mask: number,
-    processor_flags: number
+    realtime_phases: number
   ): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_em_processor_desc_init(desc, js_key, hook_mask, processor_flags),
+      m._anira_em_processor_desc_init(desc, js_key, hook_mask, realtime_phases),
       'anira_em_processor_desc_init'
     )
   }
@@ -6790,10 +6789,10 @@ export class AniraBindings {
    * @param pipeline The pipeline.
    * @param js_key As in anira_em_processor_desc_init.
    * @param hook_mask As in anira_em_processor_desc_init.
-   * @param processor_flags As in anira_em_processor_desc_init: the processor's real-time
-   *   promise.
+   * @param realtime_phases As in anira_em_processor_desc_init: the processor's real-time
+   *   promise per phase.
    * @returns As anira_em_processor_desc_init, then as anira_pipeline_add_processor
-   *   (ANIRA_ERROR_INVALID_ARGUMENT for a flags bit the header does not define,
+   *   (ANIRA_ERROR_INVALID_ARGUMENT for a realtime_phases bit of no per-chunk phase,
    *   ANIRA_ERROR_INVALID_STATE when the pipeline already has a processor). A failed status
    *   throws an AniraError with the entry's message.
    * Thread: [main-thread]
@@ -6802,7 +6801,7 @@ export class AniraBindings {
     pipeline: number,
     js_key: number,
     hook_mask: number,
-    processor_flags: number
+    realtime_phases: number
   ): number {
     const m = this.module
     const sp = m.stackSave()
@@ -6814,7 +6813,7 @@ export class AniraBindings {
           pipeline,
           js_key,
           hook_mask,
-          processor_flags,
+          realtime_phases,
           err
         ),
         'anira_em_pipeline_add_js_processor',

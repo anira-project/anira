@@ -934,22 +934,14 @@ typedef enum anira_phase {
 } anira_phase;
 
 /**
- * @brief anira_processor_desc.flags bit: the processor promises that its pre_process and
- * post_process allocate nothing, lock nothing and block on nothing (its reset runs on
- * the same thread and is covered by the same promise). Required by anira_handler_prepare
- * for a filled pre_process, post_process or reset under a Hard contract, where the three
- * phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not
- * required under an Async contract.
+ * @brief The bit of one anira_phase in a set of phases, 1u << phase:
+ * anira_processor_desc.realtime_phases is an OR of them, the processor's real-time
+ * promise per phase (ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) |
+ * ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_RESET) for a
+ * processor whose three driving-thread phases are real-time). The index space of
+ * anira.hpp's Processor::phase_bit and its k_* phase bits.
  */
-#define ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST 1u
-
-/**
- * @brief anira_processor_desc.flags bit: the processor promises the same of its
- * before_inference and after_inference. Not required by any contract of this pre-release
- * (the hooks run on an inference thread); a later contract option that runs them on the
- * driving thread will require it together with ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST.
- */
-#define ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS 2u
+#define ANIRA_PHASE_BIT(phase) (1u << (phase))
 
 /**
  * @brief anira_engine_desc.flags bit: a model entry of this engine may have no source, neither

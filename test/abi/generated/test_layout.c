@@ -382,7 +382,7 @@ _Static_assert(sizeof(anira_processor_desc) ==
                    sizeof(((const anira_processor_desc*)0)->user_data) +
                    sizeof(((const anira_processor_desc*)0)->consumed_kinds) +
                    sizeof(((const anira_processor_desc*)0)->num_consumed_kinds) +
-                   sizeof(((const anira_processor_desc*)0)->flags) +
+                   sizeof(((const anira_processor_desc*)0)->realtime_phases) +
                    sizeof(((const anira_processor_desc*)0)->pre_process) +
                    sizeof(((const anira_processor_desc*)0)->post_process) +
                    sizeof(((const anira_processor_desc*)0)->before_inference) +

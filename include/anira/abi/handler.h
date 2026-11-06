@@ -828,9 +828,9 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no
  * Streamed tensor, or one that differs from its spec's dtype while the processor does
  * not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a
- * processor whose filled pre_process, post_process or reset carries no
- * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those
- * three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
+ * processor with a filled pre_process, post_process or reset whose bit is missing from
+ * its realtime_phases, since under a Hard contract those three phases run on the driving
+ * thread (ANIRA_ERROR_CONFIG naming the phase and realtime_phases).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.

@@ -11,9 +11,9 @@
  *
  * A processor is a descriptor, not a class: anira_processor_desc names up to four phase
  * callbacks (pre_process, post_process, before_inference, after_inference), a reset, a prepare,
- * an unprepare, an init and a release function, one user_data slot and the real-time flags, and
- * is handed once to anira_pipeline_add_processor, which copies it into a refcounted carrier. A
- * pipeline holds at most one processor (a second anira_pipeline_add_processor is
+ * an unprepare, an init and a release function, one user_data slot and the real-time phases,
+ * and is handed once to anira_pipeline_add_processor, which copies it into a refcounted
+ * carrier. A pipeline holds at most one processor (a second anira_pipeline_add_processor is
  * ANIRA_ERROR_INVALID_STATE): the processor owns every phase it fills, for every slot, and
  * composes what it does not handle itself by calling the default bodies, explicitly, in its own
  * code. The processor has no name: with one per pipeline a name identifies nothing, so every
@@ -92,19 +92,19 @@
  * delivers zeros at its stream position (a failed pre_process is not submitted to an engine; a
  * failed before_inference or after_inference skips the rest and zeroes the model outputs; after
  * a failed post_process anira tops every Streamed output ring up to the chunk's hop with zeros,
- * because a ring cannot take a push back). The real-time promise is the descriptor's flags, not
- * an attribute of the callback type: ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST says pre_process,
- * post_process and reset allocate nothing, lock nothing and block on nothing,
- * ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS says the same of before_inference and after_inference.
- * anira_handler_prepare checks the promise against the placement: under a Hard contract a
- * filled pre_process, post_process or reset runs on the driving thread and requires
- * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST (else ANIRA_ERROR_CONFIG naming the flag); under an
- * Async contract no bit is required. anira's own side is real-time whatever the flags say: the
- * ring accessors, the eight context accessors and the two default bodies are ANIRA_NONBLOCKING,
- * so a real-time processor body is composed of nonblocking calls, and an author who wants the
- * compiler's check declares the callback [[clang::nonblocking]] (ANIRA_NONBLOCKING) themselves.
- * In this pre-release the contract is Hard, so ticket is ANIRA_TICKET_INVALID, and variant is
- * 0.
+ * because a ring cannot take a push back). The real-time promise is the descriptor's
+ * realtime_phases, per phase, not an attribute of the callback type: the bit of a phase
+ * (ANIRA_PHASE_BIT(ANIRA_PHASE_*) of pre_process, post_process, before_inference,
+ * after_inference or reset) says that phase allocates nothing, locks nothing and blocks on
+ * nothing. anira_handler_prepare checks the promise against the placement: every filled phase
+ * the contract runs on the driving thread must carry its bit, else ANIRA_ERROR_CONFIG naming
+ * the phase. Under a Hard contract those are pre_process, post_process and reset; under an
+ * Async contract none. A promised phase that is not filled is no error. anira's own side is
+ * real-time whatever the bits say: the ring accessors, the eight context accessors and the two
+ * default bodies are ANIRA_NONBLOCKING, so a real-time processor body is composed of
+ * nonblocking calls, and an author who wants the compiler's check declares the callback
+ * [[clang::nonblocking]] (ANIRA_NONBLOCKING) themselves. In this pre-release the contract is
+ * Hard, so ticket is ANIRA_TICKET_INVALID, and variant is 0.
  */
 
 #include <stddef.h>
@@ -635,16 +635,15 @@ typedef anira_status (ANIRA_CALL* anira_processor_prepare_fn)(const anira_prepar
  * thread inside a _wait twin), under an Async contract an inference thread;
  * before_inference and after_inference run on an inference thread, around the engine
  * call and its edges. The typedef carries no real-time attribute: whether a body is
- * real-time is the processor's own promise, stated per processor in
- * anira_processor_desc.flags (ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST,
- * ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS) and checked against the placement at
- * anira_handler_prepare. A body that promises it allocates nothing, locks nothing,
- * blocks on nothing and calls of anira only the [callback-safe] entries, which are
- * ANIRA_NONBLOCKING; an author who wants the compiler's check declares the function
- * ANIRA_NONBLOCKING itself. Return ANIRA_OK, or any other status to fail the chunk: the
- * status goes into anira_handler_rt_error with one latched record naming the phase, and
- * the chunk delivers zeros at its stream position (the file comment has the rule per
- * phase).
+ * real-time is the processor's own promise, stated per phase in
+ * anira_processor_desc.realtime_phases (ANIRA_PHASE_BIT of the phase) and checked
+ * against the placement at anira_handler_prepare. A body that promises it allocates
+ * nothing, locks nothing, blocks on nothing and calls of anira only the [callback-safe]
+ * entries, which are ANIRA_NONBLOCKING; an author who wants the compiler's check
+ * declares the function ANIRA_NONBLOCKING itself. Return ANIRA_OK, or any other status
+ * to fail the chunk: the status goes into anira_handler_rt_error with one latched record
+ * naming the phase, and the chunk delivers zeros at its stream position (the file
+ * comment has the rule per phase).
  * @param ctx The context of this call; valid until the callback returns.
  * @param prepared What this handler's prepare handed back; NULL when the processor has no
  *        prepare or it handed back NULL.
@@ -659,13 +658,14 @@ typedef anira_status (ANIRA_CALL* anira_processor_fn)(const anira_processor_ctx*
 /**
  * @brief The reset function of a processor: called for the first chunk of a new stream (after
  * prepare, after anira_handler_reset), before that chunk's pre_process, on the thread
- * that runs pre_process (the driving thread under a Hard contract, where the
- * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST promise covers it; an inference thread under an
- * Async one), and never mid-stream. ctx.phase is ANIRA_PHASE_RESET and the accessors
- * answer the role only: a ring or a model tensor asked here is
- * ANIRA_ERROR_INVALID_STATE, recorded. What the processor keeps between chunks (a
- * resampler, an overlap buffer, a filter's history) starts over here; a processor whose
- * state is the rings' alone needs none. NULL: nothing to reset.
+ * that runs pre_process (the driving thread under a Hard contract, where a filled reset
+ * needs its own promise, ANIRA_PHASE_BIT(ANIRA_PHASE_RESET) in
+ * anira_processor_desc.realtime_phases; an inference thread under an Async one), and
+ * never mid-stream. ctx.phase is ANIRA_PHASE_RESET and the accessors answer the role
+ * only: a ring or a model tensor asked here is ANIRA_ERROR_INVALID_STATE, recorded. What
+ * the processor keeps between chunks (a resampler, an overlap buffer, a filter's
+ * history) starts over here; a processor whose state is the rings' alone needs none.
+ * NULL: nothing to reset.
  * @param ctx The context of the chunk whose pre_process follows, its phase ANIRA_PHASE_RESET;
  *        valid until the callback returns.
  * @param prepared What this handler's prepare handed back.
@@ -740,18 +740,19 @@ typedef struct anira_processor_desc {
     const char* const* consumed_kinds;
     uint32_t num_consumed_kinds;  /**< The length of consumed_kinds. */
     /**
-     * The processor's real-time promise, an OR of ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST
-     * (pre_process, post_process and reset allocate nothing, lock nothing and block on nothing)
-     * and ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS (before_inference and after_inference likewise);
-     * 0 promises nothing. anira_handler_prepare checks the promise against the placement: under
-     * a Hard contract a filled pre_process, post_process or reset runs on the driving thread
-     * and requires ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST, else prepare fails with
-     * ANIRA_ERROR_CONFIG naming the flag; under an Async contract nothing is required; a later
-     * contract option that runs the hooks on the driving thread will require both bits. The
-     * default bodies are real-time by construction. A bit this header does not define is
-     * ANIRA_ERROR_INVALID_ARGUMENT at anira_pipeline_add_processor.
+     * The processor's real-time promise, per phase: an OR of ANIRA_PHASE_BIT(phase) over the
+     * per-chunk phases whose bodies allocate nothing, lock nothing and block on nothing
+     * (ANIRA_PHASE_PRE_PROCESS, ANIRA_PHASE_POST_PROCESS, ANIRA_PHASE_BEFORE_INFERENCE,
+     * ANIRA_PHASE_AFTER_INFERENCE, ANIRA_PHASE_RESET); 0 promises nothing.
+     * anira_handler_prepare checks the promise against the placement: every filled phase that
+     * the contract runs on the driving thread must carry its bit, else prepare fails with
+     * ANIRA_ERROR_CONFIG naming the phase and realtime_phases. Under a Hard contract those are
+     * pre_process, post_process and reset; under an Async contract none. A promised phase that
+     * is not filled is no error, and a NULL slot needs no bit (the default bodies are real-time
+     * by construction). The bit of any other phase is ANIRA_ERROR_INVALID_ARGUMENT at
+     * anira_pipeline_add_processor.
      */
-    uint32_t flags;
+    uint32_t realtime_phases;
     /**
      * ANIRA_PHASE_PRE_PROCESS, on the thread where the host end is produced (the driving thread
      * under a Hard contract): takes the host end of every slot to its model tensor, the
@@ -813,7 +814,7 @@ typedef struct anira_processor_desc {
     const char* id;
 } anira_processor_desc;
 /**
- * @brief A processor without a callback and without a real-time promise (flags 0).
+ * @brief A processor without a callback and without a real-time promise (realtime_phases 0).
  */
 #define ANIRA_PROCESSOR_DESC_INIT ANIRA_INIT(anira_processor_desc, sizeof(anira_processor_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
 
