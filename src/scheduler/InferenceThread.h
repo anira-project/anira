@@ -131,6 +131,10 @@ public:
      * @brief Starts the thread: a real-time priority OS thread running run_loop() (native), a
      * Wasm Worker that imports the worker module and then runs run_loop() (WebAssembly).
      *
+     * Natively it returns once the thread is inside run_loop() (or already left it), so a session
+     * prepared afterwards finds a thread that takes its jobs (a prepare's warm-up pass needs one);
+     * on WebAssembly the Worker enters its loop asynchronously, after start() returned.
+     *
      * @return False when the thread is already running, or when the operating system (native)
      *         or the browser (WebAssembly) refused to create it; is_running() stays false in
      *         the latter case.

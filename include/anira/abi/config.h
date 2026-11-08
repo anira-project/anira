@@ -274,15 +274,19 @@ typedef struct anira_webgpu_desc {
  * 0.
  * @param name The canonical name: your name for this tensor, UTF-8, copied. Every other part of
  *        the configuration refers to the tensor by it (the per-entry name and layout
- *        records, the anchor, error messages); it is never handed to an engine. Unique
- *        across the inputs and outputs of one model config.
+ *        records, the anchor, error messages). It reaches the engine too, for a slot the
+ *        entry's tensors record does not name: a built-in engine whose side has names
+ *        binds the slot by it (anira_plan_slot.binding), and a custom engine's load record
+ *        carries it (anira_engine_load_info.input_names, output_names). Unique across the
+ *        inputs and outputs of one model config.
  * @param dtype The model's true dtype (section 1).
  * @param role STREAMED, BUFFER, STATIC or STATE (both halves of a declared state pair carry
  *        STATE).
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL or empty name, an unknown role,
- *         or a NULL out.
+ *         a dtype of 0, or a NULL out. A dtype anira does not name is refused where the spec is
+ *         used (ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -313,13 +317,26 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_axis(anira_tensor_spec* 
 
 /**
  * @brief The window of a Streamed spec, in elements along the Time axis; the fixed case is
- * window_min == window_max. Defaults 0, 0, 0. Cross-field legality (context <
- * window_min, window_max >= window_min) is checked at prepare.
+ * window_min == window_max. Optional: a Streamed spec without a window (this setter
+ * never called, or called with (0, 0)) has one derived at validation, the fixed window
+ * of its Time extent, or, on a dynamic Time axis, the flexible window [1,
+ * ANIRA_UNBOUNDED] that the anchor hop pins like any flexible window; the overlap is 0
+ * then. A declared window always wins. The derivation never writes into the spec:
+ * anira_tensor_spec_window reads (0, 0, 0), anira_model_config_to_json writes no window
+ * back, and the window in use is the plan report's (anira_plan_slot.window,
+ * window_derived). An overlap without a window is not derived: ANIRA_ERROR_CONFIG,
+ * naming the tensor. Defaults 0, 0, 0. Cross-field legality (overlap < window_min,
+ * window_max >= window_min) is checked at prepare.
  * @param spec The spec.
- * @param window_min The model's smallest legal Time extent, in elements.
+ * @param window_min The model's smallest legal Time extent, in elements; 0 with a window_max of
+ *        0: no window.
  * @param window_max The largest, or ANIRA_UNBOUNDED.
  * @param overlap Overlap of consecutive windows: the elements kept from the previous window.
- *        The advance per inference, the hop, is window_used - overlap.
+ *        The advance per inference, the hop, is window_used - overlap. An output's
+ *        window is aligned like an input's: the model writes the whole window, its
+ *        newest hop at the tail, and the default post_process pushes that hop; the head
+ *        answers older positions and is not pushed (an overlap-add is the model's or a
+ *        processor's own).
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value other than
  *         ANIRA_UNBOUNDED as window_max.
  * @par Thread contract
@@ -382,11 +399,10 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
  * prepare): every state input names exactly one state output and every state output is
  * named by exactly one state input; the two halves have equal dtype and shape; a state
  * spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the
- * anchor may name it. A state pair may have any dtype, unlike every other model tensor
- * of this pre-release, which is float32: its buffers take the spec's dtype and a custom
- * engine binds what its load accepts, while a built-in engine refuses a non-float32
- * tensor at load (ANIRA_ERROR_CONFIG). ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a
- * transposed layout. A second call replaces the name.
+ * anchor may name it. Its buffers take the spec's dtype, as every model tensor does: a
+ * custom engine binds what its load accepts, and a built-in engine refuses at load
+ * (ANIRA_ERROR_NOT_SUPPORTED) what its runtime cannot carry. ANIRA_ERROR_NOT_SUPPORTED:
+ * a state tensor with a transposed layout. A second call replaces the name.
  * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
  * @param output_canonical The canonical name of the state output this input is fed from, UTF-8,
  *        copied; resolved when the model is validated (anira_handler_create,
@@ -451,16 +467,16 @@ ANIRA_API void ANIRA_CALL anira_tensor_spec_destroy(anira_tensor_spec* spec) ANI
 /**
  * @brief Creates a Hard (real-time) contract with the host blocks; the fixed-block host earns
  * the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on miss,
- * wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the host blocks left unset,
- * completed by hard_set_host_blocks or refused at prepare: 0, 0, 0 is legal here) or
- * both finite and > 0 with host_block_min <= host_block_max; host_block_min <
- * host_block_max allows every smaller block. A block need not be whole: a fractional
- * block (for a model with no stream at the host rate, e.g. a control-rate decoder at
- * samplesPerBlock / 2048.0) is taken as the rational the latency calculation recovers
- * from it (1e-6 relative, denominator at most 2^20), and the host moves an element of a
- * stream only once a whole one has accumulated: after its k-th call it has pushed and
- * popped floor(k * b) elements of a stream whose block is b, so one call carries
- * floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
+ * wait_ratio 0, no edge-cost limit (ANIRA_EDGE_UNKNOWN). The blocks are both 0 (the host
+ * blocks left unset, completed by hard_set_host_blocks or refused at prepare: 0, 0, 0 is
+ * legal here) or both finite and > 0 with host_block_min <= host_block_max;
+ * host_block_min < host_block_max allows every smaller block. A block need not be whole:
+ * a fractional block (for a model with no stream at the host rate, e.g. a control-rate
+ * decoder at samplesPerBlock / 2048.0) is taken as the rational the latency calculation
+ * recovers from it (1e-6 relative, denominator at most 2^20), and the host moves an
+ * element of a stream only once a whole one has accumulated: after its k-th call it has
+ * pushed and popped floor(k * b) elements of a stream whose block is b, so one call
+ * carries floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
  * @param host_block_min Smallest block the host callback delivers, in Time-axis elements of the
  *        anchor tensor; may be fractional (0.25: one element every fourth
  *        callback).
@@ -484,7 +500,8 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(double host_block_m
 
 /**
  * @brief Creates an Async contract: no deadline (the offline posture), FINISH on late, AUTO
- * priority, auto lanes and depth, POLLED delivery, PERMISSIVE edge cost.
+ * priority, auto lanes and depth, POLLED delivery, no edge-cost limit
+ * (ANIRA_EDGE_UNKNOWN).
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out.
@@ -516,9 +533,14 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_host_blocks(anira_cont
                                                                       double host_rate) ANIRA_NOEXCEPT;
 
 /**
- * @brief The per-inference budget of a Hard contract (v2's max_inference_time when EXPLICIT).
+ * @brief The per-inference budget of a Hard contract (v2's max_inference_time when EXPLICIT):
+ * the inference time the session's latency and entries are sized for. The warm-up pass
+ * also measures the inference time; a measured budget is the maximum of its last four
+ * inferences; under an explicit budget the timings are only reported. A MEASURED budget
+ * makes the latency depend on the machine; an explicit one gives a reproducible latency.
  * @param contract A Hard contract.
- * @param kind MEASURED (default) derives the budget during warmup; EXPLICIT reads explicit_ms.
+ * @param kind MEASURED (default) is what the warm-up pass measures at prepare; EXPLICIT reads
+ *        explicit_ms.
  * @param explicit_ms Per-inference budget in milliseconds, read for EXPLICIT only.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for an unknown kind or, with EXPLICIT, explicit_ms <= 0.
@@ -531,10 +553,13 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_budget(anira_contract*
                                                                  double explicit_ms) ANIRA_NOEXCEPT;
 
 /**
- * @brief The warmup policy of a Hard contract (v2's warm_up when FIXED).
+ * @brief The warm-up pass of a Hard contract at prepare (anira_warmup_mode; v2's warm_up when
+ * FIXED, which ran per instance at load, now per plan through the session). The warm-up
+ * pass also measures the inference time; a measured budget is the maximum of its last
+ * four inferences; under an explicit budget the timings are only reported.
  * @param contract A Hard contract.
- * @param mode UNTIL_STABLE (default), FIXED, or NONE (legal only with an EXPLICIT budget,
- *        checked at prepare).
+ * @param mode UNTIL_STABLE (default), FIXED, or NONE. A MEASURED budget needs a pass of at
+ *        least one inference: NONE and FIXED 0 are ANIRA_ERROR_CONFIG at prepare.
  * @param iterations Iterations for FIXED only.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for an unknown mode.
@@ -656,13 +681,15 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contr
  * ring, a ring dtype that differs from the spec's dtype (the model's) is
  * ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase that
  * moves that ring (pre_process for an input, post_process for an output) and so takes
- * the difference on itself; the default bodies of anira/abi/processor.h still refuse
- * such a slot at run time. Set per tensor by canonical name, so an input and an output
- * may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no
- * Streamed tensor is checked at prepare, not here.
+ * the difference on itself; the default bodies of anira/abi/processor.h refuse such a
+ * slot at run time. Set per tensor by canonical name, so an input and an output may
+ * differ; a tensor never set streams its spec's dtype, so a host whose samples are the
+ * model's sets nothing, and one of another sample type sets its type here and adds the
+ * converting processor. A name that matches no Streamed tensor is checked at prepare,
+ * not here.
  * @param contract A Hard contract.
  * @param canonical The tensor's canonical name (the one its spec was created with).
- * @param dtype The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for
+ * @param dtype The element type of the host's samples for that tensor; the spec's dtype for
  *        every tensor that was never set.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of
@@ -740,16 +767,33 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_async_set_policy(anira_contract
                                                                   anira_delivery delivery) ANIRA_NOEXCEPT;
 
 /**
- * @brief Plan validation policy for the edges a pipeline uses (section 7); not scheduling.
+ * @brief The edge cost of the plans (section 7), plan validation, not scheduling: at
+ * anira_handler_prepare a plan with a slot whose edge_class is above worst_allowed is
+ * not eligible (an ANIRA_EDGE_UNKNOWN edge is above every class of the scale, so any
+ * limit refuses it; with no limit nothing is checked): it is dropped from the plans,
+ * under the default candidate set and named candidates alike, with an Info record of the
+ * group anira.capi naming each such slot, its class, who moves its bytes and why; the
+ * report and the plan indices hold the eligible plans alone. The session is then made
+ * again over the remaining plans while the first still holds their loaded models, so no
+ * model loads twice; an exclusive session's own executor is made, and warmed up, a
+ * second time. The edge is the plan engine's (anira_plan_slot.edge_class), known once
+ * its model has loaded.
  * @param contract Either contract kind.
- * @param cost PERMISSIVE (default) or STRICT.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown value.
+ * @param worst_allowed The worst class a plan may take for any of its slots, a limit of the
+ *        cost scale or none: ANIRA_EDGE_DEDICATED_TRANSFER admits every known
+ *        edge, ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device
+ *        within unified memory only (no bus), ANIRA_EDGE_COPY no crossing between
+ *        domains, ANIRA_EDGE_ZERO_COPY no copy at all; under each of them an
+ *        ANIRA_EDGE_UNKNOWN edge is refused. ANIRA_EDGE_UNKNOWN, the default, is
+ *        no limit: every edge allowed, even unknown ones.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value
+ *         anira_edge_class does not name.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* contract,
-                                                               anira_edge_cost cost) ANIRA_NOEXCEPT;
+                                                               anira_edge_class worst_allowed) ANIRA_NOEXCEPT;
 
 /**
  * @brief The host-end domain of one tensor, common to both contract kinds like
@@ -759,13 +803,13 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* c
  * pair's two buffers, which is the backend's domain of the plans that run the pair
  * otherwise (host memory for every backend of this pre-release), the domain the bound
  * State descriptors report; the planner joins it to the backend's domain per slot with
- * the edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class /
- * recipe). A tensor declared in the backend's own domain has no edge to cross. The ring,
- * the model tensor and the tensors the context accessors fill share the declared domain,
- * readable from the domain field of any tensor an accessor fills or from the plan row.
- * Set per tensor by canonical name, resolved at anira_handler_prepare: a name that
- * matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain but
- * ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the
+ * the edge of the registry's rows (anira_plan_slot.from_domain / to_domain / edge_class
+ * / recipe). A tensor declared in the backend's own domain has no edge to cross. The
+ * ring, the model tensor and the tensors the context accessors fill share the declared
+ * domain, readable from the domain field of any tensor an accessor fills or from the
+ * plan row. Set per tensor by canonical name, resolved at anira_handler_prepare: a name
+ * that matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain
+ * but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the
  * declaration is data; anira's runtime allocates in host memory only). In a contract
  * file the key is a top-level "host_domains": {"<name>": "<domain word>"}, the words the
  * lower-case suffixes of anira_domain ("host", "host_pinned", "cuda", ...).
@@ -1267,7 +1311,9 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_provider(const anira_
  * @brief The entry's model path.
  * @param config The config.
  * @param model_index An entry.
- * @return Object-owned; NULL for a bytes entry or an index out of range.
+ * @return Object-owned; NULL for a NULL config, an index out of range, a bytes entry and an
+ *         entry without a source (anira_model_config_add_model_path with a NULL path: a custom
+ *         engine's entry that names no model file).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -1720,7 +1766,8 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_from_json_file(const char* 
  * @param cap Capacity of buf in bytes.
  * @param out_len Receives the text length without the NUL; always written.
  * @return ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or
- *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len.
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len; ANIRA_ERROR_NOT_SUPPORTED
+ *         for a tensor of a dtype that has no word in a model file (one anira does not name).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -1789,8 +1836,10 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_to_json(const anira_conte
  * ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly
  * (ANIRA_SUCCESS_UPGRADED).
  * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional top-level
- *        edge_cost and an optional top-level host_domains ({"<name>": "<domain word>"},
- *        anira_contract_set_host_domain), or a v2 document.
+ *        edge_cost (the worst edge class allowed, by its word: "zero_copy", "copy",
+ *        "unified_transfer" or "dedicated_transfer"; anira_contract_set_edge_cost; without
+ *        the key no limit) and an optional top-level host_domains ({"<name>": "<domain
+ *        word>"}, anira_contract_set_host_domain), or a v2 document.
  * @param len Length of utf8 in bytes.
  * @param out Receives the handle on success.
  * @param err Nullable.
@@ -1869,7 +1918,8 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_axis(const anira_tensor_spec
 
 /**
  * @brief The window as anira_tensor_spec_set_window stored it; 0, 0, 0 until it ran, on every
- * role.
+ * role. Never the window a validation derives for a Streamed spec without one: that one
+ * is the plan report's (anira_plan_slot.window).
  * @param spec The spec.
  * @param window_min Receives the smallest legal Time extent.
  * @param window_max Receives the largest, or ANIRA_UNBOUNDED.
@@ -2195,7 +2245,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_wait_ratio(const anira_con
 
 /**
  * @brief The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's
- * ring_dtypes) named; every other tensor's ring dtype is ANIRA_DTYPE_F32.
+ * ring_dtypes) named; every other tensor's ring dtype is its spec's dtype.
  * @param contract A Hard contract.
  * @return The count; 0 on an Async contract and for NULL.
  * @par Thread contract
@@ -2207,8 +2257,9 @@ ANIRA_API uint32_t ANIRA_CALL anira_contract_hard_num_ring_dtypes(const anira_co
 
 /**
  * @brief One ring dtype the contract names, enumerated by index in bytewise order of the
- * canonical names: what lists what was set, which a lookup by name could not (it would
- * answer ANIRA_DTYPE_F32 for a name never set and for one set to it alike).
+ * canonical names: what lists what was set. A name it does not list streams its spec's
+ * dtype, which the contract does not know (a contract has no model), so a lookup by name
+ * could not answer it.
  * @param contract A Hard contract.
  * @param index Below anira_contract_hard_num_ring_dtypes.
  * @param canonical Receives the tensor's canonical name (object-owned).
@@ -2257,15 +2308,16 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contra
                                                               uint32_t* samples) ANIRA_NOEXCEPT;
 
 /**
- * @brief The edge cost policy anira_contract_set_edge_cost stored.
+ * @brief The edge cost anira_contract_set_edge_cost stored: the worst edge class a plan may
+ * take, ANIRA_EDGE_UNKNOWN for no limit (even unknown edges allowed).
  * @param contract Either contract kind.
- * @return The policy; ANIRA_EDGE_COST_PERMISSIVE, the default, for NULL.
+ * @return The class; ANIRA_EDGE_UNKNOWN, the default (no limit), for NULL.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API anira_edge_cost ANIRA_CALL anira_contract_edge_cost(const anira_contract* contract)
-                                                              ANIRA_NOEXCEPT;
+ANIRA_API anira_edge_class ANIRA_CALL anira_contract_edge_cost(const anira_contract* contract)
+                                                               ANIRA_NOEXCEPT;
 
 /**
  * @brief The pool size and the wait strategy as anira_context_config_set_threads (or a context

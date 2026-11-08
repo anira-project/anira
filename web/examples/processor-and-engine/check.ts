@@ -62,6 +62,12 @@ const run = async (): Promise<Result> => {
       `automated mid-render ramped in over quantum ${CHANGE_QUANTUM} (worst error ${worst})`
   )
 
+  // An offline render does not run against the clock: never held, whatever the verdict.
+  check(
+    !example.waitsForConsent(),
+    `an offline render is never held (verdict ${example.verdict()})`
+  )
+
   const delay = example.dry.delayTime.value
   check(
     Math.abs(delay - latency / RATE) < 1e-7,

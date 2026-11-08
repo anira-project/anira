@@ -23,6 +23,7 @@
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
 #include "../utils/Semaphore.h"
+#include "ChunkStorage.h"
 #include "LatencyCalculator.h"
 
 namespace anira {
@@ -298,6 +299,11 @@ public:
     /// Whether the session runs one inference at a time and in order (capi::Derived::
     /// m_exclusive: a stateful model or a declared State pair): the dispatch gate.
     bool exclusive() const noexcept;
+    /// The most jobs of the session the inference queue can hold at once, what prepare reserves
+    /// for it there (Core::reserve_inference_capacity): one for an exclusive session (its
+    /// dispatch gate lets one job be queued or running), else the struct pool (a queued job
+    /// holds a struct that is not free until its chunk is collected). Valid after prepare.
+    size_t queue_capacity() const noexcept;
     /** @} */
 
     /**
@@ -317,24 +323,30 @@ public:
         /**
          * @brief The chunk's storage and its descriptors, built once by the session's prepare
          *
-         * One allocation holds the buffer of every slot of either side but a State slot, each
-         * buffer starting on a 64-byte boundary, in the storage's dtype (float32 in this
-         * pre-release) with the spec's extents, zeroed. Every slot gets one descriptor over its
-         * buffer, with the spec's rank and extents and all-zero strides: what the engine call
+         * One block of `storage` holds the buffer of every slot of either side but a State
+         * slot, each buffer starting on an `alignment` boundary, in the spec's dtype with the
+         * spec's extents, zeroed. Every slot gets one descriptor over its buffer, with the
+         * spec's rank, extents and dtype, the storage's domain and all-zero strides: what the
+         * engine call
          * hands its adapter (anira_engine_ctx::inputs / outputs) and what a processor context
          * copies for a slot. A State slot has no buffer: its descriptor is the processor
          * runner's to bind over the pair's port ahead of every inference.
          *
-         * @param inputs What the validator derived per input tensor: the spec's extents
-         * (capi::DerivedSpec::m_dims)
+         * @param inputs What the validator derived per input tensor: the spec's extents and
+         * dtype (capi::DerivedSpec::m_dims, m_dtype)
          * @param outputs The same per output tensor
          * @param input_state Per input tensor: whether it is a State slot
          * @param output_state Per output tensor: whether it is a State slot
+         * @param storage Where the block lives (host_chunk_storage() in this pre-release)
+         * @param alignment The boundary every slot's buffer starts on, in bytes, a power of two
+         * (the largest any of the session's plans' engines needs, buffer_alignment)
          */
         ThreadSafeStruct(const std::vector<capi::DerivedSpec>& inputs,
                          const std::vector<capi::DerivedSpec>& outputs,
                          const std::vector<bool>& input_state,
-                         const std::vector<bool>& output_state);
+                         const std::vector<bool>& output_state,
+                         ChunkStorage& storage,
+                         size_t alignment);
         ~ThreadSafeStruct() = default;
         // The descriptors name the block: one struct, one place.
         ThreadSafeStruct(const ThreadSafeStruct&) = delete;
@@ -348,8 +360,8 @@ public:
         /// delivers. A State slot has no buffer; its pair keeps its own value.
         void zero_outputs() noexcept;
 
-        /// The alignment of every slot's buffer, in bytes.
-        static constexpr size_t k_alignment = 64;
+        /// The boundary every slot's buffer of this chunk starts on, in bytes.
+        size_t alignment() const noexcept { return m_block.alignment(); }
 
         std::atomic<bool> m_free{true};  ///< Atomic flag indicating if this structure is available
                                          ///< for use
@@ -400,7 +412,13 @@ public:
         // output into the receive rings, ahead of every later chunk. Driving thread only (set
         // by the submission, moved out by Core::post_process); Core::pre_process resets it.
         size_t m_fills_after{0};
-        // The struct's position in SessionElement::m_inference_queue: the chunk's entry
+        // How long the inference thread spent on this chunk's job, in nanoseconds of
+        // steady_clock: from its before_inference to its after_inference (the declared state's
+        // feed and capture, the processor's hooks and the engine call; the wait for an instance
+        // lies before it). Written by the inference thread before the done signal, read after it
+        // (the warm-up pass of a prepare reads it); 0 until the chunk's first job ran.
+        int64_t m_inference_ns{0};
+        // The struct's position in SessionElement::m_struct_pool: the chunk's entry
         // (anira_engine_ctx::entry, anira_processor_ctx::entry), set by prepare with the pool.
         uint32_t m_entry{0};
         // One descriptor per slot of either side over the chunk's storage (built by the
@@ -419,17 +437,19 @@ public:
         ThreadSafeStruct* m_waiting_next = nullptr;
 
     private:
-        /// The one allocation of the chunk's buffers, over-allocated by k_alignment so that the
-        /// first buffer starts on a boundary whatever the allocator handed out.
-        std::vector<std::byte> m_block;
+        /// The one block of the chunk's buffers, from its storage, on the chunk's alignment.
+        ChunkBlock m_block;
         /// Per slot of either side, its buffer in m_block; empty for a State slot.
         std::vector<std::span<std::byte>> m_input_bytes;
         std::vector<std::span<std::byte>> m_output_bytes;
     };
 
-    std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;  ///< Pool of thread-safe
-                                                                       ///< structures for
-                                                                       ///< concurrent processing
+    /// The session's chunks, built by prepare: m_num_structs of them (twice the steady-state
+    /// bound, see prepare), each a chunk's storage and descriptors, free or held by one chunk
+    /// from its submission to its collection. An index into it is the chunk's entry
+    /// (ThreadSafeStruct::m_entry). What the inference queue carries is a pointer to one of
+    /// them, so a session never has more jobs in the queue than this pool has structs.
+    std::vector<std::shared_ptr<ThreadSafeStruct>> m_struct_pool;
 
     /// No chunk carries this dispatch stamp: what a plan's m_engine_generation holds after
     /// prepare, so that the plan's first inference of the session is its first of a new stream.
@@ -519,7 +539,7 @@ public:
     /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
     bool select_plan(uint32_t plan) noexcept;
 
-    unsigned long m_current_queue = 0;         ///< Current position in the inference queue
+    unsigned long m_current_queue = 0;         ///< The time stamp of the next submitted chunk
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
     size_t m_pending_pull_samples = 0;  ///< Generator sessions only (!m_input_driven): samples of
                                         ///< the reference output the driving thread has demanded
@@ -561,13 +581,17 @@ public:
     // This session's explicit producer token for the global inference queue.
     // Pinning one token per session keeps enqueue allocation-free on the audio
     // thread (no implicit-producer registration) and gives the token RAII
-    // lifetime: the underlying producer slot is recycled when the session is
-    // destroyed. A ProducerToken must never be used by two threads at once —
+    // lifetime: the underlying producer slot, its blocks with it, is recycled by the
+    // next session's token when the session is destroyed. Its blocks are reserved at
+    // prepare (Core::reserve_inference_capacity, queue_capacity() of them), so the
+    // try_enqueue through it neither allocates nor runs out of room. A ProducerToken must
+    // never be used by two threads at once —
     // this holds here because all enqueues of a session are serialized: the
     // non-stateful path enqueues only from the session's single driving thread,
     // and the stateful path enqueues only while holding the
     // m_stateful_dispatch_gate (whose acquire/release ordering also makes
-    // the token's state visible when ownership migrates between threads).
+    // the token's state visible when ownership migrates between threads); the
+    // reservation runs on the control thread while nothing of the session is queued.
     moodycamel::ProducerToken m_producer_token;  ///< Per-session producer token for the global
                                                  ///< inference queue
 
@@ -595,12 +619,12 @@ public:
     std::atomic<uint64_t> m_stateful_dispatch_gate{0};  ///< {epoch, busy} dispatch gate; busy while
                                                         ///< a stateful task of this session is
                                                         ///< queued or running
-    // Pre-sized in the constructor to m_num_instances — a pending
-    // entry is always a distinct ThreadSafeStruct, so the depth is bounded —
-    // and fed exclusively through m_dispatch_producer_token, so enqueues never
-    // allocate: neither on the audio thread (real-time safety) nor, on
-    // WebAssembly, from a non-main WASM instance (which must not touch the
-    // shared allocator).
+    // Built with no blocks and reserved at prepare for the struct pool
+    // (reserve_pending_dispatch) — a pending entry is always a distinct
+    // ThreadSafeStruct, so the depth is at most m_num_structs — and fed exclusively
+    // through m_dispatch_producer_token, so enqueues never allocate: neither on the
+    // audio thread (real-time safety) nor, on WebAssembly, from a non-main WASM
+    // instance (which must not touch the shared allocator).
     moodycamel::ConcurrentQueue<std::shared_ptr<ThreadSafeStruct>>
         m_dispatch_pending;  ///< Prepared-but-not-yet-dispatched stateful
                              ///< tasks, in submission order
@@ -611,8 +635,18 @@ public:
 
     /** @brief Queue a prepared stateful task awaiting dispatch (called in submission order on the
      * session's driving thread; allocation-free). If the pending queue rejects the task — which
-     * the capacity bound makes unreachable — it is completed with zeroed output instead. */
+     * the reservation for the struct pool makes unreachable — it is completed with zeroed output
+     * instead. */
     void enqueue_pending_dispatch(std::shared_ptr<ThreadSafeStruct> thread_safe_struct);
+    /** @brief prepare's step for an exclusive session, after force_reset_dispatch_chain(): gives
+     * m_dispatch_producer_token the blocks for every struct of the pool at once (one allocating
+     * enqueue_bulk of placeholders, QueueCapacity.h), then takes the placeholders back. Holds
+     * the gate meanwhile: the gate holder is the pending queue's only consumer, so no laggard
+     * worker pops a placeholder (an empty struct pointer) or reuses a block before the ring holds
+     * them all. Blocking (waits out a transient gate holder in 50us steps) and allocating —
+     * control thread only.
+     * @throws std::bad_alloc when the blocks cannot be allocated */
+    void reserve_pending_dispatch() ANIRA_BLOCKING;
     /** @brief Claim the next stateful task to dispatch, or nullptr if one is already in flight or
      * none are pending. Pending entries whose dispatch generation is stale (a wait-free reset
      * bumped m_generation after they were prepared) are returned straight to the free pool and
@@ -652,6 +686,12 @@ public:
     /// inferences of the session run at once (LatencyCalculator's n), and the pending dispatch
     /// queue of an exclusive session is sized by it.
     const uint32_t m_num_instances;
+    /// The inference time the next prepare() sizes the session for, in ms (LatencyCalculator's
+    /// T): the contract's explicit budget from the construction on; a 3.x handler sets it before
+    /// each prepare (one clock step for its warm-up pass under a MEASURED budget, then the
+    /// slowest plan's figure). The contract keeps what the user set. Control thread only, while
+    /// no chunk of the session exists.
+    double m_budget_ms;
 
     RtLatch m_rt_own;  ///< The session's own real-time latch: what m_rt points at when the
                        ///< constructor received no latch (a 2.x session); nothing reads its

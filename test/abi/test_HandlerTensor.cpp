@@ -1107,10 +1107,9 @@ TEST(AbiHandlerTensor, ARefusalIsLoggedOncePerKindAndNamesTheSlot) {
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(anira_test::count_records(collector, "nothing converts", "rt"), 1U);
     EXPECT_EQ(anira_test::find_record(collector, "nothing converts", "rt").m_message,
-              "anira_handler_push_data_multi: the tensor of Static input slot 1 'values_in' has "
-              "dtype " +
-                  std::to_string(ANIRA_DTYPE_I16) + ", the spec's is " +
-                  std::to_string(ANIRA_DTYPE_F32) + "; nothing converts");
+              "anira_handler_push_data_multi: the tensor of Static input slot 1 'values_in' is "
+              "int16, the spec's dtype is float32; a Static tensor carries its spec's dtype "
+              "(nothing converts)");
     EXPECT_EQ(anira_test::count_records(collector, "does not know", "rt"), 1U);
     EXPECT_NE(anira_test::find_record(collector, "does not know", "rt")
                   .m_message.find("anira_handler_pop_data: the tensor of output slot 0 'out'"),
@@ -1127,13 +1126,50 @@ TEST(AbiHandlerTensor, ARefusalIsLoggedOncePerKindAndNamesTheSlot) {
 #endif
 }
 
+// A host tensor of another dtype than its Streamed slot's ring dtype is refused per call with
+// ANIRA_ERROR_CONFIG, recorded, logged once, and nothing reaches the ring; the record names the
+// dtypes by their words and both remedies: a tensor of the ring dtype, or the host's dtype in
+// the contract's ring_dtypes with a processor that converts in the phase that moves the ring.
+TEST(AbiHandlerTensor, AStreamedDtypeRefusalNamesBothRemedies) {
+    const anira_test::Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_DEBUG);
+    anira_drain_log();
+    RecordCollector collector;
+    const ModelConfig model = multi_model();
+    const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
+                                                    .engine = ANIRA_ENGINE_CUSTOM,
+                                                    .provider = ANIRA_PROVIDER_CPU,
+                                                    .engine_id = anira_test::k_custom}};
+    anira_test::Handler handler(context, model, candidates);
+    const anira::ContractHandle contract =
+        anira_test::explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
+    ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+    anira_handler* h = handler.m_handler;
+
+    const Block int16_block(Layout::Interleaved, 3, k_hop, ANIRA_DTYPE_I16);
+    EXPECT_EQ(anira_handler_push_data(h, &int16_block.tensor(), 0), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(anira_test::session_of(h)->send_ring(0).available(0), 0U) << "nothing staged";
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    EXPECT_EQ(
+        anira_test::find_record(collector, "nothing converts", "rt").m_message,
+        "anira_handler_push_data: the tensor of input slot 0 'in' is int16, the slot's ring "
+        "dtype is float32; nothing converts: pass a tensor of the ring dtype, or name int16 in "
+        "the contract's ring_dtypes and add a processor that converts in pre_process");
+#endif
+}
+
 // ---- the _wait twins without an inference thread -----------------------------------------------
 
 TEST(AbiHandlerTensor, AWaitTwinWithoutAThreadRunsTheStemAndRefuses) {
     const Rig rig(multi_model(), ANIRA_MISS_ZEROS, /*threads=*/0);
     ASSERT_TRUE(rig.ready());
     anira_handler* h = rig.get();
-    ASSERT_GE(rig.latency(0), 2U * k_hop);
+    // The latency's zeros: one block of k_hop and the rest of a second one (15: the buffer
+    // adaptation of blocks of 1 to 8 samples and one hop).
+    const size_t latency = rig.latency(0);
+    ASSERT_GT(latency, k_hop);
+    ASSERT_LT(latency, 2U * k_hop);
     Block stream_in(Layout::Interleaved, 3, k_hop);
     Block values_in(Layout::Packed, 1, 3);
     Block stream_out(Layout::Planar, 3, k_hop);
@@ -1157,10 +1193,13 @@ TEST(AbiHandlerTensor, AWaitTwinWithoutAThreadRunsTheStemAndRefuses) {
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_STATE);
     for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(stream_out.at(1, i), 0.0F); }
 
+    // The rest of the latency's zeros, a shorter block.
+    const Block rest_out(Layout::Planar, 3, latency - k_hop);
+    const std::array<anira_tensor, 2> rest{rest_out.tensor(), values_out.tensor()};
     std::array<size_t, 2> counts{k_unset, k_unset};
-    EXPECT_EQ(anira_handler_pop_data_multi_wait(h, outputs.data(), 2, counts.data(), 5.0),
+    EXPECT_EQ(anira_handler_pop_data_multi_wait(h, rest.data(), 2, counts.data(), 5.0),
               ANIRA_ERROR_INVALID_STATE);
-    EXPECT_EQ(counts[0], k_hop);
+    EXPECT_EQ(counts[0], latency - k_hop);
     EXPECT_EQ(counts[1], 3U);
 
     // The ring is empty now: the stem misses, and the counts say so.
@@ -1378,17 +1417,9 @@ TEST_F(AbiHandlerTensorMiss, APopPassesEmptyInputs) {
 }
 
 TEST_F(AbiHandlerTensorMiss, AMultiFormHandsOverTheCallersArrays) {
-    const Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
     ASSERT_TRUE(rig.ready());
-    ASSERT_EQ(rig.latency(0), 2U * k_samples);
-    // Latency 16: two delivered blocks empty the ring while their inferences wait.
-    for (size_t k = 0; k < 2; ++k) {
-        Block in(Layout::Planar, 3, k_hop);
-        const Block out(Layout::Planar, 3, k_hop);
-        fill_input(in, k * k_samples);
-        ASSERT_EQ(anira_handler_process(rig.get(), &in.tensor(), 0, &out.tensor(), 0, nullptr),
-                  ANIRA_OK);
-    }
+    starve(rig, 3);
     Block stream_in(Layout::Interleaved, 3, k_hop);
     Block values_in(Layout::Packed, 1, 3);
     const Block stream_out(Layout::Planar, 3, k_hop);
@@ -1446,9 +1477,8 @@ anira_tensor empty_slot(int64_t channels) {
 // of prepare again when the call returns, so the function never finds the pointers of an
 // earlier call, which may name dead memory by then, in a slot the missed call did not carry.
 TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall) {
-    const Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
     ASSERT_TRUE(rig.ready());
-    ASSERT_EQ(rig.latency(0), 2U * k_samples);
     anira_handler* handler = rig.get();
     const auto empty_values = bytes_of(empty_slot(1));
     {
@@ -1476,13 +1506,14 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
     EXPECT_EQ(bytes_of(handler->m_input_tensors[1]), empty_values) << "never staged";
     EXPECT_EQ(bytes_of(handler->m_output_tensors[1]), empty_values);
 
-    // Latency 16: two delivered blocks of slot 0 empty the ring, the third one starves.
-    for (size_t k = 0; k < 3; ++k) {
+    // Two delivered blocks of slot 0 empty the ring, the third one starves.
+    starve(rig, 3);
+    {
         Block in(Layout::Planar, 3, k_hop);
         const Block out(Layout::Planar, 3, k_hop);
-        fill_input(in, k * k_samples);
+        fill_input(in, 2 * k_samples);
         ASSERT_EQ(anira_handler_process(handler, &in.tensor(), 0, &out.tensor(), 0, nullptr),
-                  k < 2 ? ANIRA_OK : ANIRA_MISSED);
+                  ANIRA_MISSED);
     }
     ASSERT_EQ(m_state.m_calls, 1);
     ASSERT_EQ(m_state.m_inputs, handler->m_input_tensors.data());
@@ -1509,9 +1540,9 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
 // are, and a slot the missed call did not carry names no memory: the adapter nulls the planes of a
 // slot it leaves out, so the pointers of an earlier call never reach the function.
 TEST_F(AbiHandlerTensorMiss, AFloatHostsPlanarTensorsReachTheMissFunctionAsTheyAre) {
-    const Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
     ASSERT_TRUE(rig.ready());
-    ASSERT_EQ(rig.latency(0), 2U * k_samples);
+    ASSERT_LT(rig.latency(0), 2U * k_samples) << "the third block would not starve";
     anira_test::FloatFace face(rig.get());
     std::array<std::vector<float>, 3> in_data;
     std::array<std::vector<float>, 3> out_data;
@@ -1547,12 +1578,15 @@ TEST_F(AbiHandlerTensorMiss, AFloatHostsPlanarTensorsReachTheMissFunctionAsTheyA
     }
     anira_status status = ANIRA_OK;
     std::array<size_t, 2> delivered{k_unset, k_unset};
+    // Two delivered blocks, the first settled and the second left at the gate; the third
+    // starves.
     for (int k = 0; k < 3; ++k) {
         status = face.process_multi(in.data(),
                                     num_in.data(),
                                     out.data(),
                                     num_out.data(),
                                     delivered.data());
+        if (k == 0) { rig.settle(); }
     }
     EXPECT_EQ(status, ANIRA_MISSED);
     EXPECT_EQ(delivered[0], 0U) << "a missed block delivers 0";

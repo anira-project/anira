@@ -27,7 +27,7 @@ public:
     uint32_t phases() const noexcept override { return k_pre_process; }
     // pre_process runs on the audio thread under a Hard contract: it pops and copies, nothing
     // else.
-    uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+    uint32_t realtime_phases() const noexcept override { return phases(); }
 
     std::unique_ptr<Prepared> prepare(const anira::PrepareInfo& info) override {
         const anira::Tensor& input = info.inputs()[0];

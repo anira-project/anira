@@ -237,14 +237,17 @@ static void ANIRA_CALL anira_rt_contract_processor_reset(const anira_processor_c
 }
 
 /* anira_pipeline_add_processor is [main-thread]: a plain function fills the descriptor. The four
-   phase slots and the reset take the nonblocking functions as they are, and the flags state
-   the promise the attribute checked. */
+   phase slots and the reset take the nonblocking functions as they are, and realtime_phases
+   states the promise the attribute checked, for each of them. */
 /* NOLINTNEXTLINE(misc-use-internal-linkage) */
 anira_status anira_rt_contract_add_processor(anira_pipeline* pipeline, void* user_data);
 anira_status anira_rt_contract_add_processor(anira_pipeline* pipeline, void* user_data) {
     anira_processor_desc processor = ANIRA_PROCESSOR_DESC_INIT;
     processor.user_data = user_data;
-    processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+    processor.realtime_phases =
+        ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) |
+        ANIRA_PHASE_BIT(ANIRA_PHASE_BEFORE_INFERENCE) |
+        ANIRA_PHASE_BIT(ANIRA_PHASE_AFTER_INFERENCE) | ANIRA_PHASE_BIT(ANIRA_PHASE_RESET);
     processor.pre_process = anira_rt_contract_processor;
     processor.post_process = anira_rt_contract_processor;
     processor.before_inference = anira_rt_contract_processor;

@@ -3,7 +3,10 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 
+#include "capi/validate.h"
+#include "scheduler/ChunkStorage.h"
 #include "scheduler/SessionElement.h"
 
 #if defined(ANIRA_WITH_ASAN) || defined(ANIRA_WITH_LSAN)
@@ -132,7 +135,9 @@ anira_status ANIRA_CALL default_post_process(const anira_processor_ctx* ctx,
 
 anira_processor_desc ring_moving_processor() {
     anira_processor_desc processor = ANIRA_PROCESSOR_DESC_INIT;
-    processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;  // what the default bodies are
+    // What the default bodies are: real-time.
+    processor.realtime_phases =
+        ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS);
     processor.pre_process = default_pre_process;
     processor.post_process = default_post_process;
     return processor;
@@ -194,6 +199,90 @@ TEST(SessionElementRingDtypes, ASlotsRingHoldsItsRingDtype) {
 
     const RingDtypeSession lanes(ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4), ANIRA_DTYPE_F32);
     EXPECT_EQ(lanes.m_status, ANIRA_ERROR_CONFIG) << lanes.m_handler.m_err.message;
+}
+
+namespace {
+/// A slot's buffer as an address.
+uintptr_t address_of(const anira_tensor& tensor) {
+    return reinterpret_cast<uintptr_t>(tensor.handle.host.ptr);
+}
+}  // namespace
+
+// A chunk stores every slot in its spec's dtype: the descriptor names the spec's dtype, the
+// buffer holds the elements of that dtype, every buffer starts on a 64-byte boundary, and an
+// all-float32 chunk keeps the sizes and the offsets it always had (elements * 4, each padded to
+// 64), so a float32 model's chunks are byte for byte what they were.
+TEST(SessionElementChunk, ASlotHoldsItsSpecsDtype) {
+    using capi::DerivedSpec;
+    const std::vector<DerivedSpec> inputs{
+        DerivedSpec{.m_dims = {1, 1, 512}, .m_dtype = ANIRA_DTYPE_I16},
+        DerivedSpec{.m_dims = {1}, .m_dtype = ANIRA_DTYPE_F32},
+        DerivedSpec{.m_dims = {1, 3}, .m_dtype = ANIRA_DTYPE_I8},
+    };
+    const std::vector<DerivedSpec> outputs{
+        DerivedSpec{.m_dims = {1, 1, 512}, .m_dtype = ANIRA_DTYPE_F16},
+        DerivedSpec{.m_dims = {1}, .m_dtype = ANIRA_DTYPE_I64},
+    };
+    const SessionElement::ThreadSafeStruct chunk(inputs, outputs, {}, {}, host_chunk_storage(), 64);
+    ASSERT_EQ(chunk.m_input_tensors.size(), 3U);
+    ASSERT_EQ(chunk.m_output_tensors.size(), 2U);
+    const std::array<anira_dtype, 3> in_dtypes{ANIRA_DTYPE_I16, ANIRA_DTYPE_F32, ANIRA_DTYPE_I8};
+    const std::array<anira_dtype, 2> out_dtypes{ANIRA_DTYPE_F16, ANIRA_DTYPE_I64};
+    for (size_t slot = 0; slot < in_dtypes.size(); ++slot) {
+        EXPECT_EQ(chunk.m_input_tensors[slot].dtype, in_dtypes[slot]) << "input " << slot;
+        EXPECT_EQ(address_of(chunk.m_input_tensors[slot]) % 64, 0U) << "input " << slot;
+    }
+    for (size_t slot = 0; slot < out_dtypes.size(); ++slot) {
+        EXPECT_EQ(chunk.m_output_tensors[slot].dtype, out_dtypes[slot]) << "output " << slot;
+        EXPECT_EQ(address_of(chunk.m_output_tensors[slot]) % 64, 0U) << "output " << slot;
+    }
+    EXPECT_EQ(anira_tensor_num_elements(&chunk.m_input_tensors[0]), 512U);
+    // 512 int16 elements are 1024 bytes; a float32 slot would have taken 2048.
+    EXPECT_EQ(address_of(chunk.m_input_tensors[1]) - address_of(chunk.m_input_tensors[0]), 1024U);
+    // One float32 element padded to 64 bytes.
+    EXPECT_EQ(address_of(chunk.m_input_tensors[2]) - address_of(chunk.m_input_tensors[1]), 64U);
+    // 3 int8 elements padded to 64, then the first output: 512 float16 elements, 1024 bytes.
+    EXPECT_EQ(address_of(chunk.m_output_tensors[0]) - address_of(chunk.m_input_tensors[2]), 64U);
+    EXPECT_EQ(address_of(chunk.m_output_tensors[1]) - address_of(chunk.m_output_tensors[0]), 1024U);
+    auto* last = static_cast<int64_t*>(chunk.m_output_tensors[1].handle.host.ptr);
+    EXPECT_EQ(*last, 0) << "the buffers start at zeros";
+
+    const std::vector<DerivedSpec> floats{
+        DerivedSpec{.m_dims = {1, 1, 512}},
+        DerivedSpec{.m_dims = {1}},
+    };
+    const SessionElement::ThreadSafeStruct float_chunk(floats,
+                                                       floats,
+                                                       {},
+                                                       {},
+                                                       host_chunk_storage(),
+                                                       64);
+    EXPECT_EQ(float_chunk.m_input_tensors[0].dtype, ANIRA_DTYPE_F32);
+    EXPECT_EQ(
+        address_of(float_chunk.m_input_tensors[1]) - address_of(float_chunk.m_input_tensors[0]),
+        2048U);
+    EXPECT_EQ(
+        address_of(float_chunk.m_output_tensors[0]) - address_of(float_chunk.m_input_tensors[1]),
+        64U);
+
+    // An engine that binds memory on a coarser grain asks for a larger alignment (a page): every
+    // buffer then starts on that boundary and is padded to it, and the block comes from the
+    // storage on it.
+    const SessionElement::ThreadSafeStruct paged(floats,
+                                                 floats,
+                                                 {},
+                                                 {},
+                                                 host_chunk_storage(),
+                                                 4096);
+    EXPECT_EQ(paged.alignment(), 4096U);
+    for (const anira_tensor& tensor : paged.m_input_tensors) {
+        EXPECT_EQ(address_of(tensor) % 4096, 0U);
+    }
+    for (const anira_tensor& tensor : paged.m_output_tensors) {
+        EXPECT_EQ(address_of(tensor) % 4096, 0U);
+    }
+    EXPECT_EQ(address_of(paged.m_input_tensors[1]) - address_of(paged.m_input_tensors[0]), 4096U);
+    EXPECT_EQ(paged.m_input_tensors[0].domain, ANIRA_DOMAIN_HOST) << "the host storage's domain";
 }
 
 namespace {
@@ -292,10 +381,11 @@ INSTANTIATE_TEST_SUITE_P(
             {{.m_elements = 2048}, {.m_elements = 384, .m_channels = 3}},
             50.0,
             0.0,
-            {8192, 512},
+            // 106/32 hops, coherent for the hops 2048 and 128 (whole hops made it 8192, 512)
+            {6784, 424},
             10,
             {3, 848},
-            {28672, 1792}),
+            {27264, 1704}),
         // Non-power-of-two buffer size tests
         row({100, 48000, true}, mono(2048), mono(2048), 13.0, 0.0, {2759}, 2, {2147}, {6855}),
         row({300, 44100}, mono(1024), mono(1024), 40.0, 0.0, {2820}, 6, {1320}, {8964}),
@@ -382,7 +472,7 @@ TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
     // wait — a blind acquire() on a count-0 semaphore blocks forever, since
     // the callers' drain_inference_queue() guarantees no inference thread will
     // signal this session again.
-    session->m_inference_queue[0]->m_done_semaphore.release();
+    session->m_struct_pool[0]->m_done_semaphore.release();
 
     ClearDeadlockFixture* const raw = fixture.get();
     std::thread([raw, session] {
@@ -535,6 +625,74 @@ INSTANTIATE_TEST_SUITE_P(OneSidedStreaming,
                          [](const testing::TestParamInfo<bool>& info) {
                              return info.param ? "allow_smaller_buffers" : "static_buffer";
                          });
+
+// Issue #235, step 9 of the realtime-inference workshop: a stateful model with one audio output
+// (hop 2048, an internal latency of 2224) and its recurrent state as a State output, under host
+// blocks of 512 at 44.1 kHz and a 20 ms budget. The inference queue is 1.25 hops (2560), so the
+// session reports 2560 + 2224 = 4784; a non-streamed output must not round the queue up to two
+// whole hops (4096 + 2224 = 6320).
+TEST(SessionElementLatency, AStateOutputBesideOneStreamedOutputKeepsItsLatency) {
+    SizingHostBlocks const host = host_blocks(512, 44100, false);
+    constexpr double k_budget_ms = 20.0;
+    constexpr int64_t k_internal = 2224;
+
+    // The recurrent state as a declared State pair.
+    anira::ModelConfig stateful = anira_test::custom_model(1);
+    stateful.input(anira_test::stream_tensor("audio_in", 1, 2048, 2048));
+    anira::TensorSpec state_in("state_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    state_in.axis(0, ANIRA_AXIS_ANY, 64).state_source("state_out");
+    stateful.input(state_in);
+    anira::TensorSpec audio_out = anira_test::stream_tensor("audio_out", 1, 2048, 2048);
+    audio_out.latency(k_internal);
+    stateful.output(audio_out);
+    anira::TensorSpec state_out("state_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    state_out.axis(0, ANIRA_AXIS_ANY, 64);
+    stateful.output(state_out);
+    SizingResult const with_state = prepare_and_measure(stateful, host, k_budget_ms);
+    EXPECT_EQ(with_state.m_latency, (std::vector<unsigned int>{4784, 0}));
+
+    // A Static output in the state's place, first in the list.
+    SizingResult const with_static = prepare_and_measure(
+        anira_test::sizing_model({{.m_elements = 2048}},
+                                 {{.m_elements = 64, .m_hop = 0}, {.m_elements = 2048}},
+                                 1,
+                                 std::nullopt,
+                                 {0, k_internal}),
+        host,
+        k_budget_ms);
+    EXPECT_EQ(with_static.m_latency, (std::vector<unsigned int>{0, 4784}));
+}
+
+// Several Streamed outputs meet on the grid of 1/g hops, g the gcd of their hops, not at whole
+// hops. The workshop's timing (hop 2048, host blocks of 512 at 44.1 kHz, a 20 ms budget) puts the
+// queue at 1.25 hops: two outputs of hop 2048 are coherent at 2560 already and report 2560 +
+// 2224 = 4784 and 2560, where whole hops made it 6320 and 4096; beside an output of hop 512
+// (g = 512) the queue is 640 samples of it, where whole hops made it 1024.
+TEST(SessionElementLatency, StreamedOutputsMeetOnTheGcdGrid) {
+    SizingHostBlocks const host = host_blocks(512, 44100, false);
+    constexpr double k_budget_ms = 20.0;
+    constexpr int64_t k_internal = 2224;
+
+    SizingResult const equal_hops =
+        prepare_and_measure(anira_test::sizing_model({{.m_elements = 2048}},
+                                                     {{.m_elements = 2048}, {.m_elements = 2048}},
+                                                     1,
+                                                     std::nullopt,
+                                                     {k_internal, 0}),
+                            host,
+                            k_budget_ms);
+    EXPECT_EQ(equal_hops.m_latency, (std::vector<unsigned int>{2560 + k_internal, 2560}));
+
+    SizingResult const quarter_hop =
+        prepare_and_measure(anira_test::sizing_model({{.m_elements = 2048}},
+                                                     {{.m_elements = 2048}, {.m_elements = 512}},
+                                                     1,
+                                                     std::nullopt,
+                                                     {k_internal, 0}),
+                            host,
+                            k_budget_ms);
+    EXPECT_EQ(quarter_hop.m_latency, (std::vector<unsigned int>{2560 + k_internal, 640}));
+}
 
 // The generator hang (#101): with allow_smaller_buffers the buffer-ratio countdown
 // never terminated. Run the prepare on a detached thread against a deadline. A failing test

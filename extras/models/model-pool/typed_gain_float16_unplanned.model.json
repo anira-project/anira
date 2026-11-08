@@ -1,0 +1,38 @@
+{
+  "models": [
+    {
+      "engine": "executorch",
+      "path": "example-models/TypedGainNetwork/models/typed_gain_network_float16_unplanned.pte"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "audio_in",
+      "dtype": "float16",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 1], ["time", 512]],
+      "window": { "min": 512, "max": 512 }
+    },
+    {
+      "name": "gain",
+      "dtype": "float16",
+      "role": "static",
+      "axes": [["any", 1]]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "audio_out",
+      "dtype": "float16",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 1], ["time", 512]],
+      "window": { "min": 512, "max": 512 }
+    },
+    {
+      "name": "gain_out",
+      "dtype": "float16",
+      "role": "static",
+      "axes": [["any", 1]]
+    }
+  ]
+}

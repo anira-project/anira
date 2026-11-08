@@ -35,7 +35,8 @@ defineProcessor(INPUT_GAIN_PROCESSOR, ({ abi, module }) => ({
   },
 
   // The audio thread, once per quantum inside the render callback: no allocation, no object
-  // literal, no closure (the processor states ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST).
+  // literal, no closure (the processor promises it: addProcessor's default realtimePhases names
+  // pre_process, post_process and reset).
   preProcess(ctx: number, prepared: number): number {
     // Pop the input ring into the model's audio tensor (and materialise the Static inputs).
     const popped = module._anira_processor_default_pre_process(ctx)

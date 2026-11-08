@@ -1,11 +1,11 @@
 import type { AniraBindings } from './abi/bindings'
-import { anira_budget_kind, anira_warmup_mode } from './abi/enums'
+import { anira_budget_kind, anira_edge_class, anira_warmup_mode } from './abi/enums'
 import type { Fetcher, WithAbi } from './ModelConfig'
 
 /**
  * The fields of a Hard contract `ContractHandle.hard` sets, the web's `anira::Hard`: the same
- * fields (camelCase), with the budget in milliseconds (`std::chrono` on the C++ side) and
- * required, the warm-up fixed or none; the rest keep the library's defaults.
+ * fields (camelCase) and the same defaults (a measured budget, the `UNTIL_STABLE` warm-up), with
+ * the budget in milliseconds (`std::chrono` on the C++ side).
  */
 export type HardContractOptions = {
   /**
@@ -21,17 +21,42 @@ export type HardContractOptions = {
    */
   hostRate: number
   /**
-   * The inference budget in milliseconds (`ANIRA_BUDGET_EXPLICIT`): how long an inference may
-   * take before its block is late. Required in this pre-release, whose prepare refuses the
-   * measured default.
+   * The inference budget in milliseconds (`ANIRA_BUDGET_EXPLICIT`, `anira::Hard::budget` from a
+   * duration): how long an inference may take before its block is late, a reproducible latency.
+   * Left out (the default), the budget the warm-up pass measures (`ANIRA_BUDGET_MEASURED`): the
+   * slowest plan's figure, a latency that depends on the machine. The warm-up pass also measures
+   * the inference time; a measured budget is the maximum of its last four inferences; under an
+   * explicit budget the timings are only reported.
    */
-  budgetMs: number
+  budgetMs?: number
   /**
-   * Fixed warm-up iterations at prepare (`ANIRA_WARMUP_FIXED`, `anira::Hard::warmup_iterations`);
-   * default 0, none (this pre-release refuses the library's `ANIRA_WARMUP_UNTIL_STABLE`
-   * default).
+   * The warm-up pass at prepare (`anira_warmup_mode`, `anira::Hard::warmup`): `ANIRA_WARMUP_UNTIL_STABLE`
+   * (the default) until the last four inference times agree, `ANIRA_WARMUP_FIXED` with
+   * `warmupIterations`, `ANIRA_WARMUP_NONE` (an explicit budget only). A prepare that warms up needs
+   * the pool's Workers running: `await context.ready()` first.
    */
+  warmup?: number
+  /** `ANIRA_WARMUP_FIXED`'s count (`anira::Hard::warmup_iterations`); default 0. */
   warmupIterations?: number
+  /**
+   * The ring dtype per Streamed tensor by canonical name (`anira::Hard::ring_dtypes`,
+   * `anira_contract_hard_set_ring_dtype`; the spec's dtype for every tensor not named): the
+   * element type of the host's samples, set only where it differs from the model's, and then a
+   * processor that converts goes with it (nothing in anira converts). An audio node streams
+   * float32: a model of another dtype behind one names `ANIRA_DTYPE_F32` here.
+   */
+  ringDtypes?: Record<string, number>
+  /**
+   * The worst edge class a plan may take for any slot (`anira::Hard::edge_cost`,
+   * `anira_contract_set_edge_cost`; an `anira_edge_class` value): prepare drops a plan above
+   * it. A class of the cost scale is a limit: `ANIRA_EDGE_DEDICATED_TRANSFER` admits every known
+   * edge, `ANIRA_EDGE_UNIFIED_TRANSFER` crossings between the CPU and a device within unified
+   * memory only (no bus), `ANIRA_EDGE_COPY` no crossing between domains, `ANIRA_EDGE_ZERO_COPY`
+   * no copy at all, and every limit refuses an `ANIRA_EDGE_UNKNOWN` edge (a device provider's
+   * on the web, which exposes no memory kind). Left out (the default): no limit, every edge
+   * admitted, an unknown one included.
+   */
+  edgeCost?: number
 }
 
 /**
@@ -85,19 +110,20 @@ export class ContractHandle {
       )
     )
     try {
-      abi.anira_contract_hard_set_budget(
-        contract.contract,
-        anira_budget_kind.ANIRA_BUDGET_EXPLICIT,
-        options.budgetMs
+      // The library's defaults where the options leave a field out, as anira::Hard's.
+      if (options.budgetMs === undefined) {
+        contract.hardBudget(anira_budget_kind.ANIRA_BUDGET_MEASURED)
+      } else {
+        contract.hardBudget(anira_budget_kind.ANIRA_BUDGET_EXPLICIT, options.budgetMs)
+      }
+      contract.hardWarmup(
+        options.warmup ?? anira_warmup_mode.ANIRA_WARMUP_UNTIL_STABLE,
+        options.warmupIterations ?? 0
       )
-      const warmup = options.warmupIterations ?? 0
-      abi.anira_contract_hard_set_warmup(
-        contract.contract,
-        warmup > 0
-          ? anira_warmup_mode.ANIRA_WARMUP_FIXED
-          : anira_warmup_mode.ANIRA_WARMUP_NONE,
-        warmup
-      )
+      for (const [canonical, dtype] of Object.entries(options.ringDtypes ?? {})) {
+        contract.hardRingDtype(canonical, dtype)
+      }
+      if (options.edgeCost !== undefined) contract.edgeCost(options.edgeCost)
     } catch (error) {
       contract.destroy()
       throw error
@@ -117,6 +143,54 @@ export class ContractHandle {
       hostBlockMin,
       hostBlockMax,
       hostRate
+    )
+    return this
+  }
+
+  /**
+   * The per-inference budget of this Hard contract (`anira_contract_hard_set_budget`,
+   * `anira::ContractHandle::hard_budget`): `ANIRA_BUDGET_MEASURED`, what the warm-up pass
+   * measures, or `ANIRA_BUDGET_EXPLICIT` with `explicitMs`.
+   */
+  hardBudget(kind: number, explicitMs = 0): this {
+    this.abi.anira_contract_hard_set_budget(this.contract, kind, explicitMs)
+    return this
+  }
+
+  /**
+   * The warm-up pass of this Hard contract (`anira_contract_hard_set_warmup`,
+   * `anira::ContractHandle::hard_warmup`): an `anira_warmup_mode`, with `ANIRA_WARMUP_FIXED`'s
+   * count.
+   */
+  hardWarmup(mode: number, iterations = 0): this {
+    this.abi.anira_contract_hard_set_warmup(this.contract, mode, iterations)
+    return this
+  }
+
+  /**
+   * The ring dtype of one tensor under this Hard contract, by canonical name
+   * (`anira_contract_hard_set_ring_dtype`, `anira::ContractHandle::hard_ring_dtype`): the
+   * element type the host's samples of that tensor carry and its ring holds as is; the spec's
+   * dtype for every tensor never set. Nothing converts: a name that is no Streamed tensor is
+   * `ANIRA_ERROR_CONFIG` at prepare, and so is a ring dtype that differs from the spec's dtype
+   * unless a processor of the pipeline fills the phase that moves that ring and converts.
+   */
+  hardRingDtype(canonical: string, dtype: number): this {
+    this.abi.anira_contract_hard_set_ring_dtype(this.contract, canonical, dtype)
+    return this
+  }
+
+  /**
+   * The worst edge class a plan may take for any slot, on either contract kind
+   * (`anira_contract_set_edge_cost`, `anira::ContractHandle::edge_cost`; an `anira_edge_class`
+   * value): prepare drops a plan with a slot above it, any limit a plan with an
+   * `ANIRA_EDGE_UNKNOWN` edge, and refuses with `ANIRA_ERROR_EDGE_UNREACHABLE` when no plan
+   * remains. `undefined` restores no limit (`ANIRA_EDGE_UNKNOWN` to the C entry).
+   */
+  edgeCost(worstAllowed: number | undefined): this {
+    this.abi.anira_contract_set_edge_cost(
+      this.contract,
+      worstAllowed ?? anira_edge_class.ANIRA_EDGE_UNKNOWN
     )
     return this
   }

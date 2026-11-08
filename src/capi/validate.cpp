@@ -54,15 +54,6 @@ const char* role_word(anira_role role) {
     }
 }
 
-std::string hex_dtype(anira_dtype dtype) {
-    static constexpr const char* k_digits = "0123456789abcdef";
-    std::string text = "0x";
-    for (int shift = 28; shift >= 0; shift -= 4) {
-        text += k_digits[(dtype >> static_cast<unsigned>(shift)) & 0xfU];
-    }
-    return text;
-}
-
 std::string engines_list(const std::vector<anira_engine>& engines) {
     std::string text;
     for (const anira_engine engine : engines) {
@@ -136,6 +127,7 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
     size_t time_count = 0;
     size_t channel_count = 0;
     out.m_dims.assign(spec.m_ndim, 0);
+    out.m_dtype = spec.m_dtype;
     for (size_t i = 0; i < spec.m_ndim; ++i) {
         const Axis& axis = spec.m_axes[i];
         if (!axis.m_written) {
@@ -189,17 +181,34 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
     }
 
     if (streamed) {
-        if (spec.m_window_min <= 0) {
-            config_error(where + "window_min must be positive (got " +
-                         std::to_string(spec.m_window_min) + ")");
-        }
-        if (spec.m_window_max != ANIRA_UNBOUNDED && spec.m_window_max < spec.m_window_min) {
-            config_error(where + "window_max " + std::to_string(spec.m_window_max) +
-                         " is below window_min " + std::to_string(spec.m_window_min));
-        }
-        if (spec.m_overlap >= spec.m_window_min) {
-            config_error(where + "overlap " + std::to_string(spec.m_overlap) +
-                         " must be below window_min " + std::to_string(spec.m_window_min));
+        if (!spec.window_declared()) {
+            // An omitted window is derived from the Time axis: its fixed extent is the window,
+            // a dynamic one makes it flexible, pinned with the anchor hop (pin_anchor_hop).
+            if (spec.m_overlap != 0) {
+                config_error(where + "overlap " + std::to_string(spec.m_overlap) +
+                             " without a window: declare the window it belongs to "
+                             "(window_min, window_max)");
+            }
+            const int64_t extent = out.m_dims[*time_axis];
+            out.m_window_derived = true;
+            out.m_window_min = extent == ANIRA_DYNAMIC ? 1 : extent;
+            out.m_window_max = extent == ANIRA_DYNAMIC ? ANIRA_UNBOUNDED : extent;
+        } else {
+            if (spec.m_window_min <= 0) {
+                config_error(where + "window_min must be positive (got " +
+                             std::to_string(spec.m_window_min) + ")");
+            }
+            if (spec.m_window_max != ANIRA_UNBOUNDED && spec.m_window_max < spec.m_window_min) {
+                config_error(where + "window_max " + std::to_string(spec.m_window_max) +
+                             " is below window_min " + std::to_string(spec.m_window_min));
+            }
+            if (spec.m_overlap >= spec.m_window_min) {
+                config_error(where + "overlap " + std::to_string(spec.m_overlap) +
+                             " must be below window_min " + std::to_string(spec.m_window_min));
+            }
+            out.m_window_min = spec.m_window_min;
+            out.m_window_max = spec.m_window_max;
+            out.m_overlap = spec.m_overlap;
         }
         if (spec.m_ratio_den != 0 && spec.m_ratio_num == 0) {
             config_error(where + "time ratio 0/" + std::to_string(spec.m_ratio_den) +
@@ -226,24 +235,22 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
         config_error(where + "latency must not be negative (got " + std::to_string(spec.m_latency) +
                      ")");
     }
-    // The queue stores float32 in this pre-release: every tensor that travels through it (a
-    // Streamed one through its ring and the chunk's buffer, a Static one materialised into the
-    // chunk's buffer) is float32 until the typed storage arrives. A State tensor travels
-    // through neither: its pair lives in the handler's two buffers in the spec's dtype (port.h),
-    // which the engine is bound to as they are, so the rule does not stand on it (a built-in
-    // engine refuses a model with a non-float32 tensor at load; a registered engine binds
-    // what its load accepts).
-    if (spec.m_dtype != ANIRA_DTYPE_F32 && spec.m_role != ANIRA_ROLE_STATE) {
-        not_supported(where + "dtype " + hex_dtype(spec.m_dtype) +
-                      ": the queue stores float32 in this pre-release");
+    // A model tensor travels in its spec's dtype end to end (its ring, its chunk buffer, its
+    // Static store, its State pair): one of the ten dtypes anira names, each with a ring arm and
+    // a word. Another (several lanes, an unsigned integer wider than 8 bits) has neither. What
+    // an engine carries is the engine's to refuse, at load.
+    if (!known_dtype(spec.m_dtype)) {
+        not_supported(where + "dtype " + dtype_label(spec.m_dtype) +
+                      ": anira carries float32, float64, float16, bfloat16, int8, uint8, int16, "
+                      "int32, int64 and bool");
     }
     out.m_time_axis = time_axis;
 
     // A fixed window is used as it is; a flexible one is pinned with the anchor hop of the whole
     // model (pin_anchor_hop), which resolves its dynamic Time extent there.
-    if (streamed && spec.m_window_min == spec.m_window_max) {
-        out.m_window_used = spec.m_window_min;
-        out.m_hop = spec.m_window_min - spec.m_overlap;
+    if (streamed && out.m_window_min == out.m_window_max) {
+        out.m_window_used = out.m_window_min;
+        out.m_hop = out.m_window_min - out.m_overlap;
         if (out.m_dims[*time_axis] == ANIRA_DYNAMIC) { out.m_dims[*time_axis] = out.m_window_used; }
     }
 }
@@ -264,16 +271,13 @@ void check_contract(const anira_contract& contract,
         config_error("contract: an explicit budget must be positive (got " +
                      std::to_string(hard->m_budget_ms) + " ms)");
     }
-    if (hard->m_budget != ANIRA_BUDGET_EXPLICIT) {
-        not_supported(
-            "contract: a MEASURED budget needs the 3.x runtime's warmup "
-            "measurement; set an explicit budget (ANIRA_BUDGET_EXPLICIT, the 2.x "
-            "max_inference_time)");
-    }
-    if (hard->m_warmup == ANIRA_WARMUP_UNTIL_STABLE) {
-        not_supported(
-            "contract: UNTIL_STABLE warmup needs the 3.x runtime; set "
-            "ANIRA_WARMUP_FIXED (the 2.x warm_up) or ANIRA_WARMUP_NONE");
+    // The warm-up pass is also the measurement: a measured budget is the maximum of its last
+    // inferences, so it needs at least one (NONE and FIXED 0 run none).
+    if (hard->m_budget == ANIRA_BUDGET_MEASURED && !hard->warms_up()) {
+        config_error(
+            "contract: a MEASURED budget needs at least one warm-up inference, which measures "
+            "it; set the warmup to ANIRA_WARMUP_UNTIL_STABLE (the default) or ANIRA_WARMUP_FIXED "
+            "with iterations > 0, or set an explicit budget (ANIRA_BUDGET_EXPLICIT)");
     }
     if (hard->m_wait_ratio < 0.0) {
         config_error("contract: wait_ratio must not be negative (got " +
@@ -298,11 +302,12 @@ void check_contract(const anira_contract& contract,
             processors != nullptr &&
             (is_input ? processors->m_fills_pre : processors->m_fills_post);
         if (dtype != spec->m_dtype && !processor_moves_ring) {
-            config_error("contract: the ring dtype of '" + name + "' is " + hex_dtype(dtype) +
-                         " but its spec's dtype is " + hex_dtype(spec->m_dtype) +
-                         "; nothing converts (add a processor that fills " +
+            config_error("contract: the ring dtype of '" + name + "' is " + dtype_label(dtype) +
+                         " but its spec's dtype is " + dtype_label(spec->m_dtype) +
+                         "; nothing converts: add a processor that fills " +
                          phase_word(is_input ? ANIRA_PHASE_PRE_PROCESS : ANIRA_PHASE_POST_PROCESS) +
-                         " and converts, anira_pipeline_add_processor)");
+                         " and converts (anira_pipeline_add_processor), or drop the ring dtype "
+                         "to stream the spec's");
         }
     }
     // The declared stream latency rules: the figure replaces the computed one for a stream,
@@ -379,10 +384,9 @@ const anira_tensor_spec& state_output_of(const anira_model_config& model,
 // output (state_source, stated once, on the input), every State output is named by exactly one
 // State input, and the two halves have the same dtype, rank and extents, because the handler
 // keeps one value per pair, on the input half's port, and copies it both ways. It runs on the
-// raw specs, ahead of check_spec, so that an unequal dtype is this rule's CONFIG and not the
-// float32 rule's NOT_SUPPORTED; what a State spec may not carry (a Time axis, a window, a time
-// ratio, a latency) is check_spec's, a ring dtype or the anchor naming one is the rule of those
-// two.
+// raw specs, ahead of check_spec, so that an unequal pair is this rule's CONFIG, named as a
+// pairing; what a State spec may not carry (a Time axis, a window, a time ratio, a latency) is
+// check_spec's, a ring dtype or the anchor naming one is the rule of those two.
 void check_state(const anira_model_config& model) {
     for (const anira_tensor_spec& spec : model.m_outputs) {
         if (!spec.m_state_source.empty()) {
@@ -408,8 +412,8 @@ void check_state(const anira_model_config& model) {
                          input.m_name + "'); a State output feeds exactly one State input");
         }
         if (output.m_dtype != input.m_dtype) {
-            config_error(at(input) + "dtype " + hex_dtype(input.m_dtype) +
-                         " differs from the dtype " + hex_dtype(output.m_dtype) +
+            config_error(at(input) + "dtype " + dtype_label(input.m_dtype) +
+                         " differs from the dtype " + dtype_label(output.m_dtype) +
                          " of its state_source '" + output.m_name +
                          "'; the two halves of a state pair have one dtype");
         }
@@ -549,6 +553,7 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
     HopRange range;
     const auto fold = [&](bool is_input, size_t index) {
         const anira_tensor_spec& spec = spec_of(is_input, index);
+        const DerivedSpec& resolved = derived_of(is_input, index);  // the window in effect
         const bool anchor = is_input == out.m_anchor_is_input && index == out.m_anchor_index;
         HopNeed need{.m_is_input = is_input, .m_index = index};
         if (!anchor && spec.m_ratio_den != 0) {
@@ -558,19 +563,24 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
         }
         need.m_range.m_step = need.m_den;
         need.m_range.m_low =
-            ceil_div(product(spec.m_window_min - spec.m_overlap, need.m_den, spec), need.m_num);
-        if (spec.m_window_max != ANIRA_UNBOUNDED) {
+            ceil_div(product(resolved.m_window_min - resolved.m_overlap, need.m_den, spec),
+                     need.m_num);
+        if (resolved.m_window_max != ANIRA_UNBOUNDED) {
             need.m_range.m_high =
-                product(spec.m_window_max - spec.m_overlap, need.m_den, spec) / need.m_num;
+                product(resolved.m_window_max - resolved.m_overlap, need.m_den, spec) / need.m_num;
         }
 
-        const std::string window =
-            spec.m_window_min == spec.m_window_max
-                ? "window " + std::to_string(spec.m_window_min)
-                : "window [" + std::to_string(spec.m_window_min) + ", " +
-                      (spec.m_window_max == ANIRA_UNBOUNDED ? std::string("unbounded")
-                                                            : std::to_string(spec.m_window_max)) +
-                      "]";
+        const bool fixed = resolved.m_window_min == resolved.m_window_max;
+        std::string window = fixed ? "window " + std::to_string(resolved.m_window_min)
+                                   : "window [" + std::to_string(resolved.m_window_min) + ", " +
+                                         (resolved.m_window_max == ANIRA_UNBOUNDED
+                                              ? std::string("unbounded")
+                                              : std::to_string(resolved.m_window_max)) +
+                                         "]";
+        if (resolved.m_window_derived) {
+            window +=
+                fixed ? " (derived from the Time extent)" : " (derived: the Time axis is dynamic)";
+        }
         const std::string ratio =
             spec.m_ratio_den == 0
                 ? std::string("1/1 (a flexible window's default)")
@@ -611,7 +621,9 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
         for (size_t i = 0; i < specs.size(); ++i) {
             const anira_tensor_spec& spec = specs[i];
             const bool anchor = is_input == out.m_anchor_is_input && i == out.m_anchor_index;
-            const bool follows = spec.m_ratio_den != 0 || spec.m_window_min != spec.m_window_max;
+            const DerivedSpec& resolved = derived_of(is_input, i);
+            const bool follows =
+                spec.m_ratio_den != 0 || resolved.m_window_min != resolved.m_window_max;
             if (spec.m_role == ANIRA_ROLE_STREAMED && !anchor && follows) { fold(is_input, i); }
         }
     };
@@ -629,10 +641,11 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
 
     for (const HopNeed& need : needs) {
         const anira_tensor_spec& spec = spec_of(need.m_is_input, need.m_index);
-        if (spec.m_window_min == spec.m_window_max) { continue; }  // check_spec's, kept by range
         DerivedSpec& derived = derived_of(need.m_is_input, need.m_index);
+        // A fixed window is check_spec's, kept by the range.
+        if (derived.m_window_min == derived.m_window_max) { continue; }
         derived.m_hop = product(hop / need.m_den, need.m_num, spec);
-        derived.m_window_used = sum(derived.m_hop, spec.m_overlap, spec);
+        derived.m_window_used = sum(derived.m_hop, derived.m_overlap, spec);
         const std::optional<size_t> time_axis = derived.m_time_axis;  // a Streamed tensor's
         if (time_axis.has_value() && derived.m_dims[*time_axis] == ANIRA_DYNAMIC) {
             derived.m_dims[*time_axis] = derived.m_window_used;
@@ -1014,9 +1027,14 @@ void validate(const anira_model_config& model,
 }
 
 anira::RingDtypes ring_dtypes_of(const anira_contract& contract, const anira_model_config& model) {
+    // A tensor the contract names no ring dtype for streams its spec's dtype.
     anira::RingDtypes dtypes;
-    dtypes.m_inputs.assign(model.m_inputs.size(), ANIRA_DTYPE_F32);
-    dtypes.m_outputs.assign(model.m_outputs.size(), ANIRA_DTYPE_F32);
+    for (const anira_tensor_spec& spec : model.m_inputs) {
+        dtypes.m_inputs.push_back(spec.m_dtype);
+    }
+    for (const anira_tensor_spec& spec : model.m_outputs) {
+        dtypes.m_outputs.push_back(spec.m_dtype);
+    }
     const HardContract* hard = contract.hard();
     if (hard == nullptr) { return dtypes; }
     for (const auto& [name, dtype] : hard->m_ring_dtypes) {

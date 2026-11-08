@@ -31,6 +31,7 @@
 #include "capi/validate.h"
 #include "fixtures.h"
 #include "scheduler/LatencyCalculator.h"
+#include "scheduler/SessionElement.h"
 #include "utils/StatusError.h"
 
 namespace {
@@ -860,9 +861,17 @@ TEST(AbiValidate, WindowRules) {
         model.output(streamed("out"));
         return derive(model);
     };
+    // No window (0, 0) is derived; an overlap needs one; a declared window_min is positive.
     Outcome outcome = with_window(0, 0, 0);
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    outcome = with_window(0, 0, 128);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
-    expect_contains(outcome.m_message, "tensor 'in': window_min must be positive");
+    expect_contains(outcome.m_message,
+                    "tensor 'in': overlap 128 without a window: declare the window it belongs to "
+                    "(window_min, window_max)");
+    outcome = with_window(0, 512, 0);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
+    expect_contains(outcome.m_message, "tensor 'in': window_min must be positive (got 0)");
     outcome = with_window(512, 256, 0);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': window_max 256 is below window_min 512");
@@ -870,6 +879,119 @@ TEST(AbiValidate, WindowRules) {
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': overlap 512 must be below window_min 512");
     EXPECT_EQ(with_window(512, ANIRA_UNBOUNDED, 511).m_status, ANIRA_OK);
+}
+
+namespace {
+/// A streamed float32 spec [batch 1, channel 2, time <time>] that declares no window.
+TensorSpec unwindowed(std::string_view name, int64_t time) {
+    TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    spec.axis(0, ANIRA_AXIS_BATCH, 1).axis(1, ANIRA_AXIS_CHANNEL, 2).axis(2, ANIRA_AXIS_TIME, time);
+    return spec;
+}
+
+/// The window a derived spec runs at: {min, max, overlap, used, hop}, and whether it was derived.
+struct Window {
+    std::array<int64_t, 5> m_values{};
+    bool m_derived = false;
+    bool operator==(const Window&) const = default;
+};
+Window window_of(const anira::capi::DerivedSpec& spec) {
+    return Window{.m_values = {spec.m_window_min,
+                               spec.m_window_max,
+                               spec.m_overlap,
+                               spec.m_window_used,
+                               spec.m_hop},
+                  .m_derived = spec.m_window_derived};
+}
+}  // namespace
+
+// A Streamed tensor's window is optional: one the spec does not declare is derived at
+// validation, never refused. A fixed Time extent is the window, overlap 0; a dynamic Time axis
+// makes it flexible, [1, unbounded], pinned with the anchor hop like a declared flexible window;
+// a declared window wins. The spec is never written: it still has no window afterwards, so a
+// model file written back declares none (AbiJsonModel.AWindowIsWrittenBackExactlyWhenDeclared).
+TEST(AbiValidate, AnOmittedWindowIsDerivedFromTheTimeAxis) {
+    // A fixed Time extent: the window of that extent, whatever the host blocks.
+    ModelConfig fixed;
+    fixed.add_model_path(k_custom, "model.custom");
+    fixed.input(unwindowed("in", 512));
+    fixed.output(unwindowed("out", 512));
+    for (const double block : {128.0, 512.0, 3000.0}) {
+        SCOPED_TRACE(block);
+        const Outcome outcome = derive(fixed, host_blocks(block));
+        ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+        for (const anira::capi::DerivedSpec& spec :
+             {outcome.m_derived.m_inputs[0], outcome.m_derived.m_outputs[0]}) {
+            EXPECT_EQ(window_of(spec),
+                      (Window{.m_values = {512, 512, 0, 512, 512}, .m_derived = true}));
+            EXPECT_EQ(spec.m_dims, (std::vector<int64_t>{1, 2, 512}));
+            EXPECT_EQ(spec.m_channels, 2);
+        }
+    }
+    for (const anira_tensor_spec* spec :
+         {&fixed.native()->m_inputs[0], &fixed.native()->m_outputs[0]}) {
+        EXPECT_FALSE(spec->window_declared()) << "the derivation never writes into the spec";
+        EXPECT_EQ(spec->m_window_min, 0);
+        EXPECT_EQ(spec->m_window_max, 0);
+    }
+
+    // A dynamic Time axis: a flexible window, pinned to the anchor hop from the host blocks (the
+    // largest at or below the block: the block itself, with no other bound), else the smallest.
+    ModelConfig dynamic;
+    dynamic.add_model_path(k_custom, "model.custom");
+    dynamic.input(unwindowed("in", ANIRA_DYNAMIC));
+    dynamic.output(unwindowed("out", ANIRA_DYNAMIC));
+    for (const int64_t block : {int64_t{256}, int64_t{2048}}) {
+        SCOPED_TRACE(block);
+        const Outcome outcome = derive(dynamic, host_blocks(static_cast<double>(block)));
+        ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+        for (const anira::capi::DerivedSpec& spec :
+             {outcome.m_derived.m_inputs[0], outcome.m_derived.m_outputs[0]}) {
+            EXPECT_EQ(
+                window_of(spec),
+                (Window{.m_values = {1, ANIRA_UNBOUNDED, 0, block, block}, .m_derived = true}));
+            EXPECT_EQ(spec.m_dims, (std::vector<int64_t>{1, 2, block}));
+        }
+    }
+    const Outcome smallest = derive(dynamic);
+    ASSERT_EQ(smallest.m_status, ANIRA_OK) << smallest.m_message;
+    EXPECT_EQ(hops(smallest.m_derived.m_inputs), (std::vector<size_t>{1}));
+
+    // Beside a declared fixed anchor, a derived flexible output follows the anchor's hop, and a
+    // derived fixed one keeps its own (its ratio derived from it).
+    ModelConfig mixed;
+    mixed.add_model_path(k_custom, "model.custom");
+    mixed.input(streamed("in", 2048));
+    mixed.output(unwindowed("follows", ANIRA_DYNAMIC));
+    mixed.output(unwindowed("own", 1024));
+    const Outcome anchored = derive(mixed, host_blocks(512));
+    ASSERT_EQ(anchored.m_status, ANIRA_OK) << anchored.m_message;
+    EXPECT_FALSE(anchored.m_derived.m_inputs[0].m_window_derived);
+    EXPECT_EQ(window_of(anchored.m_derived.m_outputs[0]),
+              (Window{.m_values = {1, ANIRA_UNBOUNDED, 0, 2048, 2048}, .m_derived = true}));
+    EXPECT_EQ(window_of(anchored.m_derived.m_outputs[1]),
+              (Window{.m_values = {1024, 1024, 0, 1024, 1024}, .m_derived = true}));
+
+    // A declared window wins over the Time extent.
+    ModelConfig declared;
+    declared.add_model_path(k_custom, "model.custom");
+    declared.input(unwindowed("in", 512).window(512, 512, 384));
+    declared.output(unwindowed("out", 128));
+    const Outcome kept = derive(declared, host_blocks(128));
+    ASSERT_EQ(kept.m_status, ANIRA_OK) << kept.m_message;
+    EXPECT_EQ(window_of(kept.m_derived.m_inputs[0]),
+              (Window{.m_values = {512, 512, 384, 512, 128}, .m_derived = false}));
+    EXPECT_EQ(window_of(kept.m_derived.m_outputs[0]),
+              (Window{.m_values = {128, 128, 0, 128, 128}, .m_derived = true}));
+
+    // What no anchor hop satisfies names the derived window.
+    ModelConfig apart;
+    apart.add_model_path(k_custom, "model.custom");
+    apart.input(streamed("in", 512));
+    apart.output(unwindowed("out", 100).time_ratio(1, 3));
+    const Outcome refused = derive(apart, host_blocks(512));
+    EXPECT_EQ(refused.m_status, ANIRA_ERROR_CONFIG);
+    expect_contains(refused.m_message, "window 100 (derived from the Time extent)");
 }
 
 TEST(AbiValidate, StaticAndBufferRules) {
@@ -941,17 +1063,54 @@ TEST(AbiValidate, LatencyIsAnOutputProperty) {
     expect_contains(outcome.m_message, "tensor 'in': latency is an output property");
 }
 
-TEST(AbiValidate, ANonFloat32DtypeIsNotSupported) {
+// A model tensor of any dtype anira names derives (a Streamed int16 output beside a float32
+// input; their rings stream each spec's dtype); a dtype anira does not name (four lanes, an
+// unsigned 16-bit integer) has no ring and no word and is NOT_SUPPORTED, naming the tensor.
+TEST(AbiValidate, ADtypeAniraDoesNotNameIsNotSupported) {
+    const auto with_output = [](anira_dtype dtype) {
+        ModelConfig model;
+        model.add_model_path(k_custom, "model.custom");
+        model.input(streamed("in"));
+        model.output(TensorSpec("out", dtype, ANIRA_ROLE_STREAMED)
+                         .axis(0, ANIRA_AXIS_TIME, 512)
+                         .window(512, 512, 0));
+        return model;
+    };
+    Outcome outcome = derive(with_output(ANIRA_DTYPE_I16));
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    for (const anira_dtype dtype :
+         {ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4), ANIRA_MAKE_DTYPE(ANIRA_DTYPE_UINT, 16, 1)}) {
+        outcome = derive(with_output(dtype));
+        EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+        expect_contains(outcome.m_message, "tensor 'out': dtype 0x");
+        expect_contains(outcome.m_message, "anira carries float32, float64, float16");
+    }
+}
+
+// A tensor the contract names no ring dtype for streams its spec's dtype; a named one streams
+// the dtype it is named with (ring_dtypes_of, which runs after validate).
+TEST(AbiValidate, ARingDtypeDefaultsToTheSpecsDtype) {
+    const auto int16_stream = [](std::string_view name) {
+        TensorSpec spec(name, ANIRA_DTYPE_I16, ANIRA_ROLE_STREAMED);
+        spec.axis(0, ANIRA_AXIS_TIME, 512).window(512, 512, 0);
+        return spec;
+    };
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in"));
-    model.output(TensorSpec("out", ANIRA_DTYPE_I16, ANIRA_ROLE_STREAMED)
-                     .axis(0, ANIRA_AXIS_TIME, 512)
-                     .window(512, 512, 0));
-    const Outcome outcome = derive(model);
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(outcome.m_message, "tensor 'out': dtype");
-    expect_contains(outcome.m_message, "the queue stores float32");
+    model.input(int16_stream("in16"));
+    model.output(int16_stream("out16"));
+    model.output(streamed("out"));
+    ContractHandle contract(explicit_hard());
+    contract.hard_ring_dtype("in", ANIRA_DTYPE_I16);
+    const anira::RingDtypes dtypes =
+        anira::capi::ring_dtypes_of(*contract.native(), *model.native());
+    ASSERT_EQ(dtypes.m_inputs.size(), 2U);
+    ASSERT_EQ(dtypes.m_outputs.size(), 2U);
+    EXPECT_EQ(dtypes.m_inputs[0], ANIRA_DTYPE_I16) << "named in the contract";
+    EXPECT_EQ(dtypes.m_inputs[1], ANIRA_DTYPE_I16) << "not named: its spec's dtype";
+    EXPECT_EQ(dtypes.m_outputs[0], ANIRA_DTYPE_I16) << "not named: its spec's dtype";
+    EXPECT_EQ(dtypes.m_outputs[1], ANIRA_DTYPE_F32) << "not named: its spec's dtype";
 }
 
 TEST(AbiValidate, NoStreamedTensorIsConfig) {
@@ -1146,15 +1305,30 @@ TEST(AbiValidate, AnUnknownExtensionFailsByName) {
 
 TEST(AbiValidate, ContractRules) {
     const ModelConfig model = minimal();
+    // A measured budget is what the warm-up pass measures: UNTIL_STABLE (the default) and FIXED n
+    // pass, NONE and FIXED 0 run no inference and are CONFIG naming the warm-up.
     Outcome outcome = derive(model, Hard{.budget = anira::Budget::measured()});
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(outcome.m_message, "contract: a MEASURED budget");
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    Hard measured_fixed{.budget = anira::Budget::measured()};
+    measured_fixed.warmup = ANIRA_WARMUP_FIXED;
+    measured_fixed.warmup_iterations = 3;
+    outcome = derive(model, measured_fixed);
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    measured_fixed.warmup_iterations = 0;
+    outcome = derive(model, measured_fixed);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
+    expect_contains(outcome.m_message, "contract: a MEASURED budget needs at least one warm-up");
+    Hard measured_none{.budget = anira::Budget::measured()};
+    measured_none.warmup = ANIRA_WARMUP_NONE;
+    outcome = derive(model, measured_none);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
+    expect_contains(outcome.m_message, "contract: a MEASURED budget needs at least one warm-up");
 
+    // An explicit budget takes every warm-up: its timings are only reported.
     Hard until_stable = explicit_hard();
     until_stable.warmup = ANIRA_WARMUP_UNTIL_STABLE;
     outcome = derive(model, until_stable);
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(outcome.m_message, "contract: UNTIL_STABLE warmup");
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 
     // Every miss policy passes the bridge: the policy is the scheduler's, not a 2.x limit.
     Hard zeros = explicit_hard();

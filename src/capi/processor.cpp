@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "../scheduler/SessionElement.h"
+#include "../scheduler/TensorRun.h"
 #include "../utils/Logger.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
@@ -244,7 +245,7 @@ anira_status ctx_ring(const anira_processor_ctx* ctx,
 }
 
 // The model end of a slot: a copy of the chunk's descriptor of it (216 bytes, the record the
-// engine call hands its adapter: the spec's shape, the storage's dtype, the struct's memory of
+// engine call hands its adapter: the spec's shape and dtype, the struct's memory of
 // the moment, which the scheduler re-points at every claim). Nothing of it survives a call.
 // The frame names the descriptors of a side only in the phases that expose it, and a State slot
 // has no host end (it is fed behind pre_process and captured ahead of post_process), so the two
@@ -527,13 +528,21 @@ anira_status ANIRA_CALL anira_processor_default_post_process(const anira_process
         void* data = anira_tensor_data(&tensor, dtype);
         const size_t channels = ring->num_channels();
         const size_t hop = ring->hop();
-        if (data == nullptr || anira_tensor_num_elements(&tensor) < channels * hop) {
+        // The input side's layout: channel c's window at c * window, its newest hop at the
+        // window's tail. An output with an overlap holds a window longer than its hop: its head
+        // answers older positions of the stream, and only the newest hop is pushed.
+        const size_t per_channel = channels > 0 ? anira_tensor_num_elements(&tensor) / channels : 0;
+        if (data == nullptr || per_channel < hop) {
             status = ANIRA_ERROR_CONFIG;
             continue;
         }
+        const size_t history = per_channel - hop;
         const size_t element_size = ring->element_size();
         for (size_t channel = 0; channel < channels; ++channel) {
-            ring->push_block(channel, element_at(data, channel * hop, element_size), dtype, hop);
+            ring->push_block(channel,
+                             element_at(data, (channel * per_channel) + history, element_size),
+                             dtype,
+                             hop);
         }
     }
     return status;
@@ -550,8 +559,10 @@ ProcessorCarrier::ProcessorCarrier(const anira_processor_desc& desc) : m_desc(de
     }
     m_kind_pointers.reserve(m_kinds.size());
     for (const std::string& kind : m_kinds) { m_kind_pointers.push_back(kind.c_str()); }
+    if (desc.id != nullptr) { m_id = desc.id; }
     // The descriptor names this carrier's strings from here on: the caller's may die.
     m_desc.consumed_kinds = m_kind_pointers.empty() ? nullptr : m_kind_pointers.data();
+    m_desc.id = m_id.empty() ? nullptr : m_id.c_str();
 }
 
 ProcessorCarrier::~ProcessorCarrier() {
@@ -805,8 +816,9 @@ anira_status ProcessorRunner::pre_process(Chunk& chunk) noexcept {
         const auto* fixed = std::get_if<StaticPort>(&m_input_ports[tensor]);
         if (fixed == nullptr) { continue; }
         const anira_tensor& model_end = chunk.m_input_tensors[tensor];
-        fixed->m_value.read_packed(model_end.handle.host.ptr,
-                                   anira_tensor_num_elements(&model_end) * sizeof(float));
+        fixed->m_value.read_packed(
+            model_end.handle.host.ptr,
+            anira_tensor_num_elements(&model_end) * tensor_run::dtype_size(model_end.dtype));
     }
     const ProcessorFrame frame = make_frame_with_inputs(chunk);
     const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_PRE_PROCESS, chunk, frame);
@@ -854,8 +866,9 @@ anira_status ProcessorRunner::post_process(Chunk& chunk) noexcept {
         auto* fixed = std::get_if<StaticPort>(&m_output_ports[tensor]);
         if (fixed == nullptr) { continue; }
         const anira_tensor& model_end = chunk.m_output_tensors[tensor];
-        fixed->m_value.write_packed(model_end.handle.host.ptr,
-                                    anira_tensor_num_elements(&model_end) * sizeof(float));
+        fixed->m_value.write_packed(
+            model_end.handle.host.ptr,
+            anira_tensor_num_elements(&model_end) * tensor_run::dtype_size(model_end.dtype));
     }
     return status;
 }

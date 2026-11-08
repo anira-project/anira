@@ -85,7 +85,9 @@ anira_status ANIRA_CALL default_post_process(const anira_processor_ctx* ctx,
 std::vector<anira_processor_desc> processors_for(anira_dtype ring_dtype) {
     if (ring_dtype == ANIRA_DTYPE_F32) { return {}; }
     anira_processor_desc processor = ANIRA_PROCESSOR_DESC_INIT;
-    processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;  // what the default bodies are
+    // What the default bodies are: real-time.
+    processor.realtime_phases =
+        ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS);
     processor.pre_process = default_pre_process;
     processor.post_process = default_post_process;
     return {processor};

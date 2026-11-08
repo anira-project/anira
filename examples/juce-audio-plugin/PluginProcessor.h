@@ -11,6 +11,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -132,6 +133,12 @@ struct AniraModel {
     anira::PlanReport plan_report{nullptr};
 };
 
+/// A "Backend Type" choice: the name the parameter shows and the plan it stands for.
+struct BackendChoice {
+    juce::String name;
+    anira::PlanQuery query;
+};
+
 class AudioPluginAudioProcessor : public juce::AudioProcessor,
                                   private juce::AudioProcessorValueTreeState::Listener {
 public:
@@ -170,14 +177,19 @@ public:
 
     juce::AudioProcessorValueTreeState& getValueTreeState() { return parameters; }
 
+    /// For the editor, on the message thread: the line about the chosen backend's real-time
+    /// verdict (empty when it plays without a note), whether it waits for "Try nonetheless", and
+    /// the click that accepts it.
+    juce::String verdict_line() const;
+    bool waits_for_consent() const;
+    void try_nonetheless();
+
 private:
     void parameterChanged(const juce::String& parameterID, float newValue) override;
 
     void processesNonRealtime(const juce::AudioBuffer<float>& buffer) const;
 
 private:
-    juce::AudioProcessorValueTreeState parameters;
-
     // The library default (half the hardware threads for inference) is what this plugin
     // wants; section 3.1 of the usage guide shows how to change it.
     anira::Context context{anira::ContextConfig{}};
@@ -210,9 +222,34 @@ private:
     float gain_value = 1.0F;
     anira::Tensor gain_tensor{};
 #endif
-    // The "Backend Type" choice: stored by the parameter listener, applied by processBlock.
-    std::vector<anira::PlanQuery> backend_queries;
+    // The "Backend Type" choices: the backends of this build that the model has an export for,
+    // then BYPASS, the plan that runs while a backend waits for "Try nonetheless". The default
+    // choice, and the choice the parameter listener stores and processBlock applies.
+    std::vector<BackendChoice> backends;
+    size_t bypass_choice = 0;
+    int default_backend = 0;
     std::atomic<int> backend{0};
+
+    // The parameters, made of the choices above (so declared after them).
+    juce::AudioProcessorValueTreeState parameters;
+
+    // Per backend choice, what prepareToPlay read off the plan report: whether it has a plan
+    // (every handler's, in variant 7; an engine can fail to load the model on this machine), the
+    // real-time verdict of the plan it runs (anira_rt_verdict; the worse of the encoder's and the
+    // decoder's in variant 7), its real-time factor and its parallel inferences; and the worst
+    // verdict the user accepted for it ("Try nonetheless"), kept across prepares, so that a
+    // re-prepare asks again only when the verdict got worse.
+    struct BackendVerdict {
+        std::atomic<bool> has_plan{true};
+        std::atomic<uint32_t> verdict{ANIRA_RT_UNMEASURED};
+        std::atomic<float> rt_factor{0.0F};
+        std::atomic<uint32_t> rt_parallel{1};
+        std::atomic<uint32_t> accepted{ANIRA_RT_UNMEASURED};
+    };
+    static constexpr size_t k_max_backends = 8;
+    std::array<BackendVerdict, k_max_backends> verdicts{};
+    /// Whether a backend choice is held: not real-time here and not accepted.
+    bool held_back(size_t choice) const noexcept;
 
     // The host's audio as one planar tensor over its channel pointers.
     std::array<float*, 2> channels{};

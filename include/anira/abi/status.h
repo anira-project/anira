@@ -83,7 +83,13 @@ typedef enum anira_status {
      * No edge connects the tensor's domain with the selected backend (section 7).
      */
     ANIRA_ERROR_EDGE_UNREACHABLE = -12,
-    ANIRA_ERROR_BUDGET = -13,  /**< Hard-contract validation failed. */
+    /**
+     * Reserved for the Async contract's deadlines (a deadline the measured time cannot meet). A
+     * Hard prepare never returns it: a model too slow for the stream prepares, sized as an
+     * infeasible explicit budget is (for one host block's burst), and its plan rows carry what
+     * the warm-up pass measured.
+     */
+    ANIRA_ERROR_BUDGET = -13,
     ANIRA_ERROR_CAPACITY = -14,  /**< Real-time: no free ticket slot, or a ring is full. */
     ANIRA_ERROR_TICKET_STALE = -15,  /**< The ticket names a recycled slot. */
     ANIRA_ERROR_WRONG_CONTRACT = -16,  /**< A Hard entry under an Async contract or vice versa. */

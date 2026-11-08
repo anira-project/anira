@@ -2,8 +2,9 @@
  * Gate 5: a pure-C consumer of the installed anira. The raw-C sequence of the architecture
  * document's section 9 against the installed package, with a registered engine that needs no
  * model file in place of the built-in candidates: the ABI check, a context, a model config, a
- * pipeline over the engine, a handler prepared under a Hard contract (an explicit budget and a
- * fixed warm-up), one block through the Hard entry, the teardown and anira_shutdown. It also
+ * pipeline over the engine, a handler prepared under a Hard contract on the defaults (the
+ * budget the warm-up pass measures, UNTIL_STABLE), the plan rows with what the pass measured,
+ * one block through the Hard entry, the teardown and anira_shutdown. It also
  * proves, from the installed include directories, that nothing private is reachable (gate 4's
  * probes): the package installs anira's public headers and nothing of tanh-lib, the queue or the
  * JSON library, and an engine's headers (include/anira-engines/<engine>/) are reachable through
@@ -51,6 +52,16 @@ static anira_status ANIRA_CALL copy_engine(const anira_engine_ctx* ctx,
     if (in == NULL || out == NULL) { return ANIRA_ERROR_ENGINE; }
     for (size_t i = 0; i < count; ++i) { out[i] = in[i]; }
     return ANIRA_OK;
+}
+
+/* The real-time verdict of a plan row, for the printout. */
+static const char* verdict_name(uint32_t verdict) {
+    switch (verdict) {
+        case ANIRA_RT_COMFORTABLE: return "comfortable";
+        case ANIRA_RT_MARGINAL: return "marginal";
+        case ANIRA_RT_NOT_REALTIME: return "not real-time";
+        default: return "unmeasured";
+    }
 }
 
 #define REQUIRE(call, what)                  \
@@ -101,11 +112,35 @@ int main(void) {
     REQUIRE(anira_handler_create(context, pipeline, &handler, &err), "anira_handler_create");
     REQUIRE(anira_contract_create_hard(CONSUMER_BLOCK, CONSUMER_BLOCK, 48000.0, &contract, &err),
             "anira_contract_create_hard");
-    REQUIRE(anira_contract_hard_set_budget(contract, ANIRA_BUDGET_EXPLICIT, 5.0),
-            "anira_contract_hard_set_budget");
-    REQUIRE(anira_contract_hard_set_warmup(contract, ANIRA_WARMUP_FIXED, 2),
-            "anira_contract_hard_set_warmup");
+    /* No setter: the defaults, a MEASURED budget and an UNTIL_STABLE warm-up. */
     REQUIRE(anira_handler_prepare(handler, contract, &err), "anira_handler_prepare");
+
+    {
+        /* What prepare measured, per plan. The verdict is printed, never checked: a slow
+           machine is no failure of the install, and a real-time host decides what to do. */
+        anira_plan_info rows[4];
+        uint32_t count = 4u;
+        for (uint32_t i = 0; i < count; ++i) { rows[i] = ANIRA_PLAN_INFO_INIT; }
+        REQUIRE(anira_plan_report_plans(anira_handler_plan_report(handler),
+                                        (uint32_t)sizeof(anira_plan_info),
+                                        &count,
+                                        rows),
+                "anira_plan_report_plans");
+        for (uint32_t i = 0; i < count && i < 4u; ++i) {
+            printf(
+                "plan %u: budget %.3g ms (measured %.3g ms, median %.3g ms, %u warm-up "
+                "inferences, outcome %u), real-time factor %.3g of %u: %s\n",
+                i,
+                rows[i].budget_ms,
+                rows[i].measured_ms,
+                rows[i].median_ms,
+                rows[i].warmup_iterations,
+                rows[i].warmup_outcome,
+                rows[i].rt_factor,
+                rows[i].rt_parallel,
+                verdict_name(rows[i].rt_verdict));
+        }
+    }
 
     {
         float samples[CONSUMER_BLOCK];

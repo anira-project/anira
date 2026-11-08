@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <variant>
@@ -32,6 +33,10 @@ namespace anira::capi {
 /// loaded model is pooled by beside its record (engine::Model::m_variant), since its load may
 /// read any of it.
 std::string model_config_json(const anira_model_config& model);
+
+/// Re-arms the once-per-process Warning of an upgraded version 2 document, so that the next
+/// upgrade warns again: a test's hook (a test binary that runs as one process upgrades many).
+void rearm_upgrade_warning() noexcept;
 
 /// One axis of a tensor spec; written says whether set_axis touched the slot.
 struct Axis {
@@ -57,8 +62,15 @@ public:
     const void* data() const noexcept { return m_bytes; }
     size_t size() const noexcept { return m_size; }
     anira_bytes_ownership ownership() const noexcept { return m_ownership; }
+    /// The content hash of the bytes (anira::content_hash, XXH64), computed at the first call
+    /// and kept: what the model's figure keys a bytes model by (FigureKey), so that identical
+    /// bytes are one model whoever owns them. Thread-safe; it runs at prepare, never on a
+    /// real-time path.
+    uint64_t content_hash() const;
 
 private:
+    mutable std::once_flag m_hashed;
+    mutable uint64_t m_hash = 0;
     std::vector<unsigned char> m_copy;
     const void* m_bytes = nullptr;
     size_t m_size = 0;
@@ -122,8 +134,9 @@ struct HardContract {
     /// Per-tensor ring dtype by canonical name: the element type the typed Hard entries
     /// carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in
     /// anira converts: the Hard entries copy between the host and the ring, and a ring dtype
-    /// that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare.
-    /// Absent = ANIRA_DTYPE_F32, which is what the float entries are legal on.
+    /// that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare unless
+    /// the pipeline's processor fills the phase that moves that ring and converts. Absent = the
+    /// spec's dtype.
     std::map<std::string, anira_dtype> m_ring_dtypes;
     /// The declared stream latency per Streamed output by canonical name, in samples of that
     /// output (anira_contract_hard_set_latency, the JSON key "latencies"): it replaces the
@@ -131,6 +144,14 @@ struct HardContract {
     /// Resolved at prepare (validate), where a name that is no Streamed output and a figure
     /// below the spec's latency are ANIRA_ERROR_CONFIG; at most INT32_MAX.
     std::map<std::string, uint32_t> m_latencies;
+
+    /// Whether the contract's warm-up runs a pass at prepare (Core::warm_up_plan):
+    /// UNTIL_STABLE, or FIXED with at least one inference. NONE and FIXED 0 run none, which a
+    /// MEASURED budget refuses (validate): the pass is what measures it.
+    bool warms_up() const noexcept {
+        return m_warmup == ANIRA_WARMUP_UNTIL_STABLE ||
+               (m_warmup == ANIRA_WARMUP_FIXED && m_warmup_iterations > 0);
+    }
 };
 
 /// The host-block rules of anira_contract_create_hard, shared by the two C setters, the JSON
@@ -161,6 +182,8 @@ struct anira_tensor_spec {
     anira_role m_role = ANIRA_ROLE_STREAMED;
     std::array<anira::capi::Axis, ANIRA_MAX_RANK> m_axes{};
     uint32_t m_ndim = 0;
+    /// The window as declared (anira_tensor_spec_set_window, the JSON key "window"); (0, 0) is
+    /// no window, which the validator derives from the Time axis (window_declared()).
     int64_t m_window_min = 0;
     int64_t m_window_max = 0;
     int64_t m_overlap = 0;
@@ -171,11 +194,19 @@ struct anira_tensor_spec {
     /// the canonical name of the state output it is fed from. Copied, resolved by validate.
     std::string m_state_source;
     anira::capi::ExtBag m_ext;
+
+    /// Whether the spec declares a window: anything but (0, 0) as its bounds (a declared window
+    /// has window_min > 0, the validator refuses another). A Streamed spec without one has its
+    /// window derived at validation and written back to a model file without one.
+    bool window_declared() const noexcept { return m_window_min != 0 || m_window_max != 0; }
 };
 
 struct anira_contract {
     std::variant<anira::capi::HardContract, anira::capi::AsyncContract> m_kind;
-    anira_edge_cost m_edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
+    /// The worst edge class a plan may take for any slot (anira_contract_set_edge_cost, the JSON
+    /// key "edge_cost"), common to both kinds; prepare drops a plan above it. The default,
+    /// ANIRA_EDGE_UNKNOWN, is no limit: every edge, an unknown one included.
+    anira_edge_class m_edge_cost = ANIRA_EDGE_UNKNOWN;
     /// The declared host-end domain per tensor, by canonical name, common to both kinds
     /// (anira_contract_set_host_domain, the JSON key "host_domains"): the domain the ring, the
     /// model tensor, the Static store and the state buffers of the slot live in and every processor

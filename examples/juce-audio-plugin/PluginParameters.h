@@ -25,21 +25,12 @@ public:
 #endif
         BACKEND_TYPE_NAME = "Backend Type", DRY_WET_NAME = "Dry/Wet";
 
-#if MODEL_TO_USE == 6 || MODEL_TO_USE == 7
-    inline static juce::StringArray backendTypes{"LIBTORCH", "BYPASS"};
-    inline static juce::String defaultBackend = "LIBTORCH";
-#else
-    inline static juce::StringArray backendTypes{"TFLITE",
-                                                 "LITERT",
-                                                 "LIBTORCH",
-                                                 "ONNX",
-                                                 "EXECUTORCH",
-                                                 "BYPASS"};
-    inline static juce::String defaultBackend = "BYPASS";
-#endif
-
     static juce::StringArray getPluginParameterList();
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    /// The parameters; the "Backend Type" choices are the processor's (the backends this build
+    /// and the model have), the default one of them.
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout(
+        const juce::StringArray& backend_types,
+        int default_backend);
 
 private:
     inline static juce::StringArray parameterList;

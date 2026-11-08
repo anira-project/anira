@@ -16,6 +16,8 @@ import {
   ModelConfig,
   Pipeline,
   measureRenderGeometry,
+  anira_budget_kind,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const MODELS = '../../extras/models/model-pool/'
@@ -37,7 +39,11 @@ const handlers = async (anira, context, model, count, geometry) => {
       anira,
       new URL(`${MODELS}gain.contract.json`, import.meta.url)
     )
-  ).hardHostBlocks(geometry.quantum, geometry.burst, RATE)
+  )
+    .hardHostBlocks(geometry.quantum, geometry.burst, RATE)
+    // Pinned: the explicit budget without a warm-up (the page prepares before its Workers run).
+    .hardBudget(anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 5)
+    .hardWarmup(anira_warmup_mode.ANIRA_WARMUP_NONE)
   const out = []
   for (let i = 0; i < count; i++) {
     const pipeline = Pipeline.create(anira).addInference(model)

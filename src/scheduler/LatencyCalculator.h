@@ -28,7 +28,8 @@ struct HardContract;
  *   stream's samples per inference (the hop of the model config's anchor, which the
  *   validator resolves). @f$\rho@f$ is stored as a reduced fraction
  *   @f$p / q@f$ (see rationalize()).
- * - @f$\kappa = T \cdot f_s / (1000 \cdot R)@f$, the contract's budget @f$T@f$ (ms)
+ * - @f$\kappa = T \cdot f_s / (1000 \cdot R)@f$, the inference time @f$T@f$ (ms: the
+ *   contract's explicit budget, or what a warm-up pass measured under a MEASURED one)
  *   measured in hop periods (@f$f_s@f$ is the contract's host_rate, in samples of the reference
  *   stream per second).
  * - @f$\beta@f$, the contract's wait ratio: the driving thread waits @f$\beta@f$ host block
@@ -71,7 +72,9 @@ struct HardContract;
  * @f$\kappa < n@f$ (the pool keeps up with the stream); only
  * @f$m < \rho / (n - \kappa)@f$ can contribute, so the search is finite. The latency of
  * output tensor @f$i@f$ in its own samples is @f$P_i \Lambda@f$ (see
- * get_output_latencies()), rounded down because the host pops whole samples only.
+ * get_output_latencies()), rounded down because the host pops whole samples only. Several
+ * streamed outputs are then raised to the least delay they share in whole samples, a multiple
+ * of @f$1/\gcd_i P_i@f$ hops (sync_latencies()), so that they stay coherent.
  *
  * @par Inference slots
  * By the same recursion the number of inferences submitted but not yet collected right
@@ -128,6 +131,24 @@ public:
                       uint32_t num_instances);
 
     /**
+     * @brief Computes every quantity for one Hard contract at a resolved inference time
+     *
+     * The constructor above with @p budget_ms in place of the contract's own budget: what a
+     * session is sized for (SessionElement::m_budget_ms), the measured figure of a warm-up pass
+     * under a MEASURED budget, which the contract does not hold.
+     *
+     * @param derived As above
+     * @param hard As above; its budget is not read
+     * @param num_instances As above
+     * @param budget_ms The inference time @f$T@f$ in ms
+     * @throws std::invalid_argument as above
+     */
+    LatencyCalculator(const capi::Derived& derived,
+                      const capi::HardContract& hard,
+                      uint32_t num_instances,
+                      double budget_ms);
+
+    /**
      * @brief The worst-case latency in hops, @f$\Lambda@f$ (fixed host block)
      *
      * @return Latency in hops, as a floating-point number
@@ -157,11 +178,14 @@ public:
     /**
      * @brief Per-output integer latency, synchronized across outputs
      *
-     * @f$\lfloor P_i \Lambda \rfloor@f$ per streamable output; with more than one output tensor
-     * the latencies are then raised to a common whole number of hops
-     * (see sync_latencies()). Non-streamable outputs report 0. This is what
-     * SessionElement primes its receive rings with, before the internal model latency
-     * and any custom latency are applied.
+     * @f$\lfloor P_i \Lambda \rfloor@f$ per streamable output; with more than one streamed
+     * output the latencies are then raised to the least common delay on the grid of
+     * @f$1/g@f$ hops, @f$g@f$ the gcd of their hops (see sync_latencies()). With smaller host
+     * blocks allowed, the fixed block and the smaller-block grid are each synchronized and the
+     * larger of the two is taken per output, which stays coherent. Non-streamable outputs
+     * (Static values, the output half of a State pair) report 0 and never trigger that
+     * rounding. This is what SessionElement primes its receive rings with, before the internal
+     * model latency and any custom latency are applied.
      *
      * @return Latency values in samples, one per output tensor
      */
@@ -202,6 +226,38 @@ public:
      * @return True if the configuration is feasible
      */
     bool is_feasible() const;
+
+    /**
+     * @brief An inference time in hop periods of the reference stream, @f$\kappa = T \cdot f_s /
+     * (1000 \cdot R)@f$
+     *
+     * The one formula of @f$\kappa@f$: what the constructor sizes for, and the real-time factor of
+     * a plan row (anira_plan_info.rt_factor), its inference time over the anchor's hop period. A
+     * configuration keeps up while it stays below the instance count @f$n@f$ (is_feasible()).
+     *
+     * @param derived What the validator derived (the anchor and its hop)
+     * @param hard The contract's Hard half (its host_rate)
+     * @param time_ms The inference time @f$T@f$ in ms
+     * @return @f$\kappa@f$; 0 for an anchor without a stream
+     */
+    static double hop_periods(const capi::Derived& derived,
+                              const capi::HardContract& hard,
+                              double time_ms) noexcept;
+
+    /**
+     * @brief The budget a MEASURED prepare sizes the session for before its warm-up pass, in ms
+     *
+     * One clock step (clock_step_ns()), the smallest figure a pass can measure; or, when the
+     * clock steps finer, twice the largest inference time the sizing treats as an instant one
+     * (the batch delay's ceiling tolerance, 1e-6 host blocks of host_block_max: every time at
+     * or below it sizes the session as no inference time does). Every time a pass measures lies
+     * above that tolerance, so this budget sizes the session as every figure below the first
+     * struct edge does, and the sizing after the pass usually keeps the entry count.
+     *
+     * @param hard The contract's Hard half (its host_block_max and host_rate)
+     * @return The budget in ms, at least one clock step
+     */
+    static double pass_sizing_ms(const capi::HardContract& hard);
 
     /**
      * @brief The host block in hops, @f$\rho = B/R@f$ as a reduced fraction
@@ -287,9 +343,21 @@ public:
     /**
      * @brief Synchronizes integer latencies across several output tensors
      *
-     * With one output the value is kept. With several, every streamable output is raised
-     * to the same whole number of hops, @f$\lceil \max_i L_i / P_i \rceil \cdot P_i@f$;
-     * non-streamable outputs stay at 0. Same rule as before this class existed.
+     * Raises the streamed outputs (@f$P_i > 0@f$) to the least coherent latencies at or
+     * above their own: every streamed output is delayed by the same number of hops, so that
+     * the outputs stay aligned. The delays that are a whole number of samples of every
+     * streamed output are exactly the multiples of @f$1/g@f$ hops, @f$g = \gcd_i P_i@f$
+     * (Bezout), so the result is
+     * @f[
+     *   k = \max_i \left\lceil \frac{g L_i}{P_i} \right\rceil, \qquad
+     *   \text{result}_i = \frac{P_i}{g} k,
+     * @f]
+     * in exact integer arithmetic (64-bit for @f$g L_i@f$). Equal hops keep their values
+     * (@f$g = P@f$); coprime hops meet at a whole number of hops (@f$g = 1@f$). The one
+     * formula covers the edge cases: one streamed output: @f$g = P@f$, @f$k = L@f$, so its
+     * floor passes unchanged; no streamed output: every entry 0. A non-streamable output (a
+     * Static value, the output half of a State pair) reports 0, takes no part in @f$g@f$ and
+     * @f$k@f$, and the result has one entry per output tensor.
      *
      * @param latencies Integer latencies in samples, one per output tensor
      * @param output_sizes Postprocess output sizes (hops), one per output tensor

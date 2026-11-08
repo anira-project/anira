@@ -239,12 +239,21 @@ int anira_header_c_probe(void) {
             backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL ? 1 : 0;
         checks += backend.provider == ANIRA_PROVIDER_NONE && backend.provider_id == NULL ? 1 : 0;
         checks += edge.struct_size == sizeof(anira_edge_info) && edge.available == 0u ? 1 : 0;
-        checks += edge.reason == NULL && edge.to_provider_id == NULL ? 1 : 0;
-        checks += edge.to_engine_id == NULL ? 1 : 0;
+        checks +=
+            edge.from_engine == ANIRA_ENGINE_NONE && edge.to_engine == ANIRA_ENGINE_NONE ? 1 : 0;
+        checks +=
+            edge.from_domain == ANIRA_DOMAIN_HOST && edge.to_domain == ANIRA_DOMAIN_HOST ? 1 : 0;
+        checks += edge.edge_class == ANIRA_EDGE_UNKNOWN && edge.reason == NULL ? 1 : 0;
+        checks += edge.from_engine_id == NULL && edge.from_provider_id == NULL ? 1 : 0;
+        checks += edge.to_engine_id == NULL && edge.to_provider_id == NULL ? 1 : 0;
         checks += slot.struct_size == sizeof(anira_plan_slot) && slot.recipe == NULL ? 1 : 0;
         checks += ext.struct_size == sizeof(anira_plan_ext) && ext.host == NULL ? 1 : 0;
         checks += info.struct_size == sizeof(anira_plan_info) && info.budget_ms == 0.0 ? 1 : 0;
         checks += info.provider_id == NULL && info.engine_flags == 0u ? 1 : 0;
+        checks += info.warmup_iterations == 0u && info.measured_ms == 0.0 ? 1 : 0;
+        checks +=
+            info.warmup_outcome == ANIRA_WARMUP_OUTCOME_NONE && info.rt_parallel == 0u ? 1 : 0;
+        checks += info.rt_factor == 0.0 && info.rt_verdict == ANIRA_RT_UNMEASURED ? 1 : 0;
         if (checks < 0) { /* never true: keeps the calls out of the probe's own result */
             const double now = anira_now_ms();
             const anira_status status =
@@ -341,7 +350,7 @@ int anira_header_c_probe(void) {
                               ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
-            checks += anira_contract_edge_cost(NULL) == ANIRA_EDGE_COST_PERMISSIVE ? 1 : 0;
+            checks += anira_contract_edge_cost(NULL) == ANIRA_EDGE_UNKNOWN ? 1 : 0;
             /* The declared stream latency: the setter, the count and the enumeration. */
             checks += anira_contract_hard_set_latency(NULL, "audio_out", 1024u) ==
                               ANIRA_ERROR_INVALID_ARGUMENT
@@ -439,7 +448,7 @@ int anira_header_c_probe(void) {
             processor.struct_size == sizeof(anira_processor_desc) && processor.user_data == NULL
                 ? 1
                 : 0;
-        checks += processor.flags == 0u && processor.pre_process == NULL ? 1 : 0;
+        checks += processor.realtime_phases == 0u && processor.pre_process == NULL ? 1 : 0;
         checks += processor.reset == NULL && processor.unprepare == NULL && processor.init == NULL
                       ? 1
                       : 0;
@@ -457,17 +466,19 @@ int anira_header_c_probe(void) {
             ANIRA_PHASE_INIT == 9 && ANIRA_PHASE_LOAD == 10 && ANIRA_PHASE_UNLOAD == 11 ? 1 : 0;
         processor.consumed_kinds = kinds;
         processor.num_consumed_kinds = 1u;
-        /* The real-time promise of the two host-end phases (the reset runs on their thread), as
-           a Hard contract requires it, and the hooks' promise beside it. */
-        processor.flags =
-            ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+        /* The real-time promise per phase: the two host-end phases and the reset, as a Hard
+           contract requires it of the filled ones, and the hooks beside them. */
+        processor.realtime_phases =
+            ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) |
+            ANIRA_PHASE_BIT(ANIRA_PHASE_BEFORE_INFERENCE) |
+            ANIRA_PHASE_BIT(ANIRA_PHASE_AFTER_INFERENCE) | ANIRA_PHASE_BIT(ANIRA_PHASE_RESET);
         processor.pre_process = on_pre_process;
         processor.reset = on_processor_reset;
         processor.prepare = on_processor_prepare;
         processor.unprepare = on_processor_unprepare;
         processor.init = on_processor_init;
         processor.release = on_processor_release;
-        checks += processor.flags == 3u ? 1 : 0;
+        checks += processor.realtime_phases == 0x97u ? 1 : 0;
         checks += sizeof(anira_processor_ctx) == 64u && offsetof(anira_processor_ctx, frame) == 32u
                       ? 1
                       : 0;
@@ -614,10 +625,10 @@ int anira_header_c_probe(void) {
                                                            NULL) == ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
-            checks += anira_pipeline_capabilities_edge(NULL, NULL, ANIRA_DOMAIN_HOST, NULL, NULL) ==
-                              ANIRA_ERROR_INVALID_ARGUMENT
-                          ? 1
-                          : 0;
+            checks +=
+                anira_pipeline_capabilities_edge(NULL, NULL, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
+                    ? 1
+                    : 0;
             {
                 uint64_t available = 0u;
                 checks += engine.query(&init_info, NULL, &available) == ANIRA_OK ? 1 : 0;

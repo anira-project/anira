@@ -48,15 +48,15 @@
  * PrepareInfo, the C records as views, whose handler is the anira_handler* (a processor of a
  * handler created through C has no InferenceHandler object); a Processor states the phases
  * it fills in phases(), because the C descriptor tells a filled phase from a NULL one, and its
- * real-time promise in flags() (anira_processor_desc::flags); ProcessorContext has
- * input_tensor / output_tensor filling a Tensor, the C accessors, in place of model_input /
- * model_output references, every accessor returning the C status and filling an out-parameter
- * (asking for what a slot does not have in a phase is the processor's bug, and is recorded), and
- * entry() for the chunk's entry; the RingView calls take a std::span; the document's custom
- * stage is the Processor, which takes no domains and has no single-callable form (a processor
- * works at the host end of every slot and never crosses a domain), and a Pipeline holds at most
- * one; the Pipeline has one member per C entry (add_inference, add_processor, add_engine) in
- * place of the document's stage objects; a custom engine is anira::Engine, added to the pipeline
+ * real-time promise per phase in realtime_phases() (anira_processor_desc::realtime_phases);
+ * ProcessorContext has input_tensor / output_tensor filling a Tensor, the C accessors, in place
+ * of model_input / model_output references, every accessor returning the C status and filling an
+ * out-parameter (asking for what a slot does not have in a phase is the processor's bug, and is
+ * recorded), and entry() for the chunk's entry; the RingView calls take a std::span; the document's
+ * custom stage is the Processor, which takes no domains and has no single-callable form (a
+ * processor works at the host end of every slot and never crosses a domain), and a Pipeline holds
+ * at most one; the Pipeline has one member per C entry (add_inference, add_processor, add_engine)
+ * in place of the document's stage objects; a custom engine is anira::Engine, added to the pipeline
  * under its id and shaped like Processor with one level more, with Engine::Loaded what its load
  * returns per loaded model (EngineLoadInfo the record), Engine::Prepared what the Loaded's
  * prepare returns per handler (PrepareInfo the record, the processor's) and EngineContext the
@@ -771,7 +771,8 @@ public:
         if (anira_tensor_spec_axis(m_spec, i, &out.tag, &out.extent) != ANIRA_OK) { return {}; }
         return out;
     }
-    /// 0, 0, 0 until TensorSpec::window ran.
+    /// 0, 0, 0 until TensorSpec::window ran; never the window a validation derives for a
+    /// streamed spec without one (PlanReport::slots carries the window in use).
     Window window() const noexcept {
         Window out;
         if (anira_tensor_spec_window(m_spec, &out.min, &out.max, &out.overlap) != ANIRA_OK) {
@@ -831,7 +832,9 @@ public:
                       "anira_tensor_spec_set_axis");
         return *this;
     }
-    /// Streamed only: elements along the Time axis per inference and the overlap kept.
+    /// Streamed only: elements along the Time axis per inference and the overlap kept. Optional:
+    /// without it the window is derived at validation (the fixed Time extent, or a flexible
+    /// window pinned to the anchor hop on a dynamic Time axis); an overlap needs a window.
     TensorSpec& window(int64_t window_min, int64_t window_max, int64_t overlap) {
         detail::check(anira_tensor_spec_set_window(m_spec, window_min, window_max, overlap),
                       "anira_tensor_spec_set_window");
@@ -896,24 +899,28 @@ private:
 // NOLINTBEGIN(readability-identifier-naming) the aggregates spell the document's field names
 
 /**
- * @brief The inference budget of a Hard contract: a member of Hard without a default, so a Hard
- * aggregate always names it (`Hard{.host_block_min = 512, .host_block_max = 512, .host_rate =
- * 48000, .budget = 5ms, .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2}`; the default
- * UNTIL_STABLE warm-up is refused like the measured budget), as the web package's budgetMs. A
- * std::chrono duration converts to an explicit budget (ANIRA_BUDGET_EXPLICIT with that figure,
- * anira_contract_hard_set_budget); Budget::measured() is the budget the warm-up measures
- * (ANIRA_BUDGET_MEASURED), which anira_handler_prepare refuses with ANIRA_ERROR_NOT_SUPPORTED in
- * this pre-release.
+ * @brief The inference budget of a Hard contract: measured by default, as the C contract's
+ * (`Hard{.host_block_min = 512, .host_block_max = 512, .host_rate = 48000}` prepares with the
+ * budget the warm-up pass measures), explicit from a duration (`.budget = 5ms`), as the web
+ * package's budgetMs. A std::chrono duration converts to an explicit budget
+ * (ANIRA_BUDGET_EXPLICIT with that figure, anira_contract_hard_set_budget); a default-constructed
+ * Budget, Budget::measured(), is the budget the warm-up pass measures at prepare
+ * (ANIRA_BUDGET_MEASURED). The warm-up pass also measures the inference time; a measured budget
+ * is the maximum of its last four inferences; under an explicit budget the timings are only
+ * reported. An explicit budget gives a reproducible latency, a measured one a latency that
+ * depends on the machine.
  */
 class Budget {
 public:
+    /// The measured budget, the C contract's default (Budget::measured()).
+    Budget() noexcept : m_kind(ANIRA_BUDGET_MEASURED), m_value{} {}
     /// An explicit budget of `value` per inference.
     template <class Rep, class Period>
     // NOLINTNEXTLINE(google-explicit-constructor) a duration is a budget: `.budget = 5ms`
     Budget(std::chrono::duration<Rep, Period> value) noexcept
         : m_kind(ANIRA_BUDGET_EXPLICIT)
         , m_value(std::chrono::duration_cast<std::chrono::nanoseconds>(value)) {}
-    /// The budget the warm-up measures (refused at prepare in this pre-release).
+    /// The budget the warm-up pass measures at prepare: the slowest plan's figure.
     static Budget measured() noexcept {
         return {ANIRA_BUDGET_MEASURED, std::chrono::nanoseconds{}};
     }
@@ -942,7 +949,8 @@ struct Hard {
     /// The anchor's elements per second the host runs at: the sample rate for an audio anchor,
     /// sample_rate / 2048.0 for a control-rate one. The contract file's "host_rate".
     double host_rate = 0;
-    /// Required: the per-inference budget (no default; a duration is an explicit budget).
+    /// The per-inference budget: measured by the warm-up pass by default, explicit from a
+    /// duration (`.budget = 5ms`).
     Budget budget;
     anira_warmup_mode warmup = ANIRA_WARMUP_UNTIL_STABLE;
     uint32_t warmup_iterations = 0;  ///< Fixed only
@@ -955,13 +963,21 @@ struct Hard {
     void* miss_user_data = nullptr;
     double wait_ratio = 0;  ///< v2 blocking_ratio
     /// The ring dtype per Streamed tensor by canonical name (anira_contract_hard_set_ring_dtype;
-    /// ANIRA_DTYPE_F32 for every tensor not named): the element type of the host's samples.
+    /// the spec's dtype for every tensor not named): the element type of the host's samples, set
+    /// only where it differs from the model's and a converting processor goes with it.
     std::map<std::string, DType> ring_dtypes{};
     /// The declared stream latency per Streamed output by canonical name, in samples of that
     /// output (anira_contract_hard_set_latency): it replaces the computed figure and primes the
     /// receive ring; every output not named keeps the computed one.
     std::map<std::string, uint32_t> latencies{};
-    anira_edge_cost edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
+    /// The worst edge class a plan may take for any slot (anira_contract_set_edge_cost, the
+    /// contract file's "edge_cost"): prepare drops a plan above it. A class of the cost scale is
+    /// a limit: ANIRA_EDGE_DEDICATED_TRANSFER admits every known edge,
+    /// ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device within unified memory
+    /// only (no bus), ANIRA_EDGE_COPY no crossing between domains, ANIRA_EDGE_ZERO_COPY no copy at
+    /// all, and every limit refuses an ANIRA_EDGE_UNKNOWN edge. std::nullopt, the default, is no
+    /// limit: every edge, an unknown one included (the C value ANIRA_EDGE_UNKNOWN).
+    std::optional<anira_edge_class> edge_cost{};
 };
 
 /// Jobs without a real-time deadline: the offline posture.
@@ -972,7 +988,9 @@ struct Async {
     uint32_t lanes = 0;
     uint32_t max_in_flight = 0;
     anira_delivery delivery = ANIRA_DELIVERY_POLLED;
-    anira_edge_cost edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
+    /// The worst edge class a plan may take for any slot, as Hard::edge_cost (std::nullopt: no
+    /// limit).
+    std::optional<anira_edge_class> edge_cost{};
 };
 
 using Contract = std::variant<Hard, Async>;
@@ -1024,7 +1042,7 @@ inline anira_contract* mint(const Hard& hard) {
             check(anira_contract_hard_set_latency(contract, name.c_str(), samples),
                   "anira_contract_hard_set_latency");
         }
-        check(anira_contract_set_edge_cost(contract, hard.edge_cost),
+        check(anira_contract_set_edge_cost(contract, hard.edge_cost.value_or(ANIRA_EDGE_UNKNOWN)),
               "anira_contract_set_edge_cost");
     } catch (...) {
         anira_contract_destroy(contract);
@@ -1050,7 +1068,7 @@ inline anira_contract* mint(const Async& async) {
                                               async.max_in_flight,
                                               async.delivery),
               "anira_contract_async_set_policy");
-        check(anira_contract_set_edge_cost(contract, async.edge_cost),
+        check(anira_contract_set_edge_cost(contract, async.edge_cost.value_or(ANIRA_EDGE_UNKNOWN)),
               "anira_contract_set_edge_cost");
     } catch (...) {
         anira_contract_destroy(contract);
@@ -1141,11 +1159,10 @@ public:
     }
     /// The ring dtype of one tensor under this Hard contract, by canonical name: the element
     /// type the tensor forms of the Hard entries carry across the ABI and the ring holds as is;
-    /// F32 for every tensor never set. Nothing
-    /// converts: a name that is not a Streamed tensor is ANIRA_ERROR_CONFIG at
-    /// anira_handler_prepare, and so is a ring dtype that differs from the spec's dtype unless a
-    /// processor of the pipeline fills the phase that moves that ring
-    /// (anira_pipeline_add_processor).
+    /// the spec's dtype for every tensor never set. Nothing converts: a name that is not a
+    /// Streamed tensor is ANIRA_ERROR_CONFIG at anira_handler_prepare, and so is a ring dtype that
+    /// differs from the spec's dtype unless a processor of the pipeline fills the phase that
+    /// moves that ring and converts (anira_pipeline_add_processor).
     ContractHandle& hard_ring_dtype(std::string_view canonical, DType dtype) {
         const std::string name(canonical);
         detail::check(anira_contract_hard_set_ring_dtype(m_contract, name.c_str(), dtype),
@@ -1219,9 +1236,13 @@ public:
                       "anira_contract_async_set_policy");
         return *this;
     }
-    ContractHandle& edge_cost(anira_edge_cost cost) {
-        detail::check(anira_contract_set_edge_cost(m_contract, cost),
-                      "anira_contract_set_edge_cost");
+    /// The worst edge class a plan may take for any slot, on either contract kind
+    /// (anira_contract_set_edge_cost, Hard::edge_cost): prepare drops a plan above it, and any
+    /// limit drops a plan with an ANIRA_EDGE_UNKNOWN edge; std::nullopt restores no limit.
+    ContractHandle& edge_cost(std::optional<anira_edge_class> worst_allowed) {
+        detail::check(
+            anira_contract_set_edge_cost(m_contract, worst_allowed.value_or(ANIRA_EDGE_UNKNOWN)),
+            "anira_contract_set_edge_cost");
         return *this;
     }
     /// The host-end domain of one tensor, by canonical name, on either contract kind
@@ -1305,7 +1326,10 @@ public:
                           "anira_contract_hard_latency");
             out.latencies.emplace(name, samples);
         }
-        out.edge_cost = anira_contract_edge_cost(m_contract);
+        if (const anira_edge_class limit = anira_contract_edge_cost(m_contract);
+            limit != ANIRA_EDGE_UNKNOWN) {
+            out.edge_cost = limit;
+        }
         return out;
     }
 
@@ -1501,7 +1525,9 @@ public:
         });
     }
     /// The entry's path, owned by the config and valid until it is mutated, moved or
-    /// destroyed. @throws Error{ANIRA_ERROR_INVALID_STATE} on a bytes entry.
+    /// destroyed. @throws Error{ANIRA_ERROR_INVALID_STATE} on a bytes entry and on an entry
+    /// without a source (add_model(engine_id)), Error{ANIRA_ERROR_INVALID_ARGUMENT} for an index
+    /// out of range.
     std::string_view model_path(uint32_t index) const {
         const char* path = anira_model_config_model_path(m_config, index);
         if (path == nullptr) {
@@ -1977,6 +2003,31 @@ std::vector<T> enumerate(Call&& call, const char* entry) {
     return rows;
 }
 
+/// The query record of an edge lookup (anira_capabilities_edge,
+/// anira_pipeline_capabilities_edge): ANIRA_EDGE_INFO_INIT with a domain from end and a backend
+/// to end, the way an input goes.
+inline anira_edge_info edge_query(Domain from, const BackendId& to) noexcept {
+    anira_edge_info query = ANIRA_EDGE_INFO_INIT;
+    query.from_domain = static_cast<uint32_t>(from);
+    query.to_engine = to.engine;
+    query.to_provider = to.provider;
+    query.to_engine_id = to.engine_id;
+    query.to_provider_id = to.provider_id;
+    return query;
+}
+
+/// The query record of an edge lookup with a backend from end and a domain to end, the way an
+/// output goes.
+inline anira_edge_info edge_query(const BackendId& from, Domain to) noexcept {
+    anira_edge_info query = ANIRA_EDGE_INFO_INIT;
+    query.from_engine = from.engine;
+    query.from_provider = from.provider;
+    query.from_engine_id = from.engine_id;
+    query.from_provider_id = from.provider_id;
+    query.to_domain = static_cast<uint32_t>(to);
+    return query;
+}
+
 }  // namespace detail
 
 /**
@@ -2013,7 +2064,11 @@ public:
             "anira_capabilities_ext_kinds");
         return {kinds.begin(), kinds.end()};
     }
-    /// Every row of the edge registry, available or not.
+    /// Every row of the edge registry, available or not: two per backend of backends(), in
+    /// its order, edges()[2 * i] from the host domain to backends()[i] and
+    /// edges()[2 * i + 1] back. The first read of a device provider's rows asks its device's
+    /// memory kind (anira_edge_info.memory_kind; the unified-memory probe, bounded, kept by the
+    /// context), so call it off the audio thread.
     std::vector<anira_edge_info> edges() const {
         return detail::enumerate<anira_edge_info>(
             [this](uint32_t* count, anira_edge_info* out) {
@@ -2024,12 +2079,19 @@ public:
             },
             "anira_capabilities_edges");
     }
-    /// One row, by domain and backend.
+    /// The row from domain `from` to backend `to`, the way an input goes (a device provider's
+    /// asks its memory kind as edges() does, for this backend alone).
     /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no such row.
     anira_edge_info edge(Domain from, const BackendId& to) const {
-        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
-        detail::check(anira_capabilities_edge(m_capabilities, from, &to, &row),
-                      "anira_capabilities_edge");
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_capabilities_edge(m_capabilities, &row), "anira_capabilities_edge");
+        return row;
+    }
+    /// The row from backend `from` to domain `to`, the way an output goes.
+    /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no such row.
+    anira_edge_info edge(const BackendId& from, Domain to) const {
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_capabilities_edge(m_capabilities, &row), "anira_capabilities_edge");
         return row;
     }
 
@@ -2074,10 +2136,11 @@ public:
     Capabilities capabilities() const {
         return Capabilities(anira_context_capabilities(m_context));
     }
-    /// Re-runs the probe; `force` re-runs every rung even where a cached answer exists.
-    void probe(bool force = false) {
+    /// Re-runs the probe in full: the runtimes are asked anew and the memory kinds the context
+    /// kept are forgotten (anira_context_probe).
+    void probe() {
         anira_error err{};
-        detail::check(anira_context_probe(m_context, force ? 1U : 0U, &err), err);
+        detail::check(anira_context_probe(m_context, &err), err);
     }
     /// The size of a tensor's byte image under the edges this context probed.
     uint64_t byte_image_bytes(uint64_t num_elements, DType dtype) const {
@@ -2257,7 +2320,7 @@ public:
     explicit operator bool() const noexcept { return m_ring != nullptr; }
 
     /// anira_ring_dtype: the element type the ring stores, the ring dtype of the Hard contract
-    /// (ANIRA_DTYPE_F32 when none was declared); 0 for a view of no ring.
+    /// (the spec's dtype when none was declared); 0 for a view of no ring.
     DType dtype() const noexcept { return anira_ring_dtype(m_ring); }
     /// anira_ring_num_channels: the extent of the tensor's Channel axis, 1 without one.
     uint32_t num_channels() const noexcept { return anira_ring_num_channels(m_ring); }
@@ -2537,8 +2600,8 @@ private:
  * Pipeline::add_processor(std::make_shared<YourProcessor>(...)). It is anira_processor_desc with
  * virtual functions in place of the function pointers, and the semantics are those of
  * anira/abi/processor.h, whose lifecycle it follows: the registration is one object shared by the
- * pipeline and every handler created from it (phases(), flags() and consumed_kinds() are read once,
- * when the processor is added); init() is called once per registration, by the first
+ * pipeline and every handler created from it (phases(), realtime_phases() and consumed_kinds() are
+ * read once, when the processor is added); init() is called once per registration, by the first
  * anira_handler_prepare of a handler of the pipeline, with the facts of the core in effect
  * (InitInfo); prepare() is called once per anira_handler_prepare of each handler and returns that
  * handler's Processor::Prepared, the C lifecycle's prepared pointer as a class: the four phases and
@@ -2569,16 +2632,19 @@ private:
  * the default through the base class ("call super"): Prepared::pre_process(ctx) is
  * anira_processor_default_pre_process, Prepared::post_process(ctx) is
  * anira_processor_default_post_process. A virtual function is never NULL, so the mask says which
- * of the four this processor takes part in: only those reach the descriptor, the others stay NULL
- * and are never called; the reset slot is always filled, with a base body that does nothing.
+ * of the four phases and reset this processor takes part in: only those reach the descriptor, the
+ * others stay NULL and are never called (a Prepared that overrides reset names k_reset, else its
+ * reset is never called).
  *
- * flags() is the processor's real-time promise (anira_processor_desc::flags):
- * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST says pre_process, post_process and reset allocate nothing,
- * lock nothing and block on nothing, ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS says the same of
- * before_inference and after_inference; the default promises nothing. anira_handler_prepare
- * checks the promise against the placement: under a Hard contract a filled pre_process or
- * post_process runs on the driving thread and requires ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST, else
- * prepare fails with ANIRA_ERROR_CONFIG naming the flag. The phase functions and reset are
+ * realtime_phases() is the processor's real-time promise, per phase
+ * (anira_processor_desc::realtime_phases), in the bits of phases(): the bit of a phase says that
+ * phase allocates nothing, locks nothing and blocks on nothing; the default promises nothing.
+ * anira_handler_prepare checks the promise against the placement: every filled phase that the
+ * contract runs on the driving thread must carry its bit, else prepare fails with
+ * ANIRA_ERROR_CONFIG naming the phase. Under a Hard contract those are pre_process, post_process
+ * and reset, so a processor of inference hooks alone needs no promise; a promised phase that is
+ * not filled is no error. A processor whose bodies are all real-time says so in one line:
+ * realtime_phases() returns phases(). The phase functions and reset are
  * noexcept (an override that throws does not compile without it, and terminates with it) and
  * carry no real-time attribute of their own; everything ProcessorContext, RingView and Tensor offer
  * is nonblocking, so a body that keeps its promise is composed of those calls. A status other
@@ -2593,11 +2659,12 @@ private:
  *
  * A processor has no name: a Pipeline holds one, so a name would identify nothing; every record
  * about it says "the processor", and the consumer column of its anira_plan_ext rows reads
- * "processor".
+ * "processor". Its optional id (the constructor's) names its inference hooks for the model's
+ * figure, which a prepare's warm-up pass measures with them: processors of one id share it.
  */
 class Processor {
 public:
-    /// The bit of one phase in phases().
+    /// The bit of one phase in phases() and realtime_phases(), ANIRA_PHASE_BIT(phase).
     static constexpr uint32_t phase_bit(anira_phase phase) noexcept {
         return uint32_t{1} << static_cast<uint32_t>(phase);
     }
@@ -2605,9 +2672,11 @@ public:
     static constexpr uint32_t k_post_process = uint32_t{1} << ANIRA_PHASE_POST_PROCESS;
     static constexpr uint32_t k_before_inference = uint32_t{1} << ANIRA_PHASE_BEFORE_INFERENCE;
     static constexpr uint32_t k_after_inference = uint32_t{1} << ANIRA_PHASE_AFTER_INFERENCE;
-    /// Every bit phases() may carry.
+    /// reset: its Prepared overrides reset, which is called only with this bit in phases().
+    static constexpr uint32_t k_reset = uint32_t{1} << ANIRA_PHASE_RESET;
+    /// Every bit phases() and realtime_phases() may carry.
     static constexpr uint32_t k_all_phases =
-        k_pre_process | k_post_process | k_before_inference | k_after_inference;
+        k_pre_process | k_post_process | k_before_inference | k_after_inference | k_reset;
 
     /**
      * @brief One handler's prepared processor: what Processor::prepare returns, the C prepared
@@ -2657,23 +2726,37 @@ public:
     };
 
     Processor() = default;
+    /// A processor with an id (anira_processor_desc::id), a reverse-URI name: what its
+    /// before_inference and after_inference are for the model's figure. A prepare's warm-up pass
+    /// times those hooks with the engine call, so every handler whose processor gives the same id
+    /// shares one figure of the model (identical plugins report identical latency); without an
+    /// id, a processor that fills an inference hook measures its own. A processor without
+    /// inference hooks needs none.
+    explicit Processor(std::string id) : m_id(std::move(id)) {}
     virtual ~Processor() = default;
     Processor(const Processor&) = delete;
     Processor& operator=(const Processor&) = delete;
     Processor(Processor&&) = delete;
     Processor& operator=(Processor&&) = delete;
 
-    /// The phases this processor fills: an OR of k_pre_process, k_post_process, k_before_inference
-    /// and k_after_inference. Read once, when the processor is added to a Pipeline; 0 is a
-    /// processor of prepare, reset, unprepare and release alone.
+    /// The id the constructor took; empty for none.
+    const std::string& id() const noexcept { return m_id; }
+
+    /// The phases this processor fills: an OR of k_pre_process, k_post_process, k_before_inference,
+    /// k_after_inference and k_reset (a Prepared that overrides reset names k_reset, else its reset
+    /// is never called). Read once, when the processor is added to a Pipeline; 0 is a processor of
+    /// prepare, unprepare and release alone.
     virtual uint32_t phases() const noexcept = 0;
-    /// The processor's real-time promise, written into anira_processor_desc::flags by
-    /// Pipeline::add_processor: an OR of ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST and
-    /// ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS; 0 (the default) promises nothing. Under a Hard contract
-    /// a processor that fills pre_process or post_process must promise
-    /// ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST, else anira_handler_prepare refuses it with
-    /// ANIRA_ERROR_CONFIG. Read once, when the processor is added to a Pipeline.
-    virtual uint32_t flags() const noexcept { return 0; }
+    /// The processor's real-time promise, per phase, written into
+    /// anira_processor_desc::realtime_phases by Pipeline::add_processor: an OR of the k_* bits of
+    /// phases() whose bodies allocate nothing, lock nothing and block on nothing; 0 (the default)
+    /// promises nothing. Every filled phase the contract runs on the driving thread must carry its
+    /// bit, else anira_handler_prepare refuses the processor with ANIRA_ERROR_CONFIG naming the
+    /// phase: under a Hard contract k_pre_process, k_post_process and k_reset, so one of
+    /// before_inference and after_inference alone needs no promise there. A promised phase that is
+    /// not filled is no error; a processor whose bodies are all real-time returns phases(). Read
+    /// once, when the processor is added to a Pipeline.
+    virtual uint32_t realtime_phases() const noexcept { return 0; }
     /// The extensions the processor reads at prepare, as "<host>:<kind>" strings (hosts:
     /// tensor_spec, model, model_config, context, contract); they join the consumed-or-fail
     /// walk. Read once, when the processor is added; the strings are copied.
@@ -2705,6 +2788,9 @@ public:
     /// it was deleted, whether or not init ever ran; no callback of that chain runs afterwards.
     /// The object itself lives as long as a shared_ptr to it does.
     virtual void release() noexcept {}
+
+private:
+    std::string m_id;
 };
 
 namespace detail {
@@ -2725,8 +2811,8 @@ struct ProcessorTrampolines {
     }
 
     // The four phase trampolines and the reset carry no real-time attribute, like the C
-    // typedefs: the promise is the processor's flags(), not a property of the type. They run on the
-    // handler's Prepared; the registration in user_data is not read on a per-chunk path.
+    // typedefs: the promise is the processor's realtime_phases(), not a property of the type. They
+    // run on the handler's Prepared; the registration in user_data is not read on a per-chunk path.
     static anira_status ANIRA_CALL pre_process(const anira_processor_ctx* ctx,
                                                void* prepared,
                                                void* /*user_data*/) noexcept {
@@ -2835,6 +2921,21 @@ private:
 }  // namespace detail
 
 // ---- engines (section 7) -------------------------------------------------------------------
+
+/**
+ * @brief How a custom engine passes one slot to its runtime, as the plan report states it
+ * (anira_engine_edge of anira/abi/engine.h): where the bytes go, and why. Engine::Loaded::edge
+ * returns it; the mover follows from the class (the engine's code moves whatever moves, nobody
+ * on a zero-copy edge).
+ */
+// NOLINTBEGIN(readability-identifier-naming) the aggregate spells anira_engine_edge's field names
+struct EngineEdge {
+    anira_edge_class edge_class = ANIRA_EDGE_ZERO_COPY;
+    /// Why the edge is what it is: static storage or a member of the Loaded (anira copies it
+    /// before the call returns); nullptr with nothing to say.
+    const char* reason = nullptr;
+};
+// NOLINTEND(readability-identifier-naming)
 
 /**
  * @brief The record an Engine's load receives, anira_engine_load_info of anira/abi/engine.h as
@@ -2971,7 +3072,7 @@ public:
     /// - 1; never two calls at once on one instance. 0 for an exclusive call, which claimed no
     /// slot.
     uint32_t instance() const noexcept { return m_ctx->instance; }
-    /// The chunk's position in the handler's inference queue (ProcessorContext::entry of the same
+    /// The chunk's position in the handler's chunk pool (ProcessorContext::entry of the same
     /// chunk).
     uint32_t entry() const noexcept { return m_ctx->entry; }
     /// ANIRA_TICKET_INVALID under a Hard contract; the job's ticket under an Async one.
@@ -3140,6 +3241,26 @@ public:
         /// loaded models may run at once). It may throw, as Engine::load may; a null return is
         /// ANIRA_ERROR_INTERNAL.
         virtual std::unique_ptr<Prepared> prepare(const PrepareInfo& info) = 0;
+
+        /// How this model's engine passes one slot to its runtime (the input slot `slot` under
+        /// `is_input`, else the output slot), for the plan report's slot rows and the
+        /// contract's edge cost (anira_engine_edge_fn): called right after Engine::load
+        /// returned this Loaded, once per slot, inputs first, on the same thread and under the
+        /// same lock. `provider_rule` is what anira reports without a statement, the provider
+        /// rule for the slot's direction, and the base returns it: zero-copy on
+        /// ANIRA_PROVIDER_CPU and XNNPACK; on any other provider ANIRA_EDGE_UNIFIED_TRANSFER where
+        /// its device computes in unified memory, ANIRA_EDGE_DEDICATED_TRANSFER where it has
+        /// memory of its own, ANIRA_EDGE_UNKNOWN where no probe established which (the plan row's
+        /// memory_kind, anira_memory_kind), the same class both ways, the reason saying which,
+        /// what the probe saw and the direction's move (an input's upload, an output's
+        /// readback). An engine that copies the slot into host memory of
+        /// its own returns ANIRA_EDGE_COPY and why. It may throw, as load may: the prepare fails
+        /// with the status, and the Loaded is deleted.
+        virtual EngineEdge edge(bool /*is_input*/,
+                                uint32_t /*slot*/,
+                                const EngineEdge& provider_rule) const {
+            return provider_rule;
+        }
     };
 
     /// The engine object under its id: the reverse-URI name model entries name it by
@@ -3150,7 +3271,9 @@ public:
     /// ANIRA_ERROR_INVALID_ARGUMENT there (anira.v2.custom excepted: the id of a 2.x custom
     /// backend, anira/compat/v2.hpp). The engines of one Pipeline have distinct ids; two
     /// objects may carry one id on two Pipelines (two instances of a plugin, each with its own
-    /// engine) and never share a loaded model.
+    /// engine) and never share a loaded model. They share the model's figure, which a prepare's
+    /// warm-up pass measures, so that identical plugins report the same latency: an id names one
+    /// implementation (anira.v2.custom excepted, whose figures stay per object).
     explicit Engine(std::string id) : m_id(std::move(id)) {}
     virtual ~Engine() = default;
     Engine(const Engine&) = delete;
@@ -3275,7 +3398,7 @@ struct EngineHandle {
 struct EngineTrampolines {
     /// The C engine of `engine`: the one its handle names while anything holds it, else a new
     /// one (anira_custom_engine_create) under the object's id, whose descriptor is read from the
-    /// object now: flags(), consumed_kinds(), providers(), the nine slots. A new C engine's
+    /// object now: flags(), consumed_kinds(), providers(), the ten slots. A new C engine's
     /// handle keeps it alive until Pipeline::add_engine added it and detached the handle
     /// (a refused addition detaches too, so the C engine goes again and release answers it).
     /// @throws Error when the C entry refuses the id (no reverse-URI name, or anira's own) or
@@ -3304,6 +3427,7 @@ struct EngineTrampolines {
         desc.init = &init;
         desc.release = &release;
         desc.query = &query;
+        desc.edge = &edge;
         // The C engine owns the copy from a successful create on and deletes it in release; a
         // refused create never calls release, so the copy dies here with the throw. The handle
         // exists first, so that nothing between the create and its owner can leak the engine.
@@ -3385,6 +3509,29 @@ struct EngineTrampolines {
                 return ANIRA_ERROR_INTERNAL;
             }
             *out_loaded = loaded.release();
+            return ANIRA_OK;
+        });
+    }
+
+    /// The Loaded's statement for one slot, over the provider rule's edge the record arrives
+    /// with; a call without a Loaded is ANIRA_ERROR_INTERNAL (an Engine always loads one).
+    static anira_status ANIRA_CALL edge(void* loaded,
+                                        uint32_t is_input,
+                                        uint32_t slot,
+                                        anira_engine_edge* out,
+                                        void* /*user_data*/) noexcept {
+        return guarded("edge", [&] {
+            if (loaded == nullptr) {
+                anira_log(ANIRA_LOG_ERROR,
+                          "anira.hpp",
+                          "the engine's edge statement was asked without a Loaded");
+                return ANIRA_ERROR_INTERNAL;
+            }
+            const EngineEdge rule{.edge_class = static_cast<anira_edge_class>(out->edge_class),
+                                  .reason = out->reason};
+            const EngineEdge stated = loaded_of(loaded).edge(is_input != 0, slot, rule);
+            out->edge_class = static_cast<uint32_t>(stated.edge_class);
+            out->reason = stated.reason;
             return ANIRA_OK;
         });
     }
@@ -3503,12 +3650,21 @@ public:
             },
             "anira_pipeline_capabilities_backends");
     }
-    /// One row, by domain and backend: the context's registry for a built-in engine, the
-    /// pipeline's for a custom one (engine_id set).
+    /// The row from domain `from` to backend `to`, the way an input goes: the context's
+    /// registry for a built-in engine, the pipeline's for a custom one (engine_id set).
     /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has such a row.
     anira_edge_info edge(Domain from, const BackendId& to) const {
-        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
-        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, from, &to, &row),
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, &row),
+                      "anira_pipeline_capabilities_edge");
+        return row;
+    }
+    /// The row from backend `from` to domain `to`, the way an output goes, from the same
+    /// registries.
+    /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has such a row.
+    anira_edge_info edge(const BackendId& from, Domain to) const {
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, &row),
                       "anira_pipeline_capabilities_edge");
         return row;
     }
@@ -3586,8 +3742,8 @@ public:
 
     /**
      * @brief Adds the pipeline's one Processor (anira_pipeline_add_processor), read once, here:
-     * its phases(), flags() and consumed_kinds() fill an anira_processor_desc, and only the
-     * phases of the mask reach it; its prepare runs per handler at anira_handler_prepare and
+     * its phases(), realtime_phases() and consumed_kinds() fill an anira_processor_desc, and only
+     * the phases of the mask reach it; its prepare runs per handler at anira_handler_prepare and
      * the Prepared it returns runs the phases and the reset of that handler until the C
      * unprepare deletes it. The pipeline's carrier holds a copy of the shared_ptr, which the
      * pipeline and every handler created from it share, so the object lives at least until the
@@ -3595,8 +3751,8 @@ public:
      * Processor::release answers this addition once. The order relative to the inference stage
      * means nothing.
      * @throws Error ANIRA_ERROR_INVALID_STATE for a second processor; ANIRA_ERROR_INVALID_ARGUMENT
-     * for a null one, a phases() bit that names none of the four phases or a flags() bit
-     * anira/abi/processor.h does not define.
+     * for a null one, or a phases() or realtime_phases() bit that names none of the four phases
+     * and reset.
      */
     Pipeline& add_processor(const std::shared_ptr<Processor>& processor) {
         if (processor == nullptr) {
@@ -3606,13 +3762,21 @@ public:
         const uint32_t phases = processor->phases();
         if ((phases & ~Processor::k_all_phases) != 0U) {
             throw Error(ANIRA_ERROR_INVALID_ARGUMENT,
-                        "anira::Processor::phases: a bit that names none of the four phases");
+                        "anira::Processor::phases: a bit that names none of the four phases "
+                        "and reset");
+        }
+        const uint32_t realtime_phases = processor->realtime_phases();
+        if ((realtime_phases & ~Processor::k_all_phases) != 0U) {
+            throw Error(ANIRA_ERROR_INVALID_ARGUMENT,
+                        "anira::Processor::realtime_phases: a bit that names none of the four "
+                        "phases and reset");
         }
         const std::span<const char* const> kinds = processor->consumed_kinds();
         anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
         desc.consumed_kinds = kinds.empty() ? nullptr : kinds.data();
         desc.num_consumed_kinds = static_cast<uint32_t>(kinds.size());
-        desc.flags = processor->flags();  // the C entry refuses a bit it does not define
+        desc.realtime_phases = realtime_phases;
+        desc.id = processor->id().empty() ? nullptr : processor->id().c_str();  // copied
         // A NULL phase slot means "not taking part": only the phases of the mask are filled, so
         // that a processor of other phases leaves anira's default pre_process / post_process
         // running.
@@ -3628,10 +3792,11 @@ public:
         if ((phases & Processor::k_after_inference) != 0U) {
             desc.after_inference = &detail::ProcessorTrampolines::after_inference;
         }
-        // The shared lifecycle: reset on the handler's Prepared (always filled, the base body
-        // does nothing), prepare returning it, unprepare deleting it, init and release for the
-        // registration.
-        desc.reset = &detail::ProcessorTrampolines::reset;
+        if ((phases & Processor::k_reset) != 0U) {
+            desc.reset = &detail::ProcessorTrampolines::reset;
+        }
+        // The shared lifecycle: prepare returning the Prepared, unprepare deleting it, init and
+        // release for the registration.
         desc.prepare = &detail::ProcessorTrampolines::prepare;
         desc.unprepare = &detail::ProcessorTrampolines::unprepare;
         desc.init = &detail::ProcessorTrampolines::init;

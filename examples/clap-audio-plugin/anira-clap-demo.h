@@ -3,10 +3,13 @@
 
 #include <anira/anira.hpp>
 #include <array>
+#include <atomic>
 #include <clap/helpers/plugin-proxy.hh>
 #include <clap/helpers/plugin.hh>
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 
 #include "../../extras/models/BypassEngine.h"
 #include "../../extras/models/hybrid-nn/HybridNNProcessor.h"
@@ -14,6 +17,12 @@
 #include "utils/DryWetMixer.h"
 
 namespace clap_plugin_example {
+
+/// A Backend choice: the name the parameter shows and the plan it stands for.
+struct BackendChoice {
+    const char* name;
+    anira::PlanQuery query;
+};
 
 struct AniraClapPluginExample
     : public clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
@@ -27,8 +36,8 @@ struct AniraClapPluginExample
                   uint32_t minFrameCount,
                   uint32_t maxFrameCount) noexcept override;
 
-    enum ParamIds : uint32_t { pmDryWet = 14256, pmBackend = 14257 };
-    static constexpr int m_number_params = 2;
+    enum ParamIds : uint32_t { pmDryWet = 14256, pmBackend = 14257, pmTryNonetheless = 14258 };
+    static constexpr int m_number_params = 3;
 
     bool implementsParams() const noexcept override { return true; }
     bool isValidParamId(clap_id paramId) const noexcept override;
@@ -60,13 +69,24 @@ public:
     bool implementsLatency() const noexcept override;
     uint32_t latencyGet() const noexcept override;
 
+    // clap.render: the host says whether it renders offline (a bounce), which runs the Backend
+    // choice whatever its verdict, since it does not run against the clock.
+    bool implementsRender() const noexcept override { return true; }
+    bool renderHasHardRealtimeRequirement() noexcept override { return false; }
+    bool renderSetMode(clap_plugin_render_mode mode) noexcept override;
+
 private:
-    /// Selects the plan of the report that runs the Backend choice (m_param_backend); an
-    /// engine this build or the model lacks has none, and the choice changes nothing. Called by
-    /// activate (the new report) and by every change of the parameter.
+    /// Selects the plan of the report that runs the Backend choice (m_param_backend). A choice
+    /// without a plan in the report runs the Bypassed plan instead, and so does one whose plan is
+    /// not real-time on this machine while "Try nonetheless" is off and the host renders in real
+    /// time. Called by activate (the new report), by every change of the two parameters and by a
+    /// change of the render mode.
     void apply_backend() noexcept;
 
-    double m_param_dry_wet{100.0}, m_param_backend{3};
+    // "Try nonetheless" (on: accept a backend that is not real-time here) stays as the user set
+    // it across activations, so the plugin asks again only while it is off. The constructor sets
+    // the Backend to its default choice.
+    double m_param_dry_wet{100.0}, m_param_backend{0}, m_param_try_nonetheless{0};
     std::unordered_map<clap_id, double*> m_param_to_value;
     uint32_t m_plugin_latency;
 
@@ -78,6 +98,21 @@ private:
     anira::ContractHandle m_contract;
     anira::InferenceHandler m_inference_handler;
     anira::PlanReport m_plan_report{nullptr};
+    // The Backend choices: the backends of this build that the model has an export for, then
+    // Bypassed (the last). The default is the first: ONNX Runtime where the build has it.
+    std::vector<BackendChoice> m_backends;
+    size_t m_bypassed;
+    static constexpr size_t k_default_backend = 0;
+    // Per Backend choice, whether the last activate's report has a plan for it (an engine can
+    // fail to run the model on this machine) and the real-time verdict (anira_rt_verdict) of that
+    // plan, UNMEASURED without one. Five engines and Bypassed at most.
+    static constexpr size_t k_max_backends = 6;
+    std::array<bool, k_max_backends> m_has_plan{};
+    std::array<uint32_t, k_max_backends> m_verdicts{};
+    // The host's render mode: set on the main thread (renderSetMode), and the copy apply_backend
+    // reads, taken by activate and by process when it changed.
+    std::atomic<bool> m_offline{false};
+    bool m_applied_offline{false};
 
     // The host's input as one planar tensor over its channel pointer.
     std::array<float*, 1> m_channels{};

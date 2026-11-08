@@ -309,12 +309,11 @@ struct LogConfig {
 };
 
 /**
- * @brief The 2.x ContextConfig (v2.3.0's name; the pre-release that preceded anira 3 called it
- * CoreConfig): a plain value with the 2.x fields, minted into an anira::ContextConfig when a
- * handler is built (to_context_config). The default thread count is k_threads_auto, the
- * sentinel anira resolves (half the hardware threads, at least 1, on WebAssembly too) where 2.x
- * stored the resolved count: a host that read m_num_threads back to learn the count reads the
- * sentinel.
+ * @brief The 2.x ContextConfig (v2.3.0's name): a plain value with the 2.x fields, minted into an
+ * anira::ContextConfig when a handler is built (to_context_config). The default thread count is
+ * k_threads_auto, the sentinel anira resolves (half the hardware threads, at least 1, on
+ * WebAssembly too) where 2.x stored the resolved count: a host that read m_num_threads back to
+ * learn the count reads the sentinel.
  */
 struct ContextConfig {
     static constexpr unsigned k_threads_auto = ANIRA_THREADS_AUTO;
@@ -1739,9 +1738,10 @@ private:
 };
 
 /**
- * @brief The anira::Processor that runs one 2.x PrePostProcessor: all four phases and
- * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST (the 2.x processor ran pre_process and post_process on the
- * audio thread already). What a 2.x host that moves to a 3.x Pipeline keeps its processor with:
+ * @brief The anira::Processor that runs one 2.x PrePostProcessor: all four phases and reset, with
+ * the real-time promise of pre_process, post_process and reset (the 2.x processor ran
+ * pre_process and post_process on the audio thread already; the hooks promise nothing). What a
+ * 2.x host that moves to a 3.x Pipeline keeps its processor with:
  * `pipeline.add_processor(std::make_shared<anira::v2::LegacyProcessor>(pp))`.
  * Per phase call it points the processor's view vectors at the chunk's rings and model tensors
  * (per entry, so concurrent chunks never share them) and calls the virtual with the backend of
@@ -1753,7 +1753,9 @@ public:
     explicit LegacyProcessor(PrePostProcessor& processor) noexcept : m_processor(processor) {}
 
     uint32_t phases() const noexcept override { return k_all_phases; }
-    uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+    uint32_t realtime_phases() const noexcept override {
+        return k_pre_process | k_post_process | k_reset;
+    }
     /// The view vectors per entry, sized for the handler. @throws Error{ANIRA_ERROR_CONFIG}
     /// when the processor's configuration has another tensor count than the handler's model.
     std::unique_ptr<anira::Processor::Prepared> prepare(const anira::PrepareInfo& info) override;
@@ -1952,10 +1954,9 @@ private:
 };
 
 /**
- * @brief The 2.x static face of the core (v2.3.0's anira::Context; the pre-release that preceded
- * anira 3 called it anira::Core), over the core entries. The rest of the 2.x class (the
- * inference threads of the host, the session list) is not declared: a host drives its own
- * threads through anira_inference_thread_create on a context.
+ * @brief The 2.x static face of the core (v2.3.0's anira::Context), over the core entries. The rest
+ * of the 2.x class (the inference threads of the host, the session list) is not declared: a host
+ * drives its own threads through anira_inference_thread_create on a context.
  */
 struct Context {
     /// anira_shutdown: ANIRA_ERROR_INVALID_STATE while a context or a handler lives, which

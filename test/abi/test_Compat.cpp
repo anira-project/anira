@@ -1054,10 +1054,17 @@ TEST(AbiCompat, ThePassthroughEngineCopiesEachInputOfItsIndex) {
         0.F,
         2);
     v2::PrePostProcessor pp(config);
+    // Every phase and reset, and the 2.x promise: pre_process, post_process and reset run on
+    // the audio thread, real-time; the hooks promise nothing.
+    const auto legacy = std::make_shared<v2::LegacyProcessor>(pp);
+    EXPECT_EQ(legacy->phases(), anira::Processor::k_all_phases);
+    EXPECT_EQ(legacy->realtime_phases(),
+              anira::Processor::k_pre_process | anira::Processor::k_post_process |
+                  anira::Processor::k_reset);
     anira::Pipeline pipeline;
     pipeline.add_engine(engine);
     pipeline.add_inference(config.model_config());
-    pipeline.add_processor(std::make_shared<v2::LegacyProcessor>(pp));
+    pipeline.add_processor(legacy);
     PipelineHandler handler(context, pipeline);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(contract_of(config, k_stream)), ANIRA_OK) << handler.m_err.message;

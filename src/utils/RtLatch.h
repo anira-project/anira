@@ -30,7 +30,8 @@ namespace anira {
 
 /// The status kinds anira_handler_rt_error latches: one bit each. ANIRA_ERROR_CAPACITY as an
 /// entry's return is back-pressure and never latches; a hop the scheduler dropped for want of a
-/// free inference slot latches it under its own kind (RtLatch::record_drop).
+/// free inference slot, or of room in a queue of the core, latches it under its own kind
+/// (RtLatch::record_drop).
 enum class RtKind : uint32_t {
     WrongContract = 1U << 0,
     NotPrepared = 1U << 1,

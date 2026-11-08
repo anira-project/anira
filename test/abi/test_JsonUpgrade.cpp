@@ -56,6 +56,9 @@ void expect_axes(const anira_tensor_spec& spec,
 // test_abi binary runs its suites in registration order: the one-per-process warning.
 #if defined(ENABLE_LOGGING) && !defined(NDEBUG)
 TEST(AbiJsonUpgrade, WarnsOncePerProcess) {
+    // An earlier test of the binary may have upgraded a document already: the warning starts
+    // armed, as at the process's first upgrade.
+    anira::capi::rearm_upgrade_warning();
     const anira_log_level previous = anira::get_log_level();
     anira::set_log_level(ANIRA_LOG_WARNING);
     anira_test::RecordCollector collector;

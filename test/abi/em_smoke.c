@@ -88,15 +88,16 @@ static void check_throwing_hook(void) {
         "anira_em_processor_desc_init");
     check(desc.pre_process != NULL && desc.post_process == NULL && desc.release != NULL,
           "one slot per bit, the release slot always");
-    check(desc.flags == 0u, "no promise unless one is stated");
+    check(desc.realtime_phases == 0u, "no promise unless one is stated");
     desc.release(desc.user_data);
     check_status(anira_em_processor_desc_init(&desc,
                                               SMOKE_THROWING_KEY,
                                               ANIRA_EM_PROCESSOR_HOOK_PRE,
-                                              ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST),
+                                              ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS)),
                  NULL,
                  "anira_em_processor_desc_init with a promise");
-    check(desc.flags == ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST, "the stated promise, as given");
+    check(desc.realtime_phases == ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS),
+          "the stated promise, as given");
     anira_processor_ctx ctx;
     memset(&ctx, 0, sizeof ctx);
     /* Three throws within a second: three failed calls, one console line (the report is
@@ -133,18 +134,57 @@ static void check_query_engine(anira_pipeline* pipeline, const anira_context* co
     static const char* const k_providers[2] = {"cpu", "org.anira-test.never-usable"};
     anira_error err = ANIRA_ERROR_INIT;
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
-    check(anira_em_engine_desc_init(&desc, SMOKE_QUERY_KEY, 4u, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
+    check(anira_em_engine_desc_init(&desc, SMOKE_QUERY_KEY, 4u, 0, NULL, NULL) ==
+              ANIRA_ERROR_INVALID_ARGUMENT,
           "anira_em_engine_desc_init refuses an undefined bit");
     check_status(anira_em_engine_desc_init(&desc,
                                            SMOKE_QUERY_KEY,
                                            ANIRA_EM_ENGINE_HOOK_QUERY,
-                                           ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL),
+                                           ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                           NULL,
+                                           NULL),
                  NULL,
                  "anira_em_engine_desc_init");
     check(desc.flags == ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, "the engine's flags, as given");
     check(desc.process != NULL && desc.query != NULL && desc.reset == NULL && desc.init == NULL &&
-              desc.release != NULL,
-          "process always, query per bit, the release slot always, init never");
+              desc.release != NULL && desc.edge == NULL,
+          "process always, query per bit, the release slot always, init never, no edge "
+          "statement without one");
+    /* Edge statements per direction: refused where one names no class; else kept, the reasons
+       copied, and answered by the descriptor's edge for the slots of their direction without
+       crossing into JavaScript; a direction without one keeps the provider rule's record. */
+    {
+        anira_engine_desc stated = ANIRA_ENGINE_DESC_INIT;
+        anira_engine_edge edge = ANIRA_ENGINE_EDGE_INIT;
+        edge.edge_class = 9u;
+        check(anira_em_engine_desc_init(&stated, SMOKE_QUERY_KEY, 0u, 0u, &edge, NULL) ==
+                  ANIRA_ERROR_INVALID_ARGUMENT,
+              "anira_em_engine_desc_init refuses an input class anira_edge_class does not name");
+        check(anira_em_engine_desc_init(&stated, SMOKE_QUERY_KEY, 0u, 0u, NULL, &edge) ==
+                  ANIRA_ERROR_INVALID_ARGUMENT,
+              "anira_em_engine_desc_init refuses an output class anira_edge_class does not name");
+        char reason[] = "two wasm memories";
+        edge.edge_class = ANIRA_EDGE_COPY;
+        edge.reason = reason;
+        check_status(anira_em_engine_desc_init(&stated, SMOKE_QUERY_KEY, 0u, 0u, NULL, &edge),
+                     NULL,
+                     "anira_em_engine_desc_init with an output statement");
+        reason[0] = 'X';
+        anira_engine_edge output = ANIRA_ENGINE_EDGE_INIT;
+        check(stated.edge != NULL &&
+                  stated.edge(NULL, 0u, 1u, &output, stated.user_data) == ANIRA_OK &&
+                  output.edge_class == ANIRA_EDGE_COPY && output.reason != NULL &&
+                  strcmp(output.reason, "two wasm memories") == 0,
+              "the descriptor's edge answers an output with its statement, the record's copy");
+        anira_engine_edge input = ANIRA_ENGINE_EDGE_INIT;
+        input.edge_class = ANIRA_EDGE_UNIFIED_TRANSFER;
+        input.reason = "the rule";
+        check(stated.edge(NULL, 1u, 0u, &input, stated.user_data) == ANIRA_OK &&
+                  input.edge_class == ANIRA_EDGE_UNIFIED_TRANSFER && input.reason != NULL &&
+                  strcmp(input.reason, "the rule") == 0,
+              "an input, without a statement, keeps the provider rule it arrived with");
+        stated.release(stated.user_data); /* never created: the record is the caller's to free */
+    }
     desc.providers = k_providers;
     desc.num_providers = 2;
     anira_custom_engine* engine = NULL;
@@ -183,9 +223,8 @@ static void check_query_engine(anira_pipeline* pipeline, const anira_context* co
     check(smoke_count("query") >= 1u, "the engine's query crossed at the capabilities call");
 }
 
-/* A pre_process hook without ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST: under a Hard contract it runs
-   on the driving thread, so prepare refuses the processor instead of trusting a promise nobody
-   made. */
+/* A pre_process hook without its bit in realtime_phases: under a Hard contract it runs on the
+   driving thread, so prepare refuses the processor instead of trusting a promise nobody made. */
 static void check_unpromised_processor(anira_context* context, const anira_contract* contract) {
     anira_error err = ANIRA_ERROR_INIT;
     anira_model_config* model = smoke_model(&err);
@@ -206,6 +245,8 @@ static void check_unpromised_processor(anira_context* context, const anira_contr
                                                  SMOKE_ENGINE_KEY,
                                                  0,
                                                  ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                                 NULL,
+                                                 NULL,
                                                  &err),
                  &err,
                  "anira_em_pipeline_add_js_engine");
@@ -221,9 +262,8 @@ static void check_unpromised_processor(anira_context* context, const anira_contr
                  &err,
                  "anira_handler_create");
     err = ANIRA_ERROR_INIT;
-    check(
-        anira_handler_prepare(handler, contract, &err) == ANIRA_ERROR_CONFIG,
-        "a Hard prepare refuses a pre_process hook without ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST");
+    check(anira_handler_prepare(handler, contract, &err) == ANIRA_ERROR_CONFIG,
+          "a Hard prepare refuses a pre_process hook without its bit in realtime_phases");
     anira_handler_destroy(handler);
     anira_pipeline_destroy(pipeline);
     anira_model_config_destroy(model);
@@ -257,8 +297,14 @@ static void check_pipeline(void) {
     check_status(anira_pipeline_add_inference(pipeline, variants, 1, &candidate, 1, &err),
                  &err,
                  "anira_pipeline_add_inference");
-    check(anira_em_pipeline_add_js_engine(pipeline, "no-dot", SMOKE_ENGINE_KEY, 0, 0, &err) ==
-              ANIRA_ERROR_INVALID_ARGUMENT,
+    check(anira_em_pipeline_add_js_engine(pipeline,
+                                          "no-dot",
+                                          SMOKE_ENGINE_KEY,
+                                          0,
+                                          0,
+                                          NULL,
+                                          NULL,
+                                          &err) == ANIRA_ERROR_INVALID_ARGUMENT,
           "anira_em_pipeline_add_js_engine refuses an id without a '.'");
     check_status(anira_em_pipeline_add_js_engine(
                      pipeline,
@@ -266,24 +312,28 @@ static void check_pipeline(void) {
                      SMOKE_ENGINE_KEY,
                      ANIRA_EM_ENGINE_HOOK_QUERY,
                      ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL | ANIRA_ENGINE_FLAG_REALTIME_SAFE,
+                     NULL,
+                     NULL,
                      &err),
                  &err,
                  "anira_em_pipeline_add_js_engine");
-    check_status(anira_em_pipeline_add_js_processor(
-                     pipeline,
-                     SMOKE_PROCESSOR_KEY,
-                     ANIRA_EM_PROCESSOR_HOOK_PRE | ANIRA_EM_PROCESSOR_HOOK_POST |
-                         ANIRA_EM_PROCESSOR_HOOK_RESET | ANIRA_EM_PROCESSOR_HOOK_INIT |
-                         ANIRA_EM_PROCESSOR_HOOK_PREPARE | ANIRA_EM_PROCESSOR_HOOK_UNPREPARE |
-                         ANIRA_EM_PROCESSOR_HOOK_RELEASE,
-                     ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST,
-                     &err),
-                 &err,
-                 "anira_em_pipeline_add_js_processor");
+    check_status(
+        anira_em_pipeline_add_js_processor(
+            pipeline,
+            SMOKE_PROCESSOR_KEY,
+            ANIRA_EM_PROCESSOR_HOOK_PRE | ANIRA_EM_PROCESSOR_HOOK_POST |
+                ANIRA_EM_PROCESSOR_HOOK_RESET | ANIRA_EM_PROCESSOR_HOOK_INIT |
+                ANIRA_EM_PROCESSOR_HOOK_PREPARE | ANIRA_EM_PROCESSOR_HOOK_UNPREPARE |
+                ANIRA_EM_PROCESSOR_HOOK_RELEASE,
+            ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) |
+                ANIRA_PHASE_BIT(ANIRA_PHASE_RESET),
+            &err),
+        &err,
+        "anira_em_pipeline_add_js_processor");
     check(anira_em_pipeline_add_js_processor(pipeline,
                                              SMOKE_PROCESSOR_KEY,
                                              ANIRA_EM_PROCESSOR_HOOK_PRE,
-                                             ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST,
+                                             ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS),
                                              &err) == ANIRA_ERROR_INVALID_STATE,
           "a second JavaScript processor is refused");
     check_query_engine(pipeline, context);

@@ -8,11 +8,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "../utils/RealtimeSanitizer.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"
+#include "Warmup.h"
 
 /// The context config the core reads (anira_context_config_* of anira/abi/config.h); its body
 /// lives in src/capi/handles.h. Declarations that take it by const& or return it by value are
@@ -35,6 +37,9 @@ namespace anira {
 /// The core-owned real-time log drain thread (src/scheduler/LogDrainLoop.h); anira's own, not
 /// tanh-lib's.
 class LogDrainLoop;
+/// What a model's figure is a figure of (src/scheduler/FigureKey.h): a parameter type here,
+/// complete in Core.cpp and at every caller.
+struct FigureKey;
 
 namespace detail {
 struct UnloadHook;
@@ -398,6 +403,81 @@ public:
                                 const RingDtypes& ring_dtypes = {});
 
     /**
+     * @brief One plan's warm-up pass: ordinary inferences of the plan through the session, on the
+     * inference threads
+     *
+     * The contract's warm-up (the session's HardContract: UNTIL_STABLE or FIXED n) decides how
+     * many, WarmupEstimator when to stop. Each inference is one job: a free struct of the
+     * session's pool stamped with @p plan and the session's generation, its inputs the pool's
+     * zero-filled storage (no pre_process), submitted as pre_process() submits a chunk (a shared
+     * session through the inference queue, an exclusive one through its pending queue and the
+     * dispatch gate), waited for (natively blocking, on WebAssembly spinning: the main thread may
+     * not block), and given back to the free pool without post_process: the rings are never
+     * touched. Its time is the job's on its inference thread
+     * (SessionElement::ThreadSafeStruct::m_inference_ns: the declared state's feed and capture,
+     * the processor's inference hooks, the engine call). What the pass leaves in the session
+     * (the structs' outputs, the declared state, an exclusive engine's state) is the caller's to
+     * clear: prepare_session() again, which drains, bumps the generation and rebuilds the pool.
+     *
+     * Control thread, after prepare_session() and before any chunk of the session exists; the
+     * session's plans have their prepared handles.
+     *
+     * @param session The session, prepared
+     * @param plan The plan's index into the session's table
+     * @return What the pass measured
+     * @throws StatusError ANIRA_ERROR_INVALID_STATE when no inference thread is inside its loop
+     * (a context without a pool whose host threads do not run; on WebAssembly a pool whose Workers
+     * have not started yet) or when an inference has not completed within k_warm_up_timeout;
+     * ANIRA_ERROR_ENGINE when an inference failed (its hook or its engine; the inference thread
+     * logged why)
+     */
+    static WarmupFigure warm_up_plan(const std::shared_ptr<SessionElement>& session, uint32_t plan);
+
+    /// How long the warm-up pass waits for one inference before the prepare fails: a hang guard
+    /// (a Worker that never runs, a dead engine), far above any inference a stream could run.
+    static constexpr std::chrono::seconds k_warm_up_timeout{10};
+
+    /// How long the warm-up pass waits on a semaphore before it kicks an exclusive session's
+    /// dispatch chain again (warm_up_inference()).
+    static constexpr std::chrono::milliseconds k_warm_up_kick{1};
+
+    /**
+     * @brief The figure the index holds for a key, when it answers a warm-up
+     *
+     * A figure answers UNTIL_STABLE when UNTIL_STABLE measured it, and FIXED n when UNTIL_STABLE
+     * or FIXED m >= n did; a weaker one is measured again. Does not wait for a prepare that is
+     * measuring the key (claim_figure() does). Any control thread.
+     *
+     * @param key What the figure is a figure of
+     * @param mode The contract's warm-up (UNTIL_STABLE or FIXED)
+     * @param iterations FIXED's count
+     * @return The figure, or nothing (none, or a weaker one)
+     */
+    static std::optional<ModelFigure> find_figure(const FigureKey& key,
+                                                  anira_warmup_mode mode,
+                                                  uint32_t iterations);
+
+    /**
+     * @brief The figure for a key, or the right to measure it
+     *
+     * Waits while another prepare measures the key, then answers as find_figure(). Without an
+     * answer, the key is the caller's to measure: a later claim of it waits until the caller
+     * publishes (publish_figure()) or abandons (abandon_figure()) it. A caller holds one claim at
+     * a time and waits for none while it holds one, so two prepares never wait for each other.
+     *
+     * @return The figure, or nothing (the caller measures now)
+     */
+    static std::optional<ModelFigure> claim_figure(const FigureKey& key,
+                                                   anira_warmup_mode mode,
+                                                   uint32_t iterations);
+
+    /// The figure the claimer measured, for every later prepare of the key; ends the claim.
+    static void publish_figure(const FigureKey& key, const ModelFigure& figure);
+
+    /// Ends a claim without a figure (the pass failed): the next claim of the key measures.
+    static void abandon_figure(const FigureKey& key);
+
+    /**
      * @brief Gets the number of registered inference sessions
      *
      * @return Number of currently registered sessions
@@ -529,21 +609,6 @@ public:
      * @param session Shared pointer to the session to reset
      */
     static void reset_session(const std::shared_ptr<SessionElement>& session);
-
-    /**
-     * @brief Get a reference to the global inference queue
-     *
-     * Returns a reference to the global concurrent queue used for inference requests.
-     * This is used to construct InferenceThreads (user-managed or WASM
-     * worker-driven) that consume from the global queue; dequeueing is
-     * non-tokenized and allocation-free.
-     *
-     * The queue lives in the immortal core, so the reference stays valid for as
-     * long as the library is loaded — in particular after all sessions were released.
-     *
-     * @return Reference to the global inference queue
-     */
-    static InferenceQueue& get_static_inference_queue();
 
     /**
      * @brief Factory for a user-owned InferenceThread bound to the global inference queue.
@@ -798,6 +863,17 @@ private:
     static bool pre_process(const std::shared_ptr<SessionElement>& session);
 
     /**
+     * @brief One inference of warm_up_plan(): a free struct stamped with the plan, submitted as
+     * pre_process() submits one, waited for and given back to the free pool
+     *
+     * @param session The session, prepared, with no chunk in flight
+     * @param plan The plan's index into the session's table
+     * @return The job's time on its inference thread, in ns
+     * @throws StatusError as warm_up_plan() (no free struct: ANIRA_ERROR_INTERNAL)
+     */
+    static int64_t warm_up_inference(const std::shared_ptr<SessionElement>& session, uint32_t plan);
+
+    /**
      * @brief Whether every streamable input ring holds a full hop for the next inference
      *
      * @param session Shared pointer to the session to check
@@ -862,13 +938,14 @@ private:
     /**
      * @brief Enqueues a prepared task into the global inference queue, dropping it on failure
      *
-     * If the queue is momentarily full, the inference is dropped: the task completes
-     * with zeroed output at its stream position (its struct and timestamp stay claimed
-     * until the output side consumes it), so the output remains time-aligned.
-     *
      * The enqueue always uses the session's own producer token
      * (SessionElement::m_producer_token), which keeps it allocation-free and
-     * real-time safe on the calling (audio) thread.
+     * real-time safe on the calling (audio) thread; the token's producer holds the blocks for
+     * every job the session can have queued (reserve_inference_capacity). If it still finds no
+     * room (an inference thread stalled inside its dequeue while the session's other jobs
+     * lapped those blocks), the inference is dropped: the task completes with zeroed output at
+     * its stream position (its struct and timestamp stay claimed until the output side consumes
+     * it), so the output remains time-aligned.
      *
      * @param session Shared pointer to the session that owns the task
      * @param thread_safe_struct The prepared task to enqueue
@@ -901,8 +978,10 @@ private:
      * dequeues the session's never-started tasks from the global queue and
      * completes them as silence at their stream positions, and repeats until a
      * full pass finds nothing (a worker mid-continuation can enqueue into a
-     * single pass's window). Other sessions' tasks are requeued; if requeueing
-     * fails they are completed as silence instead of being silently lost.
+     * single pass's window). The session's placeholders (reserve_inference_capacity) only give
+     * their count back. Other sessions' tasks and placeholders are requeued with the
+     * allocating enqueue, however many; only if that allocation fails is a task completed as
+     * silence instead of being silently lost.
      *
      * @param session Shared pointer to the session whose queue to drain
      *
@@ -913,6 +992,28 @@ private:
      * @warning Make sure to uninitialize the session before calling this method.
      */
     static void drain_inference_queue(const std::shared_ptr<SessionElement>& session)
+        ANIRA_BLOCKING;
+
+    /**
+     * @brief Gives the session's producer token the blocks for every job the session can have
+     * in the inference queue at once
+     *
+     * prepare_session's step after the session's prepare built its struct pool: one
+     * allocating enqueue_bulk through SessionElement::m_producer_token of
+     * detail::reservation_size(SessionElement::queue_capacity()) placeholders (QueueCapacity.h:
+     * the bulk form links every block before a consumer can take one), each a job without a
+     * chunk, counted in the session's in-flight count like a job; an inference thread that
+     * dequeues one gives its count back and runs nothing, and drain_inference_queue takes the
+     * rest back and waits for the count. Afterwards the audio thread's try_enqueue through the
+     * token finds room for every chunk of the pool at every position of the producer's blocks,
+     * without allocating. A producer keeps its blocks, so a re-reservation through a token that
+     * took a released session's producer only adds what the new pool needs beyond them.
+     *
+     * @param session The session, prepared and not initialised (nothing of it queued)
+     * @throws std::bad_alloc when the blocks cannot be allocated (the prepare fails with
+     * ANIRA_ERROR_OUT_OF_MEMORY)
+     */
+    static void reserve_inference_capacity(const std::shared_ptr<SessionElement>& session)
         ANIRA_BLOCKING;
 
     /**
@@ -970,19 +1071,6 @@ private:
      */
     static std::shared_ptr<engine::BuiltinEngine> find_or_make_builtin_engine(State& state,
                                                                               anira_engine engine);
-
-    static constexpr size_t k_min_capacity_inference_queue = 10000;  ///< Minimum pre-allocated
-                                                                     ///< capacity of the inference
-                                                                     ///< queue
-    static constexpr size_t k_max_num_instances = 1000;  ///< Pre-allocation hint for explicit
-                                                         ///< producers (one per concurrently
-                                                         ///< live session, see
-                                                         ///< SessionElement::m_producer_token)
-    static constexpr size_t k_max_num_implicit_producers = 8;  ///< Pre-allocation hint for
-                                                               ///< implicit producers (tokenless
-                                                               ///< enqueues from off-RT control
-                                                               ///< threads, e.g. requeueing in
-                                                               ///< drain_inference_queue)
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr

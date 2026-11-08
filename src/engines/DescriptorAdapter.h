@@ -16,6 +16,7 @@
  * engine's unprepare).
  */
 #include <anira/abi/engine.h>
+#include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -92,6 +93,12 @@ public:
     /// sees in anira_engine_ctx.loaded; NULL before load and for a descriptor without a load.
     void* engine_loaded() const noexcept override { return m_loaded_pointer; }
 
+    /// The engine's own statement per slot, asked once per slot after the load (the
+    /// descriptor's edge, anira_engine_edge_fn, its record arriving with the provider rule of
+    /// the slot's direction), moved by the engine wherever the bytes move; the provider rule of
+    /// the slot's direction for a descriptor without one (Loaded::provider_edge).
+    SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override;
+
 protected:
     void do_load(const Model& model) override;
     std::unique_ptr<Prepared> do_prepare(const PrepareRequest& request) override;
@@ -99,6 +106,11 @@ protected:
     void require_initialised() const override;
 
 private:
+    /// The descriptor's load over the record, the loaded pointer kept and its unload owed.
+    void load_engine(const Model& model);
+    /// The descriptor's edge, once per slot, inputs first: the engine's statements, kept; the
+    /// provider rule's edge is what each call starts from.
+    void state_edges(const Model& model);
     /// The unload of a successful load, once.
     void unload() noexcept;
 
@@ -107,6 +119,14 @@ private:
     std::shared_ptr<const anira_model_config> m_model;
     void* m_loaded_pointer = nullptr;
     bool m_unload_owed = false;  ///< a successful load is outstanding
+    /// What the engine stated per slot after its load: the class and the reason, copied; empty
+    /// for a descriptor without an edge statement.
+    struct Stated {
+        anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
+        std::string m_reason;  ///< empty: nothing to say
+    };
+    std::vector<Stated> m_input_edges;
+    std::vector<Stated> m_output_edges;
 };
 
 /// One session's handle over a custom engine's loaded model: the constructor calls the

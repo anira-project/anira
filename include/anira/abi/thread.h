@@ -69,11 +69,13 @@ ANIRA_API anira_bool ANIRA_CALL anira_inference_thread_execute(anira_inference_t
 
 /**
  * @brief Spawns a thread that runs the loop: natively an OS thread at the inference-thread
- * scheduling class (real-time where granted), on WebAssembly a Wasm Worker on the
- * module's memory, which imports the context's worker module
- * (anira_em_context_config_set_worker_module) first. A second start while the loop runs,
- * and an operating system or browser that refuses the thread, are returned, never
- * silent: is_running stays 0 then.
+ * scheduling class (real-time where granted), which this call waits for until it is
+ * inside the loop, so a prepare that warms up (its pass needs a thread in its loop)
+ * finds it serving; on WebAssembly a Wasm Worker on the module's memory, which imports
+ * the context's worker module (anira_em_context_config_set_worker_module) first and
+ * enters the loop after this call returned. A second start while the loop runs, and an
+ * operating system or browser that refuses the thread, are returned, never silent:
+ * is_running stays 0 then.
  * @param thread The object.
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL thread; ANIRA_ERROR_INVALID_STATE

@@ -57,6 +57,35 @@ inline constexpr const char* k_stereo_gain_model_json =
 inline constexpr const char* k_stereo_gain_contract_json =
     ANIRA_EXTRAS_MODEL_FILE("model-pool/stereo_gain.contract.json");
 
+// TypedGainNetwork (example-models): the gain fixture's tensor set at int16, int8 and float16,
+// computed in float32 and cast at the boundary, so each runtime needs only a Cast for the
+// boundary dtype and every output is exact for small integers and a gain of 2. Rows for every
+// engine (the TFLite file's gain is [1, 1, 1] and its outputs keep the signature's keys, as
+// SimpleGainNetwork's); the contract is gain.contract.json. The _unplanned files carry one
+// ExecuTorch row each: the method at a static 512-sample window with its inputs and outputs
+// left out of the memory plan, which a runtime binds in place.
+inline constexpr const char* k_typed_gain_int16_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/typed_gain_int16.model.json");
+inline constexpr const char* k_typed_gain_int8_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/typed_gain_int8.model.json");
+inline constexpr const char* k_typed_gain_float16_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/typed_gain_float16.model.json");
+inline constexpr const char* k_typed_gain_int16_unplanned_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/typed_gain_int16_unplanned.model.json");
+inline constexpr const char* k_typed_gain_int8_unplanned_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/typed_gain_int8_unplanned.model.json");
+inline constexpr const char* k_typed_gain_float16_unplanned_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/typed_gain_float16_unplanned.model.json");
+// The ONNX dtype matrix: dtype_matrix_<word>.onnx for each of the ten dtypes anira names
+// (data [1, 1, N] -> Cast(float32) -> x 2 -> Cast back -> processed_data), a path prefix the
+// word and ".onnx" complete.
+inline constexpr const char* k_dtype_matrix_onnx_prefix =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/example-models/TypedGainNetwork/models/dtype_matrix_");
+// A fully integer TFLite model (y = 0.5 x on [1, 1, 64]) whose int8 input and output carry a
+// scale and a zero point: quantised I/O, which the engines refuse at load.
+inline constexpr const char* k_quantized_gain_int8_tflite = ANIRA_EXTRAS_MODEL_FILE(
+    "model-pool/example-models/TypedGainNetwork/models/quantized_gain_network_int8.tflite");
+
 // StatefulAccumulatorNetwork, stereo: a 64-sample stream with a declared State pair around it
 // ([1, 2, 2]: the running sum and a block counter per channel; the state stands first in the
 // inputs and last in the outputs, and anira feeds it back). Rows for every engine: the TFLite

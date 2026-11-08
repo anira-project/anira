@@ -25,6 +25,7 @@ This section is a mix of hand-written guides and an auto-generated API reference
    :caption: Anira Web
 
    installation_building
+   memory
    basic_usage
    architecture
    audio_nodes

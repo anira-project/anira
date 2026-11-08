@@ -200,6 +200,59 @@ TEST(AbiJsonModel, AStatePairRoundTrips) {
     anira_tensor_spec_destroy(spec);
 }
 
+// A Streamed tensor's window is optional, and both cases round-trip: a window is written back
+// exactly when it was declared. The window a validation derives for "audio_in" (its Time extent)
+// lives in the derived form only, so the file written back still declares none; an overlap
+// without a window, which validation refuses, is kept as it was read.
+TEST(AbiJsonModel, AWindowIsWrittenBackExactlyWhenDeclared) {
+    constexpr const char* k_text = R"({
+        "models": [{"engine": "anira.v2.custom", "path": "custom-processor"}],
+        "inputs": [
+            {"name": "audio_in", "dtype": "float32", "role": "streamed",
+             "axes": [["batch", 1], ["time", 512]]}
+        ],
+        "outputs": [
+            {"name": "audio_out", "dtype": "float32", "role": "streamed",
+             "axes": [["batch", 1], ["time", 512]], "window": {"min": 512, "max": 512},
+             "overlap": 0},
+            {"name": "env", "dtype": "float32", "role": "streamed",
+             "axes": [["batch", 1], ["time", "dynamic"]], "overlap": 64}
+        ]
+    })";
+    const Loaded first(k_text);
+    ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
+    const anira_model_config& cfg = *first.m_config;
+    EXPECT_FALSE(cfg.m_inputs[0].window_declared());
+    EXPECT_TRUE(cfg.m_outputs[0].window_declared());
+    EXPECT_FALSE(cfg.m_outputs[1].window_declared());
+    EXPECT_EQ(cfg.m_outputs[1].m_overlap, 64);
+    int64_t window_min = -1;
+    int64_t window_max = -1;
+    int64_t overlap = -1;
+    ASSERT_EQ(anira_tensor_spec_window(&cfg.m_inputs[0], &window_min, &window_max, &overlap),
+              ANIRA_OK);
+    EXPECT_EQ(window_min, 0);
+    EXPECT_EQ(window_max, 0);
+    EXPECT_EQ(overlap, 0);
+
+    const std::string once = model_text(first.m_config);
+    const auto count = [&once](const char* key) {
+        size_t found = 0;
+        for (size_t at = once.find(key); at != std::string::npos; at = once.find(key, at + 1)) {
+            ++found;
+        }
+        return found;
+    };
+    EXPECT_EQ(count("\"window\""), 1U) << "audio_out's alone:\n" << once;
+    EXPECT_EQ(count("\"overlap\""), 2U) << "audio_out's beside its window, env's alone:\n" << once;
+    EXPECT_NE(once.find("\"overlap\": 64"), std::string::npos) << once;
+    const Loaded second(once.c_str());
+    ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
+    EXPECT_FALSE(second.m_config->m_inputs[0].window_declared());
+    EXPECT_TRUE(second.m_config->m_outputs[0].window_declared());
+    EXPECT_EQ(model_text(second.m_config), once);
+}
+
 TEST(AbiJsonModel, StateSourceRejectionsNameTheKeyPath) {
     // The pairing is stated on the input: the key on an output spec is refused where it stands.
     EXPECT_EQ(load_fails(R"({"outputs": [{"name": "h_out", "role": "state",
@@ -484,7 +537,7 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     EXPECT_EQ(hard->hard()->m_host_rate, 48000.0);
     EXPECT_EQ(hard->hard()->m_budget, ANIRA_BUDGET_MEASURED);
     EXPECT_EQ(hard->hard()->m_warmup, ANIRA_WARMUP_UNTIL_STABLE);
-    EXPECT_EQ(hard->m_edge_cost, ANIRA_EDGE_COST_PERMISSIVE);
+    EXPECT_EQ(hard->m_edge_cost, ANIRA_EDGE_UNKNOWN) << "no edge_cost key: no limit";
     anira_contract_destroy(hard);
 
     anira_contract* async_contract = nullptr;
@@ -497,7 +550,7 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     EXPECT_EQ(anira_contract_get_kind(async_contract), ANIRA_CONTRACT_ASYNC);
     EXPECT_DOUBLE_EQ(async_contract->asynchronous()->m_deadline_ms, 33.3);
     EXPECT_EQ(async_contract->asynchronous()->m_on_late, ANIRA_LATE_DROP);
-    EXPECT_EQ(async_contract->m_edge_cost, ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(async_contract->m_edge_cost, ANIRA_EDGE_ZERO_COPY);
     anira_contract_destroy(async_contract);
 
     const char* explicit_text =
@@ -513,6 +566,26 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     EXPECT_EQ(hard->hard()->m_host_block_max, 0u)
         << "the host-block keys are optional; the host patches them";
     anira_contract_destroy(hard);
+}
+
+// A contract file's "edge_cost" takes one word per edge class, in the enum's order of cost:
+// nothing moves, a copy within one domain, a crossing within unified memory, any crossing.
+TEST(AbiJsonContract, TheEdgeCostWordsNameTheFourClasses) {
+    const std::vector<std::pair<const char*, anira_edge_class>> words{
+        {"zero_copy", ANIRA_EDGE_ZERO_COPY},
+        {"copy", ANIRA_EDGE_COPY},
+        {"unified_transfer", ANIRA_EDGE_UNIFIED_TRANSFER},
+        {"dedicated_transfer", ANIRA_EDGE_DEDICATED_TRANSFER},
+    };
+    for (const auto& [word, edge_class] : words) {
+        const std::string text = std::string(R"({"hard": {}, "edge_cost": ")") + word + R"("})";
+        anira_contract* contract = nullptr;
+        anira_error err = ANIRA_ERROR_INIT;
+        ASSERT_EQ(anira_contract_from_json(text.c_str(), text.size(), &contract, &err), ANIRA_OK)
+            << err.message;
+        EXPECT_EQ(anira_contract_edge_cost(contract), edge_class) << word;
+        anira_contract_destroy(contract);
+    }
 }
 
 // "callback" names the policy; a file cannot carry the function, so a parsed contract has
@@ -693,7 +766,12 @@ TEST(AbiJsonContract, FractionalHostBlocks) {
 TEST(AbiJsonContract, Rejections) {
     const std::vector<std::pair<const char*, const char*>> cases = {
         {R"({"hard": {}, "async": {}})", "exactly one root"},
-        {R"({"edge_cost": "strict"})", "exactly one root"},
+        {R"({"edge_cost": "zero_copy"})", "exactly one root"},
+        {R"({"hard": {}, "edge_cost": "strict"})",
+         R"("strict" is not one of "zero_copy", "copy", "unified_transfer", "dedicated_transfer")"},
+        // No limit is the missing key: ANIRA_EDGE_UNKNOWN has no word.
+        {R"({"hard": {}, "edge_cost": "unknown"})",
+         R"("unknown" is not one of "zero_copy", "copy", "unified_transfer", "dedicated_transfer")"},
         {R"({"hard": {"budget": "guess"}})", "hard.budget"},
         {R"({"hard": {"warmup": {"fixed": -1}}})", "hard.warmup.fixed"},
         {R"({"hard": {"host_block_min": 9, "host_block_max": 1}})",

@@ -149,7 +149,9 @@ static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
         processor.struct_size == sizeof(anira_processor_desc) && processor.user_data == nullptr ? 1
                                                                                                 : 0;
     checks +=
-        processor.flags == 0U && processor.release == nullptr && processor.init == nullptr ? 1 : 0;
+        processor.realtime_phases == 0U && processor.release == nullptr && processor.init == nullptr
+            ? 1
+            : 0;
     checks += processor.reset == nullptr && processor.unprepare == nullptr ? 1 : 0;
     checks += info.struct_size == sizeof(anira_prepare_info) && info.handler == nullptr &&
                       info.num_entries == 0U && info.flags == 0U
@@ -235,8 +237,7 @@ static_assert(noexcept(anira_custom_engine_detach(nullptr)));
 static_assert(noexcept(anira_pipeline_add_engine(nullptr, nullptr, nullptr)));
 static_assert(
     noexcept(anira_pipeline_capabilities_backends(nullptr, nullptr, 0, nullptr, nullptr)));
-static_assert(noexcept(
-    anira_pipeline_capabilities_edge(nullptr, nullptr, ANIRA_DOMAIN_HOST, nullptr, nullptr)));
+static_assert(noexcept(anira_pipeline_capabilities_edge(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_handler_num_entries(nullptr)));
 static_assert(noexcept(anira_contract_set_host_domain(nullptr, nullptr, ANIRA_DOMAIN_HOST)));
 // The read-back of anira/abi/config.h: one pin per shape (a string, a count, an enum, a spec
@@ -298,7 +299,7 @@ static_assert(std::is_invocable_r_v<anira_status,
                                     int64_t*>);
 // The callback typedef carries no real-time attribute: a plain function converts to it.
 static_assert(std::is_same_v<decltype(anira_processor_ctx::entry), uint32_t>);
-static_assert(std::is_same_v<decltype(anira_processor_desc::flags), uint32_t>);
+static_assert(std::is_same_v<decltype(anira_processor_desc::realtime_phases), uint32_t>);
 static_assert(std::is_invocable_r_v<anira_status,
                                     decltype(&anira_handler_push_data),
                                     anira_handler*,

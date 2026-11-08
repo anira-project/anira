@@ -141,18 +141,6 @@ const std::array<std::pair<const char*, anira_engine>, 5> k_engines_v2{{
     {"LITERT", ANIRA_ENGINE_LITERT},
     {"EXECUTORCH", ANIRA_ENGINE_EXECUTORCH},
 }};
-const std::array<std::pair<const char*, anira_dtype>, 10> k_dtypes{{
-    {"float32", ANIRA_DTYPE_F32},
-    {"float64", ANIRA_DTYPE_F64},
-    {"float16", ANIRA_DTYPE_F16},
-    {"bfloat16", ANIRA_DTYPE_BF16},
-    {"int8", ANIRA_DTYPE_I8},
-    {"uint8", ANIRA_DTYPE_U8},
-    {"int16", ANIRA_DTYPE_I16},
-    {"int32", ANIRA_DTYPE_I32},
-    {"int64", ANIRA_DTYPE_I64},
-    {"bool", ANIRA_DTYPE_BOOL8},
-}};
 const std::array<std::pair<const char*, anira_role>, 4> k_roles{{
     {"streamed", ANIRA_ROLE_STREAMED},
     {"buffer", ANIRA_ROLE_BUFFER},
@@ -206,10 +194,6 @@ const std::array<std::pair<const char*, anira_priority>, 3> k_priorities{{
 const std::array<std::pair<const char*, anira_delivery>, 2> k_deliveries{{
     {"polled", ANIRA_DELIVERY_POLLED},
     {"immediate", ANIRA_DELIVERY_IMMEDIATE},
-}};
-const std::array<std::pair<const char*, anira_edge_cost>, 2> k_edge_costs{{
-    {"permissive", ANIRA_EDGE_COST_PERMISSIVE},
-    {"strict", ANIRA_EDGE_COST_STRICT},
 }};
 const std::array<std::pair<const char*, anira_gl_threads>, 2> k_gl_threads{{
     {"caller_thread", ANIRA_GL_CALLER_THREAD},
@@ -288,7 +272,7 @@ void load_spec_v3(const Json& node,
         if (key == "name") {
             continue;
         } else if (key == "dtype") {
-            spec.m_dtype = vocabulary(value, key_path, k_dtypes);
+            spec.m_dtype = vocabulary(value, key_path, anira::capi::k_dtype_words);
         } else if (key == "role") {
             spec.m_role = vocabulary(value, key_path, k_roles);
         } else if (key == "axes") {
@@ -816,7 +800,7 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
             for (const auto& [tensor, word] : value.items()) {
                 if (tensor.empty()) { fail_json(key_path, "a tensor name must not be empty"); }
                 hard.m_ring_dtypes[tensor] =
-                    vocabulary(word, child(key_path, tensor.c_str()), k_dtypes);
+                    vocabulary(word, child(key_path, tensor.c_str()), anira::capi::k_dtype_words);
             }
         } else if (key == "latencies") {
             // The declared stream latency per output (anira_contract_hard_set_latency), with
@@ -881,7 +865,7 @@ void load_contract_v3(const Json& root, anira_contract& contract) {
             load_async_v3(value, key, async_part);
             contract.m_kind = async_part;
         } else if (key == "edge_cost") {
-            contract.m_edge_cost = vocabulary(value, key, k_edge_costs);
+            contract.m_edge_cost = vocabulary(value, key, anira::capi::k_edge_class_words);
         } else if (key == "host_domains") {
             // Common to both kinds, like edge_cost: the declared host-end domain per tensor.
             require_object(value, key);
@@ -915,9 +899,11 @@ void refuse_mixed_roots(const Json& root, std::initializer_list<const char*> v3_
     }
 }
 
+// Whether the process warned of an upgraded version 2 document (warn_upgraded_once).
+std::atomic_flag g_upgrade_warned = ATOMIC_FLAG_INIT;
+
 void warn_upgraded_once(const char* what) {
-    static std::atomic_flag warned = ATOMIC_FLAG_INIT;
-    if (!warned.test_and_set()) {
+    if (!g_upgrade_warned.test_and_set()) {
         ANIRA_LOG_WARNING(anira::log_group::k_config,
                           "version 2 configuration (%s) upgraded to version 3: max_inference_time, "
                           "warm_up and blocking_ratio moved to the contract; take it with "
@@ -1339,7 +1325,13 @@ void upgrade_context_v2(const Json& root, anira_context_config& context_config) 
 Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
     Json object = Json::object();
     object["name"] = spec.m_name;
-    object["dtype"] = word_of(spec.m_dtype, k_dtypes);
+    if (!anira::capi::known_dtype(spec.m_dtype)) {
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                          "tensor '" + spec.m_name + "': dtype " +
+                              anira::capi::dtype_label(spec.m_dtype) +
+                              " has no word in a model file");
+    }
+    object["dtype"] = word_of(spec.m_dtype, anira::capi::k_dtype_words);
     object["role"] = word_of(spec.m_role, k_roles);
     Json axes = Json::array();
     for (uint32_t i = 0; i < spec.m_ndim; ++i) {
@@ -1353,7 +1345,10 @@ Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
         axes.push_back(axis);
     }
     object["axes"] = axes;
-    if (spec.m_role == ANIRA_ROLE_STREAMED) {
+    // A window is written back exactly when the spec declares one: the window a validation
+    // derives lives in the derived form alone. An overlap without a window (which validation
+    // refuses) is kept as it is.
+    if (spec.m_role == ANIRA_ROLE_STREAMED && spec.window_declared()) {
         Json window = Json::object();
         window["min"] = spec.m_window_min;
         if (spec.m_window_max == ANIRA_UNBOUNDED) {
@@ -1362,6 +1357,8 @@ Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
             window["max"] = spec.m_window_max;
         }
         object["window"] = window;
+        object["overlap"] = spec.m_overlap;
+    } else if (spec.m_role == ANIRA_ROLE_STREAMED && spec.m_overlap != 0) {
         object["overlap"] = spec.m_overlap;
     }
     if (is_output && spec.m_latency != 0) { object["latency"] = spec.m_latency; }
@@ -1483,6 +1480,10 @@ namespace anira::capi {
 
 std::string model_config_json(const anira_model_config& model) {
     return model_to_json(model).dump();
+}
+
+void rearm_upgrade_warning() noexcept {
+    g_upgrade_warned.clear();
 }
 
 }  // namespace anira::capi

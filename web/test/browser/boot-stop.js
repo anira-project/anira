@@ -16,6 +16,7 @@ import {
   InferenceHandler,
   ModelConfig,
   Pipeline,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const QUANTUM = 128
@@ -47,6 +48,7 @@ const prepared = (anira, context, model) => {
     hostBlockMin: QUANTUM,
     hostRate: 48000,
     budgetMs: 2,
+    warmup: anira_warmup_mode.ANIRA_WARMUP_NONE,
   })
   const handler = InferenceHandler.create(context, pipeline)
   handler.prepare(contract)

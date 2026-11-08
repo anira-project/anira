@@ -6,7 +6,11 @@
  * ANIRA_ERROR_OUT_OF_MEMORY. With the heap filled, a handler on the model config of argv[1] (the
  * built-in ONNX Runtime engine; NODERAWFS reads it and its model file) must be refused with a
  * status, not abort the module; with the heap freed it prepares, and the heap is as free as
- * before. On the way it reports what the context and one instance of the model take.
+ * before. On the way it reports what the context and one instance of the model take, and checks
+ * that the core keeps no inference queue of its own (under 8 MiB with the config beside the
+ * pool's Worker regions, which start with the context on the web; 169 MiB before issue #200's
+ * fix) and that a second handler beside a first takes under 3 MiB (its own session, about
+ * 1.7 MiB, where its producer token added a 4 MiB block index before).
  * Exit code 0 on success.
  */
 #include <anira/abi/config.h>
@@ -110,10 +114,11 @@ int main(int argc, char** argv) {
     anira_contract_hard_set_warmup(contract, ANIRA_WARMUP_NONE, 0);
     if (s_failures != 0) { return 1; }
 
-    /* What the core and a handler of one, then two, instances of the model take, each handler
-     * measured from just before it: its pool's Wasm Workers stopped while still booting are
-     * freed by a main-thread timer (InferenceThread::stop), which this synchronous main never
-     * yields to, so their 4 MiB stacks stay counted until the process ends. */
+    /* What the core (with the pool's two Wasm Workers, which start with the context on the web
+     * and live while it does) and a handler of one, then two, instances of the model take, each
+     * handler measured from just before it. A Worker stopped while still booting is freed by a
+     * main-thread timer (InferenceThread::stop), which this synchronous main never yields to, so
+     * a 4 MiB stack would stay counted until the process ends; the context's pool stays up. */
     anira_handler* handler = NULL;
     const size_t with_context = free_heap();
     /* A first handler sets up what stays for the process (ONNX Runtime's environment). */
@@ -129,21 +134,48 @@ int main(int argc, char** argv) {
         anira_handler_destroy(handler);
     }
     printf(
-        "free heap: %.1f MiB before the context, %.1f MiB with it (the core and the config "
-        "take %.1f MiB)\n",
+        "free heap: %.1f MiB before the context, %.1f MiB with it (the core, the config and "
+        "the pool's two Worker regions take %.1f MiB)\n",
         (double)before_context / OOM_MIB,
         (double)with_context / OOM_MIB,
         (double)(before_context - with_context) / OOM_MIB);
     printf(
-        "a handler of %s takes %.1f MiB with one instance, %.1f MiB with two (both with the "
-        "pool's two Worker stacks): %.1f MiB per instance\n",
+        "a handler of %s takes %.1f MiB with one instance, %.1f MiB with two: %.1f MiB per "
+        "instance\n",
         argv[1],
         handler_takes[1] / OOM_MIB,
         handler_takes[2] / OOM_MIB,
         (handler_takes[2] - handler_takes[1]) / OOM_MIB);
 
+    /* The core's inference queue holds what the handlers reserve (issue #200): it preallocated
+     * 169 MiB at the first context, and every handler's producer token held a 4 MiB block index
+     * sized from that pool. A second handler beside a first one of the same model (whose loaded
+     * model and Workers it shares) takes its session's own memory, about 1.7 MiB, its queue
+     * reservation a few KiB of it (5.7 MiB with the index). */
+    /* 8 MiB for the core and the config, beside the two Workers' regions (a 4 MiB stack and the
+     * thread-local block each; 1 MiB of slack for the latter). */
+    check(before_context - with_context < ((size_t)(8 + 2 * (4 + 1)) << 20),
+          "the core and the config take less than 8 MiB beside the pool's Worker regions");
+    {
+        anira_model_config_set_max_instances(model, 1);
+        anira_handler* first = NULL;
+        check(handler_on(context, model, contract, &first, &err) == ANIRA_OK, err.message);
+        const size_t base = free_heap();
+        anira_handler* second = NULL;
+        check(handler_on(context, model, contract, &second, &err) == ANIRA_OK, err.message);
+        const double second_takes = (double)base - (double)free_heap();
+        printf("a second handler of %s beside the first takes %.0f KiB\n",
+               argv[1],
+               second_takes / 1024.0);
+        check(second_takes < (double)((size_t)3 << 20),
+              "a second handler beside the first takes less than 3 MiB");
+        anira_handler_destroy(second);
+        anira_handler_destroy(first);
+        anira_model_config_set_max_instances(model, 2);
+    }
+
     /* The heap full on the pool's context: refused with the status whichever allocation runs
-     * out first (its pool stopped with its last handler, so a prepare that gets that far starts
+     * out first (the context's pool is up: a prepare that gets that far starts no Worker; it
      * it again: a Worker's 4 MiB region, as oom.html sees; here a smaller one fails first). */
     {
         fill();

@@ -1,16 +1,26 @@
 About
 =====
 
-**anira** is a C++ library designed to streamline the development of real-time audio applications that integrate neural network inference. It provides a high-performance, real-time safe execution environment for neural networks, ensuring deterministic runtimes that meet the demands of professional audio processing.
+**anira** runs neural networks inside real-time audio applications. The audio thread hands its
+blocks to a handler and gets processed blocks back at a fixed latency; the inferences run on the
+inference threads of a process-wide pool, so the audio thread never allocates, locks or waits.
 
-Neural network inference in anira is powered by industry-standard engines, including LibTorch, ONNXRuntime, and TensorFlow Lite. The library offers a unified interface to these engines through the :cpp:class:`anira::InferenceHandler` class, delegating inference execution to a static thread pool. This architecture maintains real-time safety by executing inference outside the audio thread, ensuring applications remain responsive and deterministic. Additionally, anira leverages multiple CPU cores for efficient parallel inference.
+- **Engines:** ONNX Runtime, LibTorch, LiteRT (or the legacy TensorFlow Lite runtime), ExecuTorch,
+  any engine you register, and ONNX Runtime Web in the browser. A model file names an export per
+  engine, and the handler switches between them at run time.
+- **Any model shape:** streamed tensors windowed from host blocks of any size (a receptive field,
+  another rate, a generator or an analyser), static parameters, declared recurrent state, and the
+  ten dtypes anira names.
+- **The latency is computed,** in closed form from the host blocks, the inference time and the
+  instance count (:doc:`latency`), and a miss is filled by a policy you choose, keeping the stream
+  aligned.
+- **Custom pre- and post-processing** in a processor, and engines of your own, in C, C++ or
+  TypeScript.
+- **Benchmarks** in the same environment as the application: a Google Benchmark fixture in the
+  examples (:doc:`benchmarking`).
+- **One API in three faces:** a versioned C ABI (``anira/abi/*.h``), the header-only C++20 builders
+  of ``anira/anira.hpp`` over it, and the ``@anira-project/anira`` WebAssembly/TypeScript package.
 
-Anira is optimized to minimize latency and supports predefined tensor shapes for neural networks. A key feature is the intelligent adaptation of host audio buffers to neural network input and output tensors, with automatic calculation of the minimum required latency from the model configuration (:cpp:class:`anira::ModelConfig`) and the host blocks of the contract. If neural network processing exceeds the latency threshold, anira compensates for missing frames to maintain smooth and synchronized audio processing.
-
-Model inputs and outputs can be preprocessed and postprocessed using built-in functionality. For custom data handling, developers add a processor to the pipeline (a subclass of :cpp:class:`anira::Processor`) to implement specialized logic. This flexibility ensures neural network models receive properly formatted data and that results are correctly integrated into the audio processing pipeline.
-
-The library supports a wide range of neural network architectures, including both stateful and stateless models, with single or multiple input and output tensors. Tensors are categorized as streamable (for time-varying data like audio signals) or non-streamable (for static parameters requiring asynchronous updates). Since version 2.0, anira supports input and output tensors with varying sizes and sampling rates, enabling more complex processing scenarios and greater architectural flexibility.
-
-Anira also ships benchmarking tools with its examples (a Google Benchmark fixture over the handler), allowing developers to evaluate neural network performance within the same environment as their audio applications. This is essential for optimizing applications to meet real-time processing requirements.
-
-While anira is primarily focused on audio processing, it is also suitable for other real-time applications such as robotics and computer vision, where both streamable and non-streamable data processing are required. Its design principles and real-time safety features make it a versatile tool for developers across various domains.
+anira also suits other real-time uses with streamed and static data, such as robotics and
+computer vision. Its design and an evaluation are in the
+`paper <https://doi.org/10.1109/IS262782.2024.10704099>`_.

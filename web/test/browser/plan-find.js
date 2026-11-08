@@ -18,8 +18,11 @@ import {
   ModelConfig,
   Pipeline,
   anira_engine,
+  anira_memory_kind,
   anira_provider,
   anira_status,
+  anira_budget_kind,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const RATE = 48000
@@ -53,7 +56,11 @@ const run = async () => {
   })
   const contract = (
     await ContractHandle.fromUrl(anira, new URL('gain.contract.json', MODELS))
-  ).hardHostBlocks(QUANTUM, QUANTUM, RATE)
+  )
+    .hardHostBlocks(QUANTUM, QUANTUM, RATE)
+    // Pinned: the explicit budget without a warm-up (the page prepares before its Workers run).
+    .hardBudget(anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 5)
+    .hardWarmup(anira_warmup_mode.ANIRA_WARMUP_NONE)
 
   const context = Context.create(anira, {
     threads: 1,
@@ -77,6 +84,11 @@ const run = async () => {
     plans.length === 2 && builtIn >= 0 && custom >= 0,
     `the report holds the built-in ONNX Runtime plan (${builtIn}) and the JavaScript ` +
       `engine's (${custom}) of ${plans.length}`
+  )
+  check(
+    plans.every((p) => p.memoryKind === anira_memory_kind.ANIRA_MEMORY_UNIFIED),
+    `both plans run on the CPU path, in host memory (memory kinds ` +
+      `${plans.map((p) => p.memoryKind).join(', ')}, read at the wasm32 tail offset 44)`
   )
 
   const byId = report.find({

@@ -28,6 +28,15 @@
 // commit that recorded them lists every changed call with how late its samples were.
 
 //
+// Recorded again with Fares' authorisation (2026-11-05) for #235: a non-streamed output no longer
+// rounds the latency of the stream up to whole hops (LatencyCalculator::sync_latencies counts
+// the Streamed outputs alone). Three transcripts changed, k_manager_multi_zeros, _hold_last and
+// _bypass, whose model has a Streamed and a Static output under host blocks of 1 to 8 samples
+// of a hop of 8: the inference queue of 15/8 hops is no longer rounded to 2 by the Static output.
+// Their prepare line says latency=[15,0] and recv_capacity=[47,0] (16 and 48 before), every
+// receive ring holds one sample less, and every output sample arrives one position earlier;
+// every call's outcome is the recording of the previous file.
+//
 // Reading a transcript. The first line is what prepare left: the latencies, the ring
 // capacities, the inference structs, the samples waiting per channel in every send and receive
 // ring ("-" for a Static slot, which has no ring). A call is "#<n> <function> in=<counts handed
@@ -550,63 +559,63 @@ latency=[15] send_capacity=[15] recv_capacity=[47] structs=4 send=[0/0] recv=[15
 )oracle";
 
 inline constexpr std::string_view k_manager_multi_zeros = R"oracle(
-latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-] recv=[16/16/16,-]
-#1 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
+latency=[15,0] send_capacity=[15,0] recv_capacity=[47,0] structs=4 send=[0/0/0,-] recv=[15/15/15,-]
+#1 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#2 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#2 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 1 | . .
+  out0.c1: 0 0 0 0 0 0 0 1001 | . .
+  out0.c2: 0 0 0 0 0 0 0 2001 | . .
   out1.c0: 910010 910011 910012 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#3 process_nowait in=[8,0] out=[8,0] null-unused -> in=[8,0] out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 1 2 3 4 5 6 7 8 | . .
-  out0.c1: 1001 1002 1003 1004 1005 1006 1007 1008 | . .
-  out0.c2: 2001 2002 2003 2004 2005 2006 2007 2008 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#4 process_nowait in=[0,3] out=[0,3] null-unused -> in=[0,3] out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#3 process_nowait in=[8,0] out=[8,0] null-unused -> in=[8,0] out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 2 3 4 5 6 7 8 9 | . .
+  out0.c1: 1002 1003 1004 1005 1006 1007 1008 1009 | . .
+  out0.c2: 2002 2003 2004 2005 2006 2007 2008 2009 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#4 process_nowait in=[0,3] out=[0,3] null-unused -> in=[0,3] out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910020 910021 910022 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#5 process_nowait in=[8,3] out=[8,5] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 9 10 11 12 13 14 15 16 | . .
-  out0.c1: 1009 1010 1011 1012 1013 1014 1015 1016 | . .
-  out0.c2: 2009 2010 2011 2012 2013 2014 2015 2016 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#5 process_nowait in=[8,3] out=[8,5] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 10 11 12 13 14 15 16 17 | . .
+  out0.c1: 1010 1011 1012 1013 1014 1015 1016 1017 | . .
+  out0.c2: 2010 2011 2012 2013 2014 2015 2016 2017 | . .
   out1.c0: 910020 910021 910022 . . | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#6 process_nowait in=[8,2] out=[8,2] in-place -> in=[8,2] out=[8,2] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  io0.c0: 17 18 19 20 21 22 23 24 | . .
-  io0.c1: 1017 1018 1019 1020 1021 1022 1023 1024 | . .
-  io0.c2: 2017 2018 2019 2020 2021 2022 2023 2024 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#6 process_nowait in=[8,2] out=[8,2] in-place -> in=[8,2] out=[8,2] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  io0.c0: 18 19 20 21 22 23 24 25 | . .
+  io0.c1: 1018 1019 1020 1021 1022 1023 1024 1025 | . .
+  io0.c2: 2018 2019 2020 2021 2022 2023 2024 2025 | . .
   out1.c0: 910050 910051 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#7 push_data in=[8,3] -> in=[8,3] send=[0/0/0,-] recv=[16/16/16,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#8 push_data in=[0,3] null-unused -> in=[0,3] send=[0/0/0,-] recv=[24/24/24,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#9 pop_data out=[8,3] -> out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[16/16/16,-]
-  out0.c0: 25 26 27 28 29 30 31 32 | . .
-  out0.c1: 1025 1026 1027 1028 1029 1030 1031 1032 | . .
-  out0.c2: 2025 2026 2027 2028 2029 2030 2031 2032 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#7 push_data in=[8,3] -> in=[8,3] send=[0/0/0,-] recv=[15/15/15,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#8 push_data in=[0,3] null-unused -> in=[0,3] send=[0/0/0,-] recv=[23/23/23,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#9 pop_data out=[8,3] -> out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[15/15/15,-]
+  out0.c0: 26 27 28 29 30 31 32 33 | . .
+  out0.c1: 1026 1027 1028 1029 1030 1031 1032 1033 | . .
+  out0.c2: 2026 2027 2028 2029 2030 2031 2032 2033 | . .
   out1.c0: 910070 910071 910072 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#10 pop_data out=[0,3] null-unused -> out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#10 pop_data out=[0,3] null-unused -> out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910070 910071 910072 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#11 pop_data out=[8,0] null-unused -> out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 33 34 35 36 37 38 39 40 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#12 process_nowait in=[8,3] out=[40,5] -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[8/8/8,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#11 pop_data out=[8,0] null-unused -> out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 34 35 36 37 38 39 40 41 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#12 process_nowait in=[8,3] out=[40,5] -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   out1.c0: 0 0 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
 #13 process_nowait in=[8,3] out=[40,2] in-place -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[0/0/0,-]
   io0.c0: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   io0.c1: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
@@ -625,170 +634,170 @@ latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 0 0 0 | . .
   settled: send=[0/0/0,-] recv=[8/8/8,-]
-#16 reset send=[0/0/0,-] recv=[16/16/16,-]
-#17 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
+#16 reset send=[0/0/0,-] recv=[15/15/15,-]
+#17 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910150 910151 910152 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#18 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#18 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 73 | . .
+  out0.c1: 0 0 0 0 0 0 0 1073 | . .
+  out0.c2: 0 0 0 0 0 0 0 2073 | . .
   out1.c0: 910170 910171 910172 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
 )oracle";
 
 inline constexpr std::string_view k_manager_multi_hold_last = R"oracle(
-latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-] recv=[16/16/16,-]
-#1 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
+latency=[15,0] send_capacity=[15,0] recv_capacity=[47,0] structs=4 send=[0/0/0,-] recv=[15/15/15,-]
+#1 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#2 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#2 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 1 | . .
+  out0.c1: 0 0 0 0 0 0 0 1001 | . .
+  out0.c2: 0 0 0 0 0 0 0 2001 | . .
   out1.c0: 910010 910011 910012 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#3 process_nowait in=[8,0] out=[8,0] null-unused -> in=[8,0] out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 1 2 3 4 5 6 7 8 | . .
-  out0.c1: 1001 1002 1003 1004 1005 1006 1007 1008 | . .
-  out0.c2: 2001 2002 2003 2004 2005 2006 2007 2008 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#4 process_nowait in=[0,3] out=[0,3] null-unused -> in=[0,3] out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#3 process_nowait in=[8,0] out=[8,0] null-unused -> in=[8,0] out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 2 3 4 5 6 7 8 9 | . .
+  out0.c1: 1002 1003 1004 1005 1006 1007 1008 1009 | . .
+  out0.c2: 2002 2003 2004 2005 2006 2007 2008 2009 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#4 process_nowait in=[0,3] out=[0,3] null-unused -> in=[0,3] out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910020 910021 910022 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#5 process_nowait in=[8,3] out=[8,5] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 9 10 11 12 13 14 15 16 | . .
-  out0.c1: 1009 1010 1011 1012 1013 1014 1015 1016 | . .
-  out0.c2: 2009 2010 2011 2012 2013 2014 2015 2016 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#5 process_nowait in=[8,3] out=[8,5] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 10 11 12 13 14 15 16 17 | . .
+  out0.c1: 1010 1011 1012 1013 1014 1015 1016 1017 | . .
+  out0.c2: 2010 2011 2012 2013 2014 2015 2016 2017 | . .
   out1.c0: 910020 910021 910022 . . | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#6 process_nowait in=[8,2] out=[8,2] in-place -> in=[8,2] out=[8,2] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  io0.c0: 17 18 19 20 21 22 23 24 | . .
-  io0.c1: 1017 1018 1019 1020 1021 1022 1023 1024 | . .
-  io0.c2: 2017 2018 2019 2020 2021 2022 2023 2024 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#6 process_nowait in=[8,2] out=[8,2] in-place -> in=[8,2] out=[8,2] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  io0.c0: 18 19 20 21 22 23 24 25 | . .
+  io0.c1: 1018 1019 1020 1021 1022 1023 1024 1025 | . .
+  io0.c2: 2018 2019 2020 2021 2022 2023 2024 2025 | . .
   out1.c0: 910050 910051 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#7 push_data in=[8,3] -> in=[8,3] send=[0/0/0,-] recv=[16/16/16,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#8 push_data in=[0,3] null-unused -> in=[0,3] send=[0/0/0,-] recv=[24/24/24,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#9 pop_data out=[8,3] -> out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[16/16/16,-]
-  out0.c0: 25 26 27 28 29 30 31 32 | . .
-  out0.c1: 1025 1026 1027 1028 1029 1030 1031 1032 | . .
-  out0.c2: 2025 2026 2027 2028 2029 2030 2031 2032 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#7 push_data in=[8,3] -> in=[8,3] send=[0/0/0,-] recv=[15/15/15,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#8 push_data in=[0,3] null-unused -> in=[0,3] send=[0/0/0,-] recv=[23/23/23,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#9 pop_data out=[8,3] -> out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[15/15/15,-]
+  out0.c0: 26 27 28 29 30 31 32 33 | . .
+  out0.c1: 1026 1027 1028 1029 1030 1031 1032 1033 | . .
+  out0.c2: 2026 2027 2028 2029 2030 2031 2032 2033 | . .
   out1.c0: 910070 910071 910072 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#10 pop_data out=[0,3] null-unused -> out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#10 pop_data out=[0,3] null-unused -> out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910070 910071 910072 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#11 pop_data out=[8,0] null-unused -> out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 33 34 35 36 37 38 39 40 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#12 process_nowait in=[8,3] out=[40,5] -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 33 34 35 36 37 38 39 40 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#11 pop_data out=[8,0] null-unused -> out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 34 35 36 37 38 39 40 41 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#12 process_nowait in=[8,3] out=[40,5] -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 34 35 36 37 38 39 40 41 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910070 910071 910072 . . | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
 #13 process_nowait in=[8,3] out=[40,2] in-place -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[0/0/0,-]
-  io0.c0: 33 34 35 36 37 38 39 40 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
-  io0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
-  io0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
+  io0.c0: 34 35 36 37 38 39 40 41 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
+  io0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
+  io0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910120 910121 | . .
   settled: send=[0/0/0,-] recv=[8/8/8,-]
 #14 pop_data out=[40,3] -> out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 33 34 35 36 37 38 39 40 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
+  out0.c0: 34 35 36 37 38 39 40 41 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910130 910131 910132 | . .
   settled: send=[0/0/0,-] recv=[0/0/0,-]
 #15 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 33 34 35 36 37 38 39 40 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 | . .
+  out0.c0: 34 35 36 37 38 39 40 41 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 | . .
   out1.c0: 910130 910131 910132 | . .
   settled: send=[0/0/0,-] recv=[8/8/8,-]
-#16 reset send=[0/0/0,-] recv=[16/16/16,-]
-#17 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
+#16 reset send=[0/0/0,-] recv=[15/15/15,-]
+#17 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910150 910151 910152 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#18 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#18 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 73 | . .
+  out0.c1: 0 0 0 0 0 0 0 1073 | . .
+  out0.c2: 0 0 0 0 0 0 0 2073 | . .
   out1.c0: 910170 910171 910172 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
 )oracle";
 
 inline constexpr std::string_view k_manager_multi_bypass = R"oracle(
-latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-] recv=[16/16/16,-]
-#1 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
+latency=[15,0] send_capacity=[15,0] recv_capacity=[47,0] structs=4 send=[0/0/0,-] recv=[15/15/15,-]
+#1 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#2 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#2 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 1 | . .
+  out0.c1: 0 0 0 0 0 0 0 1001 | . .
+  out0.c2: 0 0 0 0 0 0 0 2001 | . .
   out1.c0: 910010 910011 910012 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#3 process_nowait in=[8,0] out=[8,0] null-unused -> in=[8,0] out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 1 2 3 4 5 6 7 8 | . .
-  out0.c1: 1001 1002 1003 1004 1005 1006 1007 1008 | . .
-  out0.c2: 2001 2002 2003 2004 2005 2006 2007 2008 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#4 process_nowait in=[0,3] out=[0,3] null-unused -> in=[0,3] out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#3 process_nowait in=[8,0] out=[8,0] null-unused -> in=[8,0] out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 2 3 4 5 6 7 8 9 | . .
+  out0.c1: 1002 1003 1004 1005 1006 1007 1008 1009 | . .
+  out0.c2: 2002 2003 2004 2005 2006 2007 2008 2009 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#4 process_nowait in=[0,3] out=[0,3] null-unused -> in=[0,3] out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910020 910021 910022 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#5 process_nowait in=[8,3] out=[8,5] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 9 10 11 12 13 14 15 16 | . .
-  out0.c1: 1009 1010 1011 1012 1013 1014 1015 1016 | . .
-  out0.c2: 2009 2010 2011 2012 2013 2014 2015 2016 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#5 process_nowait in=[8,3] out=[8,5] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 10 11 12 13 14 15 16 17 | . .
+  out0.c1: 1010 1011 1012 1013 1014 1015 1016 1017 | . .
+  out0.c2: 2010 2011 2012 2013 2014 2015 2016 2017 | . .
   out1.c0: 910020 910021 910022 . . | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#6 process_nowait in=[8,2] out=[8,2] in-place -> in=[8,2] out=[8,2] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  io0.c0: 17 18 19 20 21 22 23 24 | . .
-  io0.c1: 1017 1018 1019 1020 1021 1022 1023 1024 | . .
-  io0.c2: 2017 2018 2019 2020 2021 2022 2023 2024 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#6 process_nowait in=[8,2] out=[8,2] in-place -> in=[8,2] out=[8,2] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  io0.c0: 18 19 20 21 22 23 24 25 | . .
+  io0.c1: 1018 1019 1020 1021 1022 1023 1024 1025 | . .
+  io0.c2: 2018 2019 2020 2021 2022 2023 2024 2025 | . .
   out1.c0: 910050 910051 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#7 push_data in=[8,3] -> in=[8,3] send=[0/0/0,-] recv=[16/16/16,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#8 push_data in=[0,3] null-unused -> in=[0,3] send=[0/0/0,-] recv=[24/24/24,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#9 pop_data out=[8,3] -> out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[16/16/16,-]
-  out0.c0: 25 26 27 28 29 30 31 32 | . .
-  out0.c1: 1025 1026 1027 1028 1029 1030 1031 1032 | . .
-  out0.c2: 2025 2026 2027 2028 2029 2030 2031 2032 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#7 push_data in=[8,3] -> in=[8,3] send=[0/0/0,-] recv=[15/15/15,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#8 push_data in=[0,3] null-unused -> in=[0,3] send=[0/0/0,-] recv=[23/23/23,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#9 pop_data out=[8,3] -> out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[15/15/15,-]
+  out0.c0: 26 27 28 29 30 31 32 33 | . .
+  out0.c1: 1026 1027 1028 1029 1030 1031 1032 1033 | . .
+  out0.c2: 2026 2027 2028 2029 2030 2031 2032 2033 | . .
   out1.c0: 910070 910071 910072 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#10 pop_data out=[0,3] null-unused -> out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#10 pop_data out=[0,3] null-unused -> out=[0,3] returned=out missed=0 send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910070 910071 910072 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#11 pop_data out=[8,0] null-unused -> out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 33 34 35 36 37 38 39 40 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#12 process_nowait in=[8,3] out=[40,5] -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[8/8/8,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#11 pop_data out=[8,0] null-unused -> out=[8,0] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 34 35 36 37 38 39 40 41 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#12 process_nowait in=[8,3] out=[40,5] -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 49 50 51 52 53 54 55 56 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   out1.c0: 0 0 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
 #13 process_nowait in=[8,3] out=[40,2] in-place -> in=[8,3] out=[0,0] returned=out missed=1 send=[0/0/0,-] recv=[0/0/0,-]
   io0.c0: 57 58 59 60 61 62 63 64 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
   io0.c1: 1057 1058 1059 1060 1061 1062 1063 1064 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 | . .
@@ -807,19 +816,19 @@ latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-
   out0.c2: 2065 2066 2067 2068 2069 2070 2071 2072 | . .
   out1.c0: 0 0 0 | . .
   settled: send=[0/0/0,-] recv=[8/8/8,-]
-#16 reset send=[0/0/0,-] recv=[16/16/16,-]
-#17 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
+#16 reset send=[0/0/0,-] recv=[15/15/15,-]
+#17 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910150 910151 910152 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#18 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#18 process_nowait in=[8,3] out=[8,3] -> in=[8,3] out=[8,3] returned=out missed=0 send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 73 | . .
+  out0.c1: 0 0 0 0 0 0 0 1073 | . .
+  out0.c2: 0 0 0 0 0 0 0 2073 | . .
   out1.c0: 910170 910171 910172 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
 )oracle";
 
 inline constexpr std::string_view k_manager_mono_to_stereo_bypass = R"oracle(

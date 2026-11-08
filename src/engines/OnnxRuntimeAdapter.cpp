@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "../capi/words.h"
+#include "../scheduler/TensorRun.h"
 #include "../utils/Logger.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
@@ -99,8 +100,32 @@ anira_dtype dtype_of(ONNXTensorElementDataType type) {
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16: return ANIRA_DTYPE_I16;
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32: return ANIRA_DTYPE_I32;
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64: return ANIRA_DTYPE_I64;
+        case ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL: return ANIRA_DTYPE_BOOL8;
         default: return 0;
     }
+}
+
+// The ONNX element type of an anira dtype: every dtype anira names has one (probe P1 of PR D ran
+// all ten through a Cast-boundary model on ONNX Runtime 1.26.0); UNDEFINED for any other, which
+// the validator refuses before a record reaches the adapter.
+ONNXTensorElementDataType onnx_type_of(anira_dtype dtype) noexcept {
+    switch (dtype) {
+        case ANIRA_DTYPE_F32: return ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+        case ANIRA_DTYPE_F64: return ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
+        case ANIRA_DTYPE_F16: return ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16;
+        case ANIRA_DTYPE_BF16: return ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+        case ANIRA_DTYPE_I8: return ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8;
+        case ANIRA_DTYPE_U8: return ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8;
+        case ANIRA_DTYPE_I16: return ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16;
+        case ANIRA_DTYPE_I32: return ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32;
+        case ANIRA_DTYPE_I64: return ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
+        case ANIRA_DTYPE_BOOL8: return ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
+        default: return ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+    }
+}
+
+bool carries(anira_dtype dtype) noexcept {
+    return onnx_type_of(dtype) != ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
 }
 
 // The tensors of one side of the graph as the session describes them: the name, the shape
@@ -327,6 +352,8 @@ private:
     std::vector<std::vector<int64_t>> m_output_dims;
     std::vector<size_t> m_input_elements;
     std::vector<size_t> m_output_elements;
+    std::vector<anira_dtype> m_input_dtypes;  ///< per input slot: the record's dtype
+    std::vector<anira_dtype> m_output_dtypes;
     std::vector<Ort::Value> m_inputs;   ///< per input slot, created over the descriptor per call
     std::vector<Ort::Value> m_outputs;  ///< per output slot, likewise
 };
@@ -379,6 +406,8 @@ void Instance::bind(const Model& model,
     m_output_dims.clear();
     m_input_elements.clear();
     m_output_elements.clear();
+    m_input_dtypes.clear();
+    m_output_dtypes.clear();
     m_inputs.clear();
     m_outputs.clear();
     for (size_t slot = 0; slot < inputs.size(); ++slot) {
@@ -386,6 +415,7 @@ void Instance::bind(const Model& model,
         m_input_names.push_back(m_name_store.back().get());
         m_input_dims.push_back(model.m_inputs[slot].m_dims);
         m_input_elements.push_back(model.m_inputs[slot].m_num_elements);
+        m_input_dtypes.push_back(model.m_inputs[slot].m_dtype);
         m_inputs.emplace_back(nullptr);
     }
     for (size_t slot = 0; slot < outputs.size(); ++slot) {
@@ -394,6 +424,7 @@ void Instance::bind(const Model& model,
         m_output_names.push_back(m_name_store.back().get());
         m_output_dims.push_back(model.m_outputs[slot].m_dims);
         m_output_elements.push_back(model.m_outputs[slot].m_num_elements);
+        m_output_dtypes.push_back(model.m_outputs[slot].m_dtype);
         m_outputs.emplace_back(nullptr);
     }
 }
@@ -409,33 +440,43 @@ void Instance::run(const anira_engine_ctx& ctx) {
     }
     // Every tensor over the memory of its descriptor, read on this call: the inputs as the
     // engine reads them, the outputs as the values the engine writes into.
-    for (size_t slot = 0; slot < m_inputs.size(); ++slot) {
-        float* data = host_f32_packed(ctx.inputs[slot], m_input_elements[slot]);
+    // Typed by the record (the spec's dtype): the value names its element type and its bytes.
+    const auto value_over = [this](const anira_tensor& tensor,
+                                   anira_dtype dtype,
+                                   size_t elements,
+                                   const std::vector<int64_t>& dims,
+                                   const char* side,
+                                   size_t slot) {
+        void* data = host_packed(tensor, dtype, elements);
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
-                              std::string(k_engine) + ": input slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_input_elements[slot]) + " elements");
+                              std::string(k_engine) + ": " + side + " slot " +
+                                  std::to_string(slot) + " is not a packed " +
+                                  capi::dtype_word(dtype) + " host block of " +
+                                  std::to_string(elements) + " elements");
         }
-        m_inputs[slot] = Ort::Value::CreateTensor<float>(m_memory_info,
-                                                         data,
-                                                         m_input_elements[slot],
-                                                         m_input_dims[slot].data(),
-                                                         m_input_dims[slot].size());
+        return Ort::Value::CreateTensor(m_memory_info,
+                                        data,
+                                        elements * tensor_run::dtype_size(dtype),
+                                        dims.data(),
+                                        dims.size(),
+                                        onnx_type_of(dtype));
+    };
+    for (size_t slot = 0; slot < m_inputs.size(); ++slot) {
+        m_inputs[slot] = value_over(ctx.inputs[slot],
+                                    m_input_dtypes[slot],
+                                    m_input_elements[slot],
+                                    m_input_dims[slot],
+                                    "input",
+                                    slot);
     }
     for (size_t slot = 0; slot < m_outputs.size(); ++slot) {
-        float* data = host_f32_packed(ctx.outputs[slot], m_output_elements[slot]);
-        if (data == nullptr) {
-            throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
-                              std::string(k_engine) + ": output slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_output_elements[slot]) + " elements");
-        }
-        m_outputs[slot] = Ort::Value::CreateTensor<float>(m_memory_info,
-                                                          data,
-                                                          m_output_elements[slot],
-                                                          m_output_dims[slot].data(),
-                                                          m_output_dims[slot].size());
+        m_outputs[slot] = value_over(ctx.outputs[slot],
+                                     m_output_dtypes[slot],
+                                     m_output_elements[slot],
+                                     m_output_dims[slot],
+                                     "output",
+                                     slot);
     }
     m_session->Run(Ort::RunOptions{nullptr},
                    m_input_names.data(),
@@ -448,25 +489,29 @@ void Instance::run(const anira_engine_ctx& ctx) {
 
 void Instance::warm_up(uint32_t iterations) {
     if (iterations == 0) { return; }
-    // Scratch of the record's element counts, described as the engine dims: zeros in, the
-    // results discarded.
-    std::vector<std::vector<float>> input_scratch(m_inputs.size());
-    std::vector<std::vector<float>> output_scratch(m_outputs.size());
+    // Scratch of the record's element counts and dtypes, described as the engine dims: zeros
+    // in, the results discarded.
+    std::vector<std::vector<std::byte>> input_scratch(m_inputs.size());
+    std::vector<std::vector<std::byte>> output_scratch(m_outputs.size());
     std::vector<anira_tensor> inputs(m_inputs.size());
     std::vector<anira_tensor> outputs(m_outputs.size());
     for (size_t slot = 0; slot < m_inputs.size(); ++slot) {
-        input_scratch[slot].assign(m_input_elements[slot], 0.F);
+        input_scratch[slot].assign(
+            m_input_elements[slot] * tensor_run::dtype_size(m_input_dtypes[slot]),
+            std::byte{0});
         anira_tensor_init_host(&inputs[slot],
                                input_scratch[slot].data(),
-                               ANIRA_DTYPE_F32,
+                               m_input_dtypes[slot],
                                static_cast<uint32_t>(m_input_dims[slot].size()),
                                m_input_dims[slot].data());
     }
     for (size_t slot = 0; slot < m_outputs.size(); ++slot) {
-        output_scratch[slot].assign(m_output_elements[slot], 0.F);
+        output_scratch[slot].assign(
+            m_output_elements[slot] * tensor_run::dtype_size(m_output_dtypes[slot]),
+            std::byte{0});
         anira_tensor_init_host(&outputs[slot],
                                output_scratch[slot].data(),
-                               ANIRA_DTYPE_F32,
+                               m_output_dtypes[slot],
                                static_cast<uint32_t>(m_output_dims[slot].size()),
                                m_output_dims[slot].data());
     }
@@ -559,7 +604,7 @@ public:
 
 protected:
     void do_load(const Model& model) override {
-        require_f32(model, k_engine);
+        require_dtypes(model, k_engine, carries);
         m_shared = std::make_shared<const SharedEnvironment>(m_engine, model);
         auto probe = std::make_unique<Instance>(m_shared, model);
         const std::vector<EngineTensor> inputs = probe->inputs();

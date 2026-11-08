@@ -23,6 +23,7 @@ import {
   Pipeline,
   anira_status,
   anira_wait_strategy,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 
 const RATE = 48000
@@ -148,6 +149,7 @@ const run = async () => {
     hostBlockMin: QUANTUM,
     hostRate: RATE,
     budgetMs: 2,
+    warmup: anira_warmup_mode.ANIRA_WARMUP_NONE,
   })
   const handler = InferenceHandler.create(context, pipeline)
   handler.prepare(contract)

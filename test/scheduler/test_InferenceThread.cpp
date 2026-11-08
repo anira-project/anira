@@ -1,13 +1,16 @@
 #include <anira/abi/context.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -15,6 +18,7 @@
 #include "../abi/handler_support.h"
 #include "gtest/gtest.h"
 #include "scheduler/Core.h"
+#include "scheduler/SessionElement.h"
 
 // Generous hang-guard, not a performance bound: the loop below exits as soon as the
 // block is processed, so a large timeout only affects the (failing) hang case. 2s was
@@ -87,4 +91,60 @@ TEST(UserManagedInferenceThread, ProcessesAudioWithoutAutoPool) {
     // time it returns the run loop has fully exited.
     user_thread->stop();
     ASSERT_FALSE(user_thread->is_running());
+}
+
+namespace {
+
+/// The pass-through that sleeps k_sleep_ms in every call: a job whose time on the inference
+/// thread is known from below.
+class SleepingEngine final : public anira_test::GateEngine {
+public:
+    static constexpr int k_sleep_ms = 3;
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        std::this_thread::sleep_for(std::chrono::milliseconds(k_sleep_ms));
+        return anira_test::passthrough(ctx);
+    }
+};
+
+}  // namespace
+
+// Every job records its time on the inference thread in its chunk (the hooks and the engine
+// call, the wait for an instance excluded): at least what the engine slept, never a figure
+// asserted beyond that bound.
+TEST(InferenceThreadTiming, EveryJobRecordsItsTimeOnTheInferenceThread) {
+    const anira_test::Context context(1);
+    SleepingEngine engine;
+    anira_test::Handler handler(context, anira_test::mono_stream_model(), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    const std::shared_ptr<SessionElement> session = anira_test::session_of(handler.m_handler);
+    ASSERT_NE(session, nullptr);
+    for (const auto& chunk : session->m_struct_pool) { EXPECT_EQ(chunk->m_inference_ns, 0); }
+
+    std::vector<float> samples(anira_test::k_block, 0.25F);
+    const std::array<float*, 1> channels{samples.data()};
+    const std::array<int64_t, 2> shape{1, static_cast<int64_t>(anira_test::k_block)};
+    anira_tensor block{};
+    anira_tensor_init_host_planar(&block,
+                                  static_cast<const void*>(channels.data()),
+                                  1,
+                                  ANIRA_DTYPE_F32,
+                                  2,
+                                  shape.data());
+    ASSERT_EQ(anira_handler_push_data(handler.m_handler, &block, 0), ANIRA_OK);
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(k_user_thread_timeout_s);
+    int64_t recorded = 0;
+    while (recorded == 0 && std::chrono::steady_clock::now() < deadline) {
+        for (const auto& chunk : session->m_struct_pool) {
+            if (chunk->m_done_atomic.load(std::memory_order::acquire)) {
+                recorded = chunk->m_inference_ns;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    ASSERT_GT(recorded, 0) << "no job completed";
+    EXPECT_GE(recorded, int64_t{SleepingEngine::k_sleep_ms} * 1000 * 1000)
+        << "the job's time includes the engine call";
+    EXPECT_EQ(engine.m_calls.load(), 1);
 }

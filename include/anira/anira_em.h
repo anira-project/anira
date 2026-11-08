@@ -146,24 +146,24 @@ extern "C" {
  * @brief Fills a processor descriptor whose slots are the trampolines into the scope registry's
  * processor: one per bit of hook_mask, every other slot NULL, the release slot always
  * (it frees the record behind user_data, after the hook's release when
- * ANIRA_EM_PROCESSOR_HOOK_RELEASE is set), and flags processor_flags. The promise is
+ * ANIRA_EM_PROCESSOR_HOOK_RELEASE is set), and realtime_phases as given. The promise is
  * stated, never derived from the hook bits: under a Hard contract a processor with a
  * pre_process, post_process or reset hook runs it on the driving thread (the audio
- * worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG unless
- * processor_flags carries ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST. The descriptor is for
+ * worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG, naming the
+ * phase, unless realtime_phases carries that phase's bit. The descriptor is for
  * anira_pipeline_add_processor; one that is never added keeps its record, so
  * anira_em_pipeline_add_js_processor is the call JavaScript makes.
  * @param desc The caller's descriptor, overwritten from ANIRA_PROCESSOR_DESC_INIT.
  * @param js_key The key the hook receives, the processor's entry in the instance's registry.
  * @param hook_mask An OR of the ANIRA_EM_PROCESSOR_HOOK_* bits: the slots that cross into the
  *        scope registry's processor.
- * @param processor_flags The descriptor's flags, the processor's real-time promise, which
- *        JavaScript cannot write into the descriptor itself: an OR of
- *        ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST (the pre_process, post_process
- *        and reset hooks allocate nothing, lock nothing and block on nothing)
- *        and ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS (before_inference and
- *        after_inference likewise), or 0 for no promise. Stored as given: a bit
- *        the header does not define is refused by anira_pipeline_add_processor.
+ * @param realtime_phases The descriptor's realtime_phases, the processor's real-time promise
+ *        per phase, which JavaScript cannot write into the descriptor itself:
+ *        an OR of ANIRA_PHASE_BIT(phase) over the hooks that allocate nothing,
+ *        lock nothing and block on nothing (of pre_process, post_process,
+ *        before_inference, after_inference and reset), or 0 for no promise.
+ *        Stored as given: the bit of any other phase is refused by
+ *        anira_pipeline_add_processor.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask does not
  *         define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated.
  * @par Thread contract
@@ -173,7 +173,7 @@ extern "C" {
 ANIRA_API anira_status ANIRA_CALL anira_em_processor_desc_init(anira_processor_desc* desc,
                                                                uint32_t js_key,
                                                                uint32_t hook_mask,
-                                                               uint32_t processor_flags) ANIRA_NOEXCEPT;
+                                                               uint32_t realtime_phases) ANIRA_NOEXCEPT;
 
 /**
  * @brief anira_em_processor_desc_init followed by anira_pipeline_add_processor: the pipeline's
@@ -183,10 +183,11 @@ ANIRA_API anira_status ANIRA_CALL anira_em_processor_desc_init(anira_processor_d
  * @param pipeline The pipeline.
  * @param js_key As in anira_em_processor_desc_init.
  * @param hook_mask As in anira_em_processor_desc_init.
- * @param processor_flags As in anira_em_processor_desc_init: the processor's real-time promise.
+ * @param realtime_phases As in anira_em_processor_desc_init: the processor's real-time promise
+ *        per phase.
  * @param err Nullable.
  * @return As anira_em_processor_desc_init, then as anira_pipeline_add_processor
- *         (ANIRA_ERROR_INVALID_ARGUMENT for a flags bit the header does not define,
+ *         (ANIRA_ERROR_INVALID_ARGUMENT for a realtime_phases bit of no per-chunk phase,
  *         ANIRA_ERROR_INVALID_STATE when the pipeline already has a processor).
  * @par Thread contract
  * [main-thread]
@@ -195,7 +196,7 @@ ANIRA_API anira_status ANIRA_CALL anira_em_processor_desc_init(anira_processor_d
 ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipeline* pipeline,
                                                                      uint32_t js_key,
                                                                      uint32_t hook_mask,
-                                                                     uint32_t processor_flags,
+                                                                     uint32_t realtime_phases,
                                                                      anira_error* err) ANIRA_NOEXCEPT;
 
 /**
@@ -207,8 +208,10 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipel
  * trampolines that never cross into JavaScript: load reads the entry's model record once
  * on the control thread (its row, its path copied, its bytes borrowed), unload frees it,
  * prepare hands it to every process and reset call as their prepared pointer (what the
- * package's engineModel reads), and unprepare does nothing. flags is engine_flags;
- * providers stay empty (the CPU path alone), for a C caller to fill before
+ * package's engineModel reads), and unprepare does nothing. edge answers the statement
+ * of the slot's direction where one was given and leaves the provider rule of that
+ * direction where none was, and stays NULL when neither was given. flags is
+ * engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before
  * anira_custom_engine_create. A descriptor that is never created keeps its record.
  * @param desc The caller's descriptor, overwritten from ANIRA_ENGINE_DESC_INIT.
  * @param js_key The key the hook receives, the engine's entry in the instance's registry.
@@ -219,8 +222,19 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipel
  *        ANIRA_ENGINE_FLAG_DYNAMIC_TIME and ANIRA_ENGINE_FLAG_STATE_ALIAS, or 0
  *        for none. Stored as given: a bit the header does not define is refused by
  *        anira_custom_engine_create.
- * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask does not
- *         define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated.
+ * @param input_edge The engine's edge statement for every input slot, read within its
+ *        struct_size and copied (the reason too): a JavaScript engine runs in the
+ *        inference Workers, so the main thread states it here, where the plan report
+ *        is built; the descriptor's edge answers it without crossing into
+ *        JavaScript. Per direction, not per slot: the engine is added before the
+ *        model is known. NULL: no statement for the inputs, the provider rule of an
+ *        input (zero-copy on the CPU path).
+ * @param output_edge As input_edge, for every output slot; NULL: the provider rule of an
+ *        output.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc, a bit hook_mask does not
+ *         define, or an input_edge or output_edge whose struct_size is below its edge_class or
+ *         whose edge_class anira_edge_class does not name; ANIRA_ERROR_OUT_OF_MEMORY when the
+ *         record cannot be allocated.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -228,17 +242,19 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipel
 ANIRA_API anira_status ANIRA_CALL anira_em_engine_desc_init(anira_engine_desc* desc,
                                                             uint32_t js_key,
                                                             uint32_t hook_mask,
-                                                            uint32_t engine_flags) ANIRA_NOEXCEPT;
+                                                            uint32_t engine_flags,
+                                                            const anira_engine_edge* input_edge,
+                                                            const anira_engine_edge* output_edge) ANIRA_NOEXCEPT;
 
 /**
- * @brief anira_em_engine_desc_init with engine_flags, anira_custom_engine_create under
- * engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the handle:
- * the pipeline holds the JavaScript engine, and model entries name it as
- * ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no providers list, so the
- * engine serves ANIRA_PROVIDER_CPU alone and a query bit has nothing to answer; an
- * engine with providers is built with anira_em_engine_desc_init. A refused create frees
- * the record; a refused addition destroys the handle, which releases the engine and
- * frees it.
+ * @brief anira_em_engine_desc_init with engine_flags, input_edge and output_edge,
+ * anira_custom_engine_create under engine_id, anira_pipeline_add_engine and
+ * anira_custom_engine_destroy of the handle: the pipeline holds the JavaScript engine,
+ * and model entries name it as ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no
+ * providers list, so the engine serves ANIRA_PROVIDER_CPU alone and a query bit has
+ * nothing to answer; an engine with providers is built with anira_em_engine_desc_init. A
+ * refused create frees the record; a refused addition destroys the handle, which
+ * releases the engine and frees it.
  * @param pipeline The pipeline.
  * @param engine_id The engine's reverse-URI id, as anira_custom_engine_create takes it; copied.
  * @param js_key As in anira_em_engine_desc_init.
@@ -247,6 +263,15 @@ ANIRA_API anira_status ANIRA_CALL anira_em_engine_desc_init(anira_engine_desc* d
  *        ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME and
  *        ANIRA_ENGINE_FLAG_STATE_ALIAS, which JavaScript cannot write into the
  *        descriptor itself.
+ * @param input_edge The engine's edge statement for every input slot, read within its
+ *        struct_size and copied (the reason too): a JavaScript engine runs in the
+ *        inference Workers, so the main thread states it here, where the plan report
+ *        is built; the descriptor's edge answers it without crossing into
+ *        JavaScript. Per direction, not per slot: the engine is added before the
+ *        model is known. NULL: no statement for the inputs, the provider rule of an
+ *        input (zero-copy on the CPU path).
+ * @param output_edge As input_edge, for every output slot; NULL: the provider rule of an
+ *        output.
  * @param err Nullable.
  * @return As anira_em_engine_desc_init, then as anira_custom_engine_create
  *         (ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.', with the prefix "anira." or a
@@ -261,6 +286,8 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_engine(anira_pipeline
                                                                   uint32_t js_key,
                                                                   uint32_t hook_mask,
                                                                   uint32_t engine_flags,
+                                                                  const anira_engine_edge* input_edge,
+                                                                  const anira_engine_edge* output_edge,
                                                                   anira_error* err) ANIRA_NOEXCEPT;
 
 /**
@@ -382,15 +409,15 @@ ANIRA_API uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void)
  * @param err Nullable.
  * @return ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL
  *         handler or out word, a slot list longer than 32 or without its pointer, a slot listed
- *         twice, a slot that is not a Streamed slot of its side with a float32 ring, a Streamed
- *         slot no input or output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a
- *         node without any input or output, a slot of more than 64 channels;
- *         ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a
- *         contract that is not Hard or whose block range excludes the quantum, a parameter slot
- *         that is not a float32 Static scalar, a tensor slot that is not Static or has a
- *         dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to
- *         start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or
- *         processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused);
+ *         twice, a slot that is not a Streamed slot of its side, a Streamed slot no input or
+ *         output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a node without any
+ *         input or output, a slot of more than 64 channels; ANIRA_ERROR_INVALID_STATE for an
+ *         unprepared handler; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block
+ *         range excludes the quantum, a Streamed slot whose ring dtype is not float32, a
+ *         parameter slot that is not a float32 Static scalar, a tensor slot that is not Static
+ *         or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread
+ *         failed to start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a
+ *         thread or processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused);
  *         ANIRA_ERROR_OUT_OF_MEMORY.
  * @par Thread contract
  * [main-thread]

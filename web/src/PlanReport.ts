@@ -34,12 +34,46 @@ export type PlanInfo = {
   provider: number
   /** The registered name of a custom engine, null for a built-in one. */
   engineId: string | null
-  /** The per-inference budget of this plan, in milliseconds. */
+  /**
+   * The per-inference budget of this plan, in milliseconds: what the warm-up pass measured for it
+   * under a measured budget, the contract's figure under an explicit one.
+   */
   budgetMs: number
   /** A custom engine's `ANIRA_ENGINE_FLAG_*` promises; 0 for a built-in engine. */
   engineFlags: number
   /** The name of the plan's custom provider, null for one the enum names. */
   providerId: string | null
+  /**
+   * `anira_memory_kind`: the physical memory the plan's provider computes in, the fact a
+   * device provider's slot classes follow. `ANIRA_MEMORY_UNIFIED` on a provider that runs
+   * over host memory; on the web every device provider's is `ANIRA_MEMORY_UNKNOWN` (a
+   * browser exposes no memory kind), its slots `ANIRA_EDGE_UNKNOWN`.
+   */
+  memoryKind: number
+  /** The inferences the warm-up pass ran for this plan at this prepare; 0 without a pass. */
+  warmupIterations: number
+  /**
+   * The maximum of the pass's last four inference times in milliseconds, each timed on the
+   * Worker that ran it; 0 without a pass.
+   */
+  measuredMs: number
+  /** The median of the same times; 0 without a pass. */
+  medianMs: number
+  /** `anira_warmup_outcome`: how the pass ended (`ANIRA_WARMUP_OUTCOME_NONE` without one). */
+  warmupOutcome: number
+  /** The inferences of the session that run at once (1 for an exclusive session). */
+  rtParallel: number
+  /**
+   * The real-time factor: the plan's inference time (`measuredMs`, else `budgetMs`) over the
+   * anchor's hop period; the plan keeps up while `rtFactor / rtParallel` stays below 1.
+   */
+  rtFactor: number
+  /**
+   * `anira_rt_verdict`: comfortable below a load of 0.75, marginal below 1, else not real-time;
+   * `ANIRA_RT_UNMEASURED` without a measurement. An estimate at prepare; an offline render is
+   * never gated by it.
+   */
+  rtVerdict: number
 }
 
 /** One slot of a plan (`anira_plan_slot`): the edge its tensor takes into the engine. */
@@ -47,20 +81,48 @@ export type PlanSlot = {
   slot: number
   /** True for an input slot. */
   isInput: boolean
-  /** `anira_domain` of the host end and of the model end. */
-  domainIn: number
-  domainOut: number
-  /** `anira_edge_class`: the cost class of the edge taken. */
+  /**
+   * `anira_domain` where the data enters the slot's edge and where it leaves it: the host's
+   * side first for an input, the engine's for an output.
+   */
+  fromDomain: number
+  toDomain: number
+  /** `anira_edge_class`: where the edge taken moves the slot's bytes. */
   edgeClass: number
   allocateClass: number
   /** `anira_wait_strategy`. */
   waitStrategy: number
   recipe: string | null
+  /** Why the edge is what it is; who moves the bytes is `movedBy`. */
   reason: string | null
   /** `anira_role`. */
   role: number
   /** `anira_binding`. */
   binding: number
+  /** `anira_dtype` of the slot's spec: the model tensor's. */
+  dtype: number
+  /** `anira_dtype` of the slot's ring (the host end of a Streamed tensor), 0 without one. */
+  ringDtype: number
+  /**
+   * `anira_mover_flags` bits: who executes the slot's moves, an OR of `ANIRA_MOVER_ANIRA` (anira's own
+   * code: an engine adapter's copy) and `ANIRA_MOVER_ENGINE` (the engine's runtime);
+   * `ANIRA_MOVER_NONE` on a zero-copy edge.
+   */
+  movedBy: number
+  /**
+   * True where the slot's window was derived, its Streamed spec declaring none (no `"window"`
+   * in the model file): from a fixed Time extent the window of that extent, from a dynamic one
+   * a flexible window pinned to the anchor hop. False for a declared window and for a slot
+   * without one.
+   */
+  windowDerived: boolean
+  /**
+   * The window the slot runs at, in elements along its Time axis per inference (a flexible one
+   * pinned to the anchor hop); 0 for a slot without a window (Static, State).
+   */
+  window: number
+  /** The elements the slot advances per inference, its window less the overlap; 0 without one. */
+  hop: number
 }
 
 /** One extension a plan consumes (`anira_plan_ext`). */
@@ -74,23 +136,36 @@ export type PlanExtension = {
 }
 
 // The wasm32 layouts of the three Tier-2 rows (anira/abi/handler.h): 4-byte pointers, the
-// double of anira_plan_info at 24. The rows are enumerated at these strides (the entries take
+// double of anira_plan_info at 24, its memory_kind in the tail at 44 and the warm-up and
+// real-time fields behind it (the doubles at 56, 64 and 80), the two int64_t of
+// anira_plan_slot's tail at 64 and 72. The rows are enumerated at these strides (the entries take
 // the caller's element size and write the fields the stride covers).
 const PLAN_INFO = {
-  size: 48,
+  size: 96,
   variant: 4,
   engine: 8,
   provider: 12,
   engineId: 16,
   budgetMs: 24,
 }
-const PLAN_INFO_TAIL = { engineFlags: 32, providerId: 40 }
+const PLAN_INFO_TAIL = {
+  engineFlags: 32,
+  providerId: 40,
+  memoryKind: 44,
+  warmupIterations: 48,
+  measuredMs: 56,
+  medianMs: 64,
+  warmupOutcome: 72,
+  rtParallel: 76,
+  rtFactor: 80,
+  rtVerdict: 88,
+}
 const PLAN_SLOT = {
-  size: 48,
+  size: 80,
   slot: 4,
   isInput: 8,
-  domainIn: 12,
-  domainOut: 16,
+  fromDomain: 12,
+  toDomain: 16,
   edgeClass: 20,
   allocateClass: 24,
   waitStrategy: 28,
@@ -98,6 +173,12 @@ const PLAN_SLOT = {
   reason: 36,
   role: 40,
   binding: 44,
+  dtype: 48,
+  ringDtype: 52,
+  movedBy: 56,
+  windowDerived: 60,
+  window: 64,
+  hop: 72,
 }
 const PLAN_EXT = { size: 20, index: 4, host: 8, kind: 12, consumer: 16 }
 // anira_plan_query and the anira_backend_id it holds at 8.
@@ -139,6 +220,14 @@ export class PlanReport {
         budgetMs: heap(m).HEAPF64[(row + PLAN_INFO.budgetMs) >>> 3],
         engineFlags: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.engineFlags) >>> 2],
         providerId: this.text(heap(m).HEAPU32[(row + PLAN_INFO_TAIL.providerId) >>> 2]),
+        memoryKind: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.memoryKind) >>> 2],
+        warmupIterations: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.warmupIterations) >>> 2],
+        measuredMs: heap(m).HEAPF64[(row + PLAN_INFO_TAIL.measuredMs) >>> 3],
+        medianMs: heap(m).HEAPF64[(row + PLAN_INFO_TAIL.medianMs) >>> 3],
+        warmupOutcome: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.warmupOutcome) >>> 2],
+        rtParallel: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.rtParallel) >>> 2],
+        rtFactor: heap(m).HEAPF64[(row + PLAN_INFO_TAIL.rtFactor) >>> 3],
+        rtVerdict: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.rtVerdict) >>> 2],
       })
     )
   }
@@ -147,6 +236,8 @@ export class PlanReport {
   slots(plan: number, inputs: boolean): PlanSlot[] {
     const u32 = (m: AniraBindings['module'], row: number, offset: number) =>
       heap(m).HEAPU32[(row + offset) >>> 2]
+    const i64 = (m: AniraBindings['module'], row: number, offset: number) =>
+      Number(heap(m).HEAP64[(row + offset) >>> 3])
     return this.rows(
       PLAN_SLOT.size,
       (count, out) =>
@@ -161,8 +252,8 @@ export class PlanReport {
       (m, row) => ({
         slot: u32(m, row, PLAN_SLOT.slot),
         isInput: u32(m, row, PLAN_SLOT.isInput) !== 0,
-        domainIn: u32(m, row, PLAN_SLOT.domainIn),
-        domainOut: u32(m, row, PLAN_SLOT.domainOut),
+        fromDomain: u32(m, row, PLAN_SLOT.fromDomain),
+        toDomain: u32(m, row, PLAN_SLOT.toDomain),
         edgeClass: u32(m, row, PLAN_SLOT.edgeClass),
         allocateClass: u32(m, row, PLAN_SLOT.allocateClass),
         waitStrategy: u32(m, row, PLAN_SLOT.waitStrategy),
@@ -170,6 +261,12 @@ export class PlanReport {
         reason: this.text(u32(m, row, PLAN_SLOT.reason)),
         role: u32(m, row, PLAN_SLOT.role),
         binding: u32(m, row, PLAN_SLOT.binding),
+        dtype: u32(m, row, PLAN_SLOT.dtype),
+        ringDtype: u32(m, row, PLAN_SLOT.ringDtype),
+        movedBy: u32(m, row, PLAN_SLOT.movedBy),
+        windowDerived: u32(m, row, PLAN_SLOT.windowDerived) !== 0,
+        window: i64(m, row, PLAN_SLOT.window),
+        hop: i64(m, row, PLAN_SLOT.hop),
       })
     )
   }

@@ -7,6 +7,7 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -20,13 +21,22 @@
 #include "../scheduler/Core.h"
 #include "../utils/Logger.h"
 #include "../utils/StatusError.h"
+#include "context.h"  // IWYU pragma: keep - the body of anira_context
 #include "engine.h"
+#include "handler.h"  // IWYU pragma: keep - the body of anira_pipeline
 #include "handles.h"
+#include "memory.h"
 #include "words.h"
 
 namespace anira::capi {
 
 namespace {
+
+// The reasons of a pipeline's custom rows (set_provider_edge).
+constexpr const char* k_custom_host_reason =
+    "host memory reaches a custom engine's CPU provider without a copy";
+constexpr const char* k_custom_device_reason =
+    "the engine declared the provider and its query reports it usable here";
 
 anira::engine::ProviderInfo cpu_path() {
     return anira::engine::ProviderInfo{.m_provider = ANIRA_PROVIDER_CPU, .m_provider_id = ""};
@@ -57,11 +67,96 @@ std::string provider_list(const std::vector<anira::engine::ProviderInfo>& provid
     return text.empty() ? "none" : text;
 }
 
+std::string_view text_of(const char* text) noexcept {
+    return text != nullptr ? std::string_view(text) : std::string_view();
+}
+
+// One end of an edge row: its domain and its backend (engine ANIRA_ENGINE_NONE on a domain
+// end).
+struct End {
+    uint32_t m_domain = 0;
+    anira_backend_id m_backend = ANIRA_BACKEND_ID_INIT;
+};
+
+End from_end(const anira_edge_info& row) noexcept {
+    anira_backend_id backend = ANIRA_BACKEND_ID_INIT;
+    backend.engine = row.from_engine;
+    backend.provider = row.from_provider;
+    backend.engine_id = row.from_engine_id;
+    backend.provider_id = row.from_provider_id;
+    return End{.m_domain = row.from_domain, .m_backend = backend};
+}
+
+End to_end(const anira_edge_info& row) noexcept {
+    anira_backend_id backend = ANIRA_BACKEND_ID_INIT;
+    backend.engine = row.to_engine;
+    backend.provider = row.to_provider;
+    backend.engine_id = row.to_engine_id;
+    backend.provider_id = row.to_provider_id;
+    return End{.m_domain = row.to_domain, .m_backend = backend};
+}
+
+// A domain end by its domain; a backend end by engine, provider and both ids, not its domain.
+bool same_end(const End& row, const End& query) noexcept {
+    if (row.m_backend.engine != query.m_backend.engine) { return false; }
+    if (row.m_backend.engine == static_cast<uint32_t>(ANIRA_ENGINE_NONE)) {
+        return row.m_domain == query.m_domain;
+    }
+    return row.m_backend.provider == query.m_backend.provider &&
+           text_of(row.m_backend.engine_id) == text_of(query.m_backend.engine_id) &&
+           text_of(row.m_backend.provider_id) == text_of(query.m_backend.provider_id);
+}
+
 }  // namespace
 
-bool cpu_provider(anira_provider provider, std::string_view provider_id) noexcept {
-    return provider_id.empty() &&
-           (provider == ANIRA_PROVIDER_CPU || provider == ANIRA_PROVIDER_XNNPACK);
+std::array<anira_edge_info, 2> backend_rows(const anira_backend_id& backend) noexcept {
+    anira_edge_info input = ANIRA_EDGE_INFO_INIT;
+    input.from_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
+    input.to_engine = backend.engine;
+    input.to_provider = backend.provider;
+    input.to_engine_id = backend.engine_id;
+    input.to_provider_id = backend.provider_id;
+    input.available = 1;
+    anira_edge_info output = ANIRA_EDGE_INFO_INIT;
+    output.from_engine = backend.engine;
+    output.from_provider = backend.provider;
+    output.from_engine_id = backend.engine_id;
+    output.from_provider_id = backend.provider_id;
+    output.to_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
+    output.available = 1;
+    return {input, output};
+}
+
+anira_backend_id backend_end(const anira_edge_info& row) noexcept {
+    return row.to_engine != static_cast<uint32_t>(ANIRA_ENGINE_NONE) ? to_end(row).m_backend
+                                                                     : from_end(row).m_backend;
+}
+
+bool same_ends(const anira_edge_info& row, const anira_edge_info& query) noexcept {
+    return same_end(from_end(row), from_end(query)) && same_end(to_end(row), to_end(query));
+}
+
+void set_provider_edge(anira_edge_info& edge,
+                       anira_provider provider,
+                       std::string_view provider_id,
+                       const anira::engine::DeviceMemory& memory,
+                       const char* host_reason,
+                       const char* device_reason,
+                       MemoryKinds& texts) {
+    // The row's direction is its ends': to the backend is the input row, from it the output.
+    const bool is_input = edge.to_engine != static_cast<uint32_t>(ANIRA_ENGINE_NONE);
+    const anira::engine::ProviderRule rule =
+        anira::engine::provider_rule(is_input, provider, provider_id, memory);
+    edge.edge_class = static_cast<uint32_t>(rule.m_class);
+    edge.moved_by = rule.m_moved_by;
+    edge.memory_kind = static_cast<uint32_t>(memory.m_kind);
+    if (anira::engine::host_memory_provider(provider, provider_id)) {
+        edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
+        edge.reason = host_reason;
+    } else {
+        edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
+        edge.reason = texts.keep(std::string(device_reason) + "; " + rule.m_reason);
+    }
 }
 
 anira_init_info query_info(const anira_context& context) {
@@ -234,28 +329,45 @@ CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipel
             id.engine_id = engine->id().c_str();
             id.provider_id = provider_id;
             rows.m_backends.push_back(id);
-            anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
-            edge.from_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
-            edge.to_engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
-            edge.to_provider = static_cast<uint32_t>(info.m_provider);
-            edge.to_provider_id = provider_id;
-            edge.to_engine_id = engine->id().c_str();
-            edge.available = 1;
-            if (cpu_provider(info.m_provider, info.m_provider_id)) {
-                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);
-                edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
-                edge.reason = "host memory reaches a custom engine's CPU provider without a copy";
-            } else {
-                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY);
-                edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
-                edge.reason =
-                    "the engine declared the provider and its query reports it usable here; "
-                    "the engine moves host memory to it itself, per call";
+            for (anira_edge_info& edge : backend_rows(id)) {
+                if (anira::engine::host_memory_provider(info.m_provider, info.m_provider_id)) {
+                    set_provider_edge(edge,
+                                      info.m_provider,
+                                      info.m_provider_id,
+                                      host_memory(),
+                                      k_custom_host_reason,
+                                      k_custom_device_reason,
+                                      context.m_capabilities.m_memory);
+                } else {
+                    // Until complete_custom_edge asks the device's memory kind: the move the
+                    // engine makes itself, of a class no probe has established yet.
+                    edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_UNKNOWN);
+                    edge.moved_by = static_cast<uint32_t>(ANIRA_MOVER_ENGINE);
+                    edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
+                    edge.reason = k_custom_device_reason;
+                }
+                rows.m_edges.push_back(edge);
             }
-            rows.m_edges.push_back(edge);
         }
     }
     return rows;
+}
+
+void complete_custom_edge(const anira_context& context, anira_edge_info& edge) {
+    const anira_backend_id backend = backend_end(edge);
+    const auto provider = static_cast<anira_provider>(backend.provider);
+    const std::string_view provider_id = text_of(backend.provider_id);
+    if (anira::engine::host_memory_provider(provider, provider_id)) { return; }
+    // A custom engine's options are its own vocabulary: no device_id is read from them.
+    const anira::engine::DeviceMemory memory =
+        context.m_capabilities.m_memory.memory_of(ANIRA_ENGINE_CUSTOM, provider, provider_id, {});
+    set_provider_edge(edge,
+                      provider,
+                      provider_id,
+                      memory,
+                      k_custom_host_reason,
+                      k_custom_device_reason,
+                      context.m_capabilities.m_memory);
 }
 
 }  // namespace anira::capi

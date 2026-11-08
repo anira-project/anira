@@ -166,7 +166,7 @@ TEST(OneSidedStreamingInternals, GeneratorPushDataNeverSubmits) {
     auto const sessions = Core::get_sessions();
     ASSERT_EQ(sessions.size(), 1u);
     EXPECT_TRUE(sessions[0]->m_time_stamps.empty());
-    for (const auto& ts_struct : sessions[0]->m_inference_queue) {
+    for (const auto& ts_struct : sessions[0]->m_struct_pool) {
         EXPECT_TRUE(ts_struct->m_free.load());
     }
 
@@ -252,7 +252,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     ASSERT_EQ(sessions.size(), 1u);
     const SessionElement& session = *sessions[0];
     size_t const num_structs = session.m_num_structs;
-    ASSERT_EQ(session.m_inference_queue.size(), num_structs);
+    ASSERT_EQ(session.m_struct_pool.size(), num_structs);
     RingBuffer& ring = session.receive_ring(0);
     size_t const ring_capacity = ring.capacity();
     ASSERT_EQ(ring_capacity, static_cast<size_t>(latency) + num_structs * k_hop)
@@ -293,7 +293,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
         push_collect_only();
         return ring.available(0) == ring_capacity;
     })) << "push_data must collect finished inferences while the receive ring has room.";
-    for (const auto& ts_struct : session.m_inference_queue) {
+    for (const auto& ts_struct : session.m_struct_pool) {
         EXPECT_TRUE(ts_struct->m_free.load()) << "A placed result releases its struct.";
     }
     anira_drain_log();
@@ -315,7 +315,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     EXPECT_EQ(ring.available(0), ring_capacity)
         << "The gate must hold results in their structs instead of overwriting unread "
            "output.";
-    for (const auto& ts_struct : session.m_inference_queue) {
+    for (const auto& ts_struct : session.m_struct_pool) {
         EXPECT_FALSE(ts_struct->m_free.load())
             << "Every struct holds a result the full ring cannot take.";
     }

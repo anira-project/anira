@@ -22,6 +22,7 @@
 #include "LatencyCalculator.h"
 #include "SessionElement.h"
 #include "TensorRun.h"
+#include "Warmup.h"
 
 namespace anira {
 
@@ -51,6 +52,14 @@ bool InferenceManager::set_plan(uint32_t plan) noexcept {
 
 uint32_t InferenceManager::get_plan() const noexcept {
     return m_session->m_current_plan.load(std::memory_order_relaxed);
+}
+
+void InferenceManager::set_budget(double budget_ms) noexcept {
+    m_session->m_budget_ms = budget_ms;
+}
+
+WarmupFigure InferenceManager::warm_up_plan(uint32_t plan) {
+    return Core::warm_up_plan(m_session, plan);
 }
 
 void InferenceManager::prepare(const CustomLatencies& custom_latencies,

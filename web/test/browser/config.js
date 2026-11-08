@@ -15,7 +15,10 @@ import {
   InferenceHandler,
   ModelConfig,
   Pipeline,
+  anira_budget_kind,
   anira_engine,
+  anira_rt_verdict,
+  anira_warmup_outcome,
 } from '../../dist/index.js'
 
 const RATE = 48000
@@ -61,20 +64,46 @@ const run = async () => {
     )
   ).hardHostBlocks(QUANTUM, QUANTUM, RATE)
   check(
-    abi.anira_contract_hard_budget(contract.native()).explicit_ms === 5,
-    'the contract file is read as written (budget 5 ms)'
+    abi.anira_contract_hard_budget(contract.native()).kind ===
+      anira_budget_kind.ANIRA_BUDGET_MEASURED,
+    'the contract file is read as written (the measured budget)'
   )
 
+  // The file's warm-up runs at prepare on the pool's Workers, which start with the context:
+  // ready() before the prepare.
   const context = Context.create(anira, { threads: 1 })
+  await context.ready()
   const pipeline = Pipeline.create(anira).addInference(model)
   const handler = InferenceHandler.create(context, pipeline)
-  handler.prepare(contract)
+  const report = handler.prepare(contract)
   const latency = handler.getLatency()
   check(
     true,
     `the handler prepared on the built-in ONNX Runtime engine (latency ${latency})`
   )
-  await context.ready()
+  for (const plan of report.plans()) {
+    check(
+      plan.warmupIterations >= 1 &&
+        plan.warmupOutcome !== anira_warmup_outcome.ANIRA_WARMUP_OUTCOME_NONE &&
+        plan.measuredMs > 0 &&
+        plan.medianMs > 0 &&
+        plan.medianMs <= plan.measuredMs,
+      `the plan's warm-up ran on the Workers: ${plan.warmupIterations} inferences, measured ` +
+        `${plan.measuredMs.toFixed(3)} ms (median ${plan.medianMs.toFixed(3)} ms)`
+    )
+    const load = plan.rtFactor / plan.rtParallel
+    const verdict =
+      load >= 1
+        ? anira_rt_verdict.ANIRA_RT_NOT_REALTIME
+        : load >= 0.75
+          ? anira_rt_verdict.ANIRA_RT_MARGINAL
+          : anira_rt_verdict.ANIRA_RT_COMFORTABLE
+    check(
+      plan.rtFactor > 0 && plan.rtParallel === 1 && plan.rtVerdict === verdict,
+      `its real-time factor ${plan.rtFactor.toFixed(3)} of ${plan.rtParallel} gives the ` +
+        `verdict ${plan.rtVerdict}`
+    )
+  }
 
   const audio = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
   const audioNode = await handler.createAudioNode(audio, { params: [1], waitMs: 500 })

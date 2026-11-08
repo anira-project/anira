@@ -45,11 +45,29 @@ Adding It to the Pipeline
 and never crosses. Each bit is ``1 << ANIRA_PHASE_*``, one index space with
 ``anira::Processor::k_*`` of ``anira.hpp`` (``ANIRA_EM_PROCESSOR_HOOK_AFTER`` is
 ``Processor::k_after_inference``, 16), the lifecycle phases (prepare, release, reset, unprepare,
-init) above the data phases. ``flags`` is the processor's real-time promise, stated, never derived:
-the default ``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST`` says ``preProcess``, ``postProcess`` and
-``reset`` allocate nothing, lock nothing and wait for nothing, which a Hard contract requires of
-them (they run on the audio thread); ``ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS`` says the same of
-``beforeInference`` and ``afterInference``.
+init) above the data phases. ``realtimePhases`` is the processor's real-time promise per phase,
+stated, never derived from ``phases``: an OR of ``ANIRA_PHASE_BIT(phase)``, the same bits, over the
+hooks that allocate nothing, lock nothing and wait for nothing. A Hard contract requires the bit of
+every ``preProcess``, ``postProcess`` and ``reset`` hook (they run on the audio thread), and the
+default is those three bits; ``beforeInference`` and ``afterInference`` run on the Workers and
+need none. Where the C++ ``realtime_phases()`` defaults to no promise, the web's defaults to the
+three phases of the audio thread, since a JavaScript processor's usual hook runs there:
+
+.. code-block:: ts
+
+   pipeline.addProcessor('org.example.heavy-hooks', {
+     phases: ANIRA_EM_PROCESSOR_HOOK_PRE | ANIRA_EM_PROCESSOR_HOOK_BEFORE | ANIRA_EM_PROCESSOR_HOOK_AFTER,
+     realtimePhases: ANIRA_PHASE_BIT(anira_phase.ANIRA_PHASE_PRE_PROCESS),   // the hooks may allocate
+   })
+
+**The warm-up.** Under any warm-up but ``ANIRA_WARMUP_NONE``, unless the model's figure is
+reused, the prepare's pass runs
+``beforeInference`` and ``afterInference`` on the Workers (never ``preProcess`` or
+``postProcess``), timed with the engine call, so a hook must accept an entry ``preProcess`` never
+filled. Under a measured budget ``prepare`` may run twice in one prepare: ``prepare``, the pass, then
+``unprepare`` and ``prepare`` again when the pass moved the entry count (:ref:`processor-lifecycle`).
+The processor's id, for the model's measured figure, is ``org.anira.web.processor.<key>``, the key of
+its name: processors defined under one name share the figure (:ref:`usage-budget-warmup`).
 
 The Example's Processor
 -----------------------

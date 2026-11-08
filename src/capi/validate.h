@@ -41,12 +41,23 @@ namespace anira::capi {
 
 /// What the validator derives for one tensor spec.
 struct DerivedSpec {
-    std::vector<int64_t> m_dims;        ///< the spec's extents, a dynamic Time extent resolved
-    int64_t m_channels = 1;             ///< Streamed: the Channel axis extent, 1 without one;
-                                        ///< Static and Buffer: 1 (the tag names an axis there)
-    int64_t m_window_used = 0;          ///< Streamed only: the window, a flexible one pinned
-                                        ///< from the anchor hop (pin_anchor_hop)
-    int64_t m_hop = 0;                  ///< Streamed: window_used - context; Static and Buffer: 0
+    std::vector<int64_t> m_dims;            ///< the spec's extents, a dynamic Time extent resolved
+    anira_dtype m_dtype = ANIRA_DTYPE_F32;  ///< the spec's dtype: the model tensor's, and the
+                                            ///< element type of its chunk buffer
+    int64_t m_channels = 1;                 ///< Streamed: the Channel axis extent, 1 without one;
+                                            ///< Static and Buffer: 1 (the tag names an axis there)
+    /// Streamed only: the window in effect, [m_window_min, m_window_max] and m_overlap. The
+    /// spec's when it declares one (window_min > 0); else derived (m_window_derived): from a
+    /// fixed Time extent E the fixed window E, from a dynamic one the flexible window [1,
+    /// ANIRA_UNBOUNDED], overlap 0 either way. The spec itself is never written, so a model
+    /// config written back keeps whether it declared a window.
+    int64_t m_window_min = 0;
+    int64_t m_window_max = 0;
+    int64_t m_overlap = 0;
+    bool m_window_derived = false;
+    int64_t m_window_used = 0;  ///< Streamed only: the window, a flexible one pinned from the
+                                ///< anchor hop (pin_anchor_hop)
+    int64_t m_hop = 0;          ///< Streamed: window_used - overlap; Static and Buffer: 0
     std::optional<size_t> m_time_axis;  ///< the Time axis, when the spec has one
 };
 
@@ -210,7 +221,7 @@ void validate(const anira_model_config& model,
               bool default_set = false);
 
 /// The ring dtype of every slot: two vectors sized to the model's input and output lists,
-/// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved
+/// each slot's spec's dtype, then each entry of the Hard contract's ring dtypes resolved
 /// by tensor name into its slot. Run validate first: it refuses a name that matches no
 /// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts) unless
 /// a processor fills the phase that moves that ring.
@@ -228,7 +239,7 @@ anira::CustomLatencies latencies_of(const anira_contract& contract,
 /// The declared host-end domain of every slot (anira_contract_set_host_domain): two vectors
 /// sized to the model's input and output lists, ANIRA_DOMAIN_HOST everywhere, then each entry
 /// of the contract's host domains resolved by tensor name into its slot. What the plan report's
-/// slot rows carry as domain_in of an input and domain_out of an output, against the engine's
+/// slot rows carry as from_domain of an input and to_domain of an output, against the engine's
 /// domain on the other side. Run validate first: it refuses a name that matches no tensor and,
 /// in this pre-release, any domain but ANIRA_DOMAIN_HOST.
 struct HostDomains {

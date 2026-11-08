@@ -52,7 +52,7 @@ inline constexpr const char* k_contract_hard_v3 = R"({ "hard": {
 inline constexpr const char* k_contract_async_v3 = R"({ "async": {
     "deadline_ms": 33.3, "on_late": "drop", "priority": "auto",
     "lanes": 0, "max_in_flight": 0, "delivery": "polled"
-}, "edge_cost": "strict" })";
+}, "edge_cost": "zero_copy" })";
 
 // The SimpleGain config as the tree generates it (two inputs, the second static); the TFLite
 // export holds the static gain at rank 3 ([1, 1, 1]), which the two TensorFlow rows say.

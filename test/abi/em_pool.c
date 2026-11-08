@@ -106,6 +106,8 @@ int main(int argc, char** argv) {
                                                  key_of(POOL_ENGINE_ID),
                                                  0,
                                                  ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                                 NULL,
+                                                 NULL,
                                                  &err),
                  &err,
                  "anira_em_pipeline_add_js_engine");

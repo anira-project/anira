@@ -32,6 +32,7 @@
 #include "../extras/models/hybrid-nn/HybridNNProcessor.h"
 #include "../extras/models/model_files.h"
 #include "gtest/gtest.h"
+#include "support/file_contracts.h"
 
 // The GuitarLSTM export directories: the wav files the round trips compare against.
 constexpr const char* k_guitarlstm_pytorch =
@@ -145,7 +146,7 @@ struct HybridNnHandler {
 
     anira::Context m_context{anira::ContextConfig{}};
     anira::ModelConfig m_model = anira::ModelConfig::from_file(k_hybridnn_model_json);
-    anira::ContractHandle m_contract = anira::ContractHandle::from_file(k_hybridnn_contract_json);
+    anira::ContractHandle m_contract = anira_test::pinned_file_contract(k_hybridnn_contract_json);
     std::unique_ptr<anira::InferenceHandler> m_handler;
     std::vector<float> m_block;
     float* m_plane = nullptr;
@@ -530,7 +531,7 @@ TEST(InferenceHandlerDefaultPlan, StartsOnTheFirstEntryOfTheBuild) {
     anira::Context context{anira::ContextConfig{}};
     anira::ModelConfig model = anira::ModelConfig::from_file(k_hybridnn_model_json);
     model.add_model(k_bypass_engine_id);
-    anira::ContractHandle contract = anira::ContractHandle::from_file(k_hybridnn_contract_json);
+    anira::ContractHandle contract = anira_test::pinned_file_contract(k_hybridnn_contract_json);
     contract.hard_host_blocks(256, 256, 44100);
     anira::Pipeline pipeline;
     pipeline.add_engine(std::make_shared<BypassEngine>());

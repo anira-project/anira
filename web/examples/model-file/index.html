@@ -14,12 +14,16 @@
     <button id="start">Start</button>
     <label for="gain">Gain</label>
     <input id="gain" type="range" min="0" max="1" step="0.01" value="0.5" />
+    <p id="verdict"></p>
+    <button id="try" hidden>Try nonetheless</button>
     <script type="module">
       import { mountModelFileExample } from './main.ts'
       mountModelFileExample(
         document.getElementById('start'),
         document.getElementById('gain'),
-        new URL('/extras/models/model-pool/', location.href)
+        new URL('/extras/models/model-pool/', location.href),
+        document.getElementById('try'),
+        document.getElementById('verdict')
       )
     </script>
   </body>

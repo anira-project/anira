@@ -38,8 +38,11 @@ endif()
 # browser's main thread runs only once that thread yields, so a join there never returns.
 # INCOMING_MODULE_JS_API names every Module property the package passes at instantiation
 # (emsdk 6 reads neither wasmMemory nor wasmBinary by default).
-# Memory: one imported shared memory that grows (Anira.create makes it: 256 MiB to begin with,
-# the core and a small handler; 2 GiB at most). A shared memory cannot move, so the browser
+# Memory: one imported shared memory that grows (Anira.create makes it: 128 MiB to begin with by
+# default, 2 GiB at most). INITIAL_MEMORY is the least the module starts on, 64 MiB: its data, its
+# 32 MiB main stack, the core and a first Worker and handler (the heap ends at 34 MiB after
+# Anira.create and at 42 MiB with one Worker and a handler of the bundled gain model). A shared
+# memory cannot move, so the browser
 # reserves its maximum as address space when it is created, and the pages are committed as they
 # are touched. MAXIMUM_MEMORY is the heap's ceiling for malloc (getHeapMax): a page's smaller
 # maximum fails the growth earlier, and a larger one is capped here. 2 GiB keeps every heap
@@ -65,7 +68,7 @@ set(ANIRA_WASM_LINK_FLAGS "\
   --emit-tsd=${ANIRA_WASM_OUTPUT_FOLDER}/${ANIRA_WASM_TARGET_NAME}.d.ts \
   -s STACK_OVERFLOW_CHECK=0 \
   -s IMPORTED_MEMORY=1 \
-  -s INITIAL_MEMORY=268435456 \
+  -s INITIAL_MEMORY=67108864 \
   -s SHARED_MEMORY=1 \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s MAXIMUM_MEMORY=2147483648 \

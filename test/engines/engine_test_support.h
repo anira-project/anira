@@ -45,13 +45,12 @@ inline bool any_sample_nonzero(const std::vector<float>& buffer) {
 /// The record of a model file for one engine, as a session's prepare hands it to the engine
 /// room: float32 tensors of the given engine extents, unnamed (the slots bind by position),
 /// `instances` shared slots (none: an exclusive session's model, whose calls run on an executor
-/// of the session's own), `warm_up` inferences at load and the entry point `entry` (empty: the
-/// file's default).
+/// of the session's own) and the entry point `entry` (empty: the file's default). Every executor
+/// the load makes runs ExecutorLoaded::k_creation_warm_up inferences.
 inline anira::engine::Model model_record(anira_engine engine,
                                          std::string path,
                                          const std::vector<std::vector<int64_t>>& inputs,
                                          const std::vector<std::vector<int64_t>>& outputs,
-                                         uint32_t warm_up = 0,
                                          std::string entry = {},
                                          uint32_t instances = 0) {
     const auto side = [](const std::vector<std::vector<int64_t>>& shapes) {
@@ -75,7 +74,6 @@ inline anira::engine::Model model_record(anira_engine engine,
     model.m_inputs = side(inputs);
     model.m_outputs = side(outputs);
     model.m_instances = instances;
-    model.m_warm_up = warm_up;
     return model;
 }
 

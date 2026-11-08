@@ -75,8 +75,8 @@ typedef enum anira_dtype_code {
 #define ANIRA_DTYPE_LANES(d) ((d) >> 16)
 
 /**
- * @brief 32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor
- * never set on a Hard contract and the only one anira_tensor_data_f32 returns.
+ * @brief 32-bit float, one lane: the type of every 2.x stream and the only one
+ * anira_tensor_data_f32 returns.
  */
 #define ANIRA_DTYPE_F32 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)
 
@@ -333,8 +333,7 @@ typedef enum anira_role {
      * Hard entry carries it: a single form that names its slot is ANIRA_ERROR_INVALID_ARGUMENT,
      * and its position in an array of a _multi form must be the empty tensor (a rank of 1 or
      * more with an extent of 0). A processor sees it at the same slot. No Time axis, window,
-     * time ratio or latency; the value takes the spec's dtype, float32 in this pre-release like
-     * every model tensor.
+     * time ratio or latency; the value takes the spec's dtype, like every model tensor.
      */
     ANIRA_ROLE_STATE = 3,
     ANIRA_ROLE_FORCE32 = 0x7fffffff
@@ -356,7 +355,12 @@ typedef enum anira_contract_kind {
  * @brief How a Hard contract's per-inference budget is set.
  */
 typedef enum anira_budget_kind {
-    ANIRA_BUDGET_MEASURED = 0,  /**< Derived during warmup (default). */
+    /**
+     * What the warm-up pass measures at prepare (default): the slowest plan's figure, each
+     * plan's the maximum of its last four inferences, without a margin. Needs a pass of at
+     * least one inference: ANIRA_WARMUP_NONE and FIXED 0 are ANIRA_ERROR_CONFIG at prepare.
+     */
+    ANIRA_BUDGET_MEASURED = 0,
     /**
      * The explicit_ms of anira_contract_hard_set_budget; the v2 max_inference_time.
      */
@@ -365,14 +369,94 @@ typedef enum anira_budget_kind {
 } anira_budget_kind;
 
 /**
- * @brief Warmup policy of a Hard contract.
+ * @brief The warm-up pass of a Hard contract, at anira_handler_prepare: ordinary inferences of
+ * every plan, in table order, through the handler's session on the inference threads,
+ * each timed on the thread that runs it (the declared state's feed and capture, the
+ * processor's before_inference and after_inference, the engine call; never pre_process
+ * or post_process, never the wait for a thread or an instance). The warm-up pass also
+ * measures the inference time; a measured budget is the maximum of its last four
+ * inferences; under an explicit budget the timings are only reported. The session is
+ * sized again after the pass, which starts the stream over: nothing of the pass reaches
+ * the stream or a declared state. Apart from the pass, every executor of a built-in
+ * engine runs one inference over its own scratch when it is made (at load, or at an
+ * exclusive handler's prepare).
  */
 typedef enum anira_warmup_mode {
-    ANIRA_WARMUP_NONE = 0,  /**< No warmup; legal only with an explicit budget. */
-    ANIRA_WARMUP_FIXED = 1,  /**< A fixed number of iterations; the v2 warm_up. */
-    ANIRA_WARMUP_UNTIL_STABLE = 2,  /**< Until the measured time stabilises (default). */
+    ANIRA_WARMUP_NONE = 0,  /**< No pass; legal only with an explicit budget. */
+    /**
+     * n inferences per plan at prepare (the v2 warm_up, which ran per instance at load). With
+     * fewer than four the figure is the maximum of all n, the cold start included; UNTIL_STABLE
+     * or n >= 5 leaves it out. FIXED 0 is NONE.
+     */
+    ANIRA_WARMUP_FIXED = 1,
+    /**
+     * Until the last four inference times all lie within 20 % of their median, or within one
+     * step of the clock that took them when that is more, at most 32 inferences (default).
+     */
+    ANIRA_WARMUP_UNTIL_STABLE = 2,
     ANIRA_WARMUP_MODE_FORCE32 = 0x7fffffff
 } anira_warmup_mode;
+
+/**
+ * @brief How a plan's warm-up pass ended at the prepare (anira_plan_info.warmup_outcome).
+ */
+typedef enum anira_warmup_outcome {
+    /**
+     * No pass: ANIRA_WARMUP_NONE or FIXED 0 under an explicit budget. warmup_iterations,
+     * measured_ms and median_ms are 0.
+     */
+    ANIRA_WARMUP_OUTCOME_NONE = 0,
+    ANIRA_WARMUP_OUTCOME_FIXED = 1,  /**< ANIRA_WARMUP_FIXED ran its n inferences. */
+    /**
+     * ANIRA_WARMUP_UNTIL_STABLE stopped when the last four times agreed.
+     */
+    ANIRA_WARMUP_OUTCOME_STABLE = 2,
+    /**
+     * ANIRA_WARMUP_UNTIL_STABLE stopped at its 32nd inference without that; the figure is the
+     * last four's maximum all the same, and the prepare logs a Warning.
+     */
+    ANIRA_WARMUP_OUTCOME_CAPPED = 3,
+    /**
+     * No pass at this prepare: the plan took the model's figure from an earlier prepare;
+     * warmup_iterations, measured_ms and median_ms are that measurement's.
+     */
+    ANIRA_WARMUP_OUTCOME_REUSED = 4,
+    ANIRA_WARMUP_OUTCOME_FORCE32 = 0x7fffffff
+} anira_warmup_outcome;
+
+/**
+ * @brief Whether a plan keeps up with the stream on this machine (anira_plan_info.rt_verdict),
+ * from its real-time factor over the inferences that run at once: the load, rt_factor /
+ * rt_parallel, the share of the session's parallel capacity one hop's inference takes.
+ * An estimate at prepare, measured under that moment's load: below the limit a
+ * likelihood, above it a certainty. anira owns the thresholds, so every host applies the
+ * same rule; an offline render, which does not run against the clock, is never gated by
+ * it.
+ */
+typedef enum anira_rt_verdict {
+    /**
+     * No pass and no measured figure (an explicit budget with ANIRA_WARMUP_NONE or FIXED 0):
+     * rt_factor is the declared budget's, a statement about the contract, not the machine.
+     */
+    ANIRA_RT_UNMEASURED = 0,
+    /**
+     * Load below 0.75: misses are unlikely while the machine stays as it was at the prepare.
+     */
+    ANIRA_RT_COMFORTABLE = 1,
+    /**
+     * Load from 0.75 to below 1: the stream keeps up on average, but load the measurement could
+     * not see (other handlers, other applications, the clock speed) can push it over: misses
+     * are likely under load.
+     */
+    ANIRA_RT_MARGINAL = 2,
+    /**
+     * Load 1 or more: the pool cannot finish the inferences the stream submits, so misses are
+     * certain; the miss policy fills them. The session is sized for one host block's burst; the
+     * prepare does not fail.
+     */
+    ANIRA_RT_NOT_REALTIME = 3,
+    ANIRA_RT_VERDICT_FORCE32 = 0x7fffffff
+} anira_rt_verdict;
 
 /**
  * @brief What a Hard contract delivers when an inference misses its deadline.
@@ -421,15 +505,6 @@ typedef enum anira_delivery {
     ANIRA_DELIVERY_IMMEDIATE = 1,  /**< On the inference thread. */
     ANIRA_DELIVERY_FORCE32 = 0x7fffffff
 } anira_delivery;
-
-/**
- * @brief Plan validation policy for the edges a pipeline uses (section 7); not scheduling.
- */
-typedef enum anira_edge_cost {
-    ANIRA_EDGE_COST_PERMISSIVE = 0,  /**< Any available edge (default). */
-    ANIRA_EDGE_COST_STRICT = 1,  /**< Zero-copy edges only. */
-    ANIRA_EDGE_COST_FORCE32 = 0x7fffffff
-} anira_edge_cost;
 
 /**
  * @brief timeout_ms sentinel of the _wait twins: wait without limit (the v2 set_non_realtime
@@ -510,15 +585,73 @@ typedef enum anira_log_drain {
 } anira_log_drain;
 
 /**
- * @brief Cost class of an edge between a domain and a backend (section 7).
+ * @brief Where an edge takes a tensor's bytes (section 7). ANIRA_EDGE_ZERO_COPY to
+ * ANIRA_EDGE_DEDICATED_TRANSFER are the cost scale, ordered by cost, so the worst edge
+ * of a chain is the largest value and an edge of several moves has the class of its
+ * worst. ANIRA_EDGE_UNKNOWN stands outside the scale and above it (the values between
+ * are room for classes to come), so a chain or a plan with an unknown edge is unknown
+ * and the worst-of-chain maximum still holds. The class covers the bytes from the slot's
+ * memory until the engine computes on them, and back for outputs; layout transforms
+ * inside a runtime's graph are not edges. Who executes the moves is the row's
+ * anira_mover_flags bits, whether the edge exists its available flag (anira_edge_info).
  */
 typedef enum anira_edge_class {
-    ANIRA_EDGE_ZERO_COPY = 0,  /**< No copy. */
-    ANIRA_EDGE_DEVICE_COPY = 1,  /**< A device-side copy. */
-    ANIRA_EDGE_HOST_COPY = 2,  /**< A copy through host memory. */
-    ANIRA_EDGE_UNAVAILABLE = 3,  /**< No edge. */
+    /**
+     * Nothing moves: the engine computes on the slot's own memory, a device on unified memory
+     * included where its runtime wraps the slot's buffer.
+     */
+    ANIRA_EDGE_ZERO_COPY = 0,
+    /**
+     * A copy or pass within one domain, the CPU's or one device's, with no hand-over between
+     * processors: a memcpy in host memory, a relayout or copy inside a device's memory.
+     */
+    ANIRA_EDGE_COPY = 1,
+    /**
+     * The bytes cross between the CPU's domain and a device's within one unified physical
+     * memory (an Apple silicon GPU, an integrated GPU, a CPU device: ANIRA_MEMORY_UNIFIED): a
+     * copy plus a hand-over between the processors (a submission, a fence, possibly cache
+     * maintenance or a relayout), and no bus.
+     */
+    ANIRA_EDGE_UNIFIED_TRANSFER = 2,
+    /**
+     * The bytes cross a bus to or from dedicated memory: a DMA to or from a device's own memory
+     * (a discrete GPU's VRAM, ANIRA_MEMORY_DEDICATED), a discrete device reading mapped host
+     * memory, a copy between two devices.
+     */
+    ANIRA_EDGE_DEDICATED_TRANSFER = 3,
+    /**
+     * A crossing whose memory kind no probe could establish (ANIRA_MEMORY_UNKNOWN: the device's
+     * API is missing or failed, the provider maps to no API anira can ask, the adapters a
+     * self-choosing runtime picks among disagree), the reason saying "memory kind not probed"
+     * and why. Outside the cost scale: every limit of the contract's edge cost refuses it, and
+     * as the limit itself (anira_contract_set_edge_cost) it means no limit, even unknown edges
+     * allowed.
+     */
+    ANIRA_EDGE_UNKNOWN = 255,
     ANIRA_EDGE_CLASS_FORCE32 = 0x7fffffff
 } anira_edge_class;
+
+/**
+ * @brief Bit flags of anira_plan_slot::moved_by and anira_edge_info::moved_by: who executes an
+ * edge's moves (section 7). The field holds an OR of them, ANIRA_MOVER_NONE when nothing
+ * moves, both bits when anira and the runtime each move the bytes (the edge's class is
+ * then the worse of the two moves).
+ */
+typedef enum anira_mover_flags {
+    ANIRA_MOVER_NONE = 0,  /**< No bit: nothing moves (ANIRA_EDGE_ZERO_COPY). */
+    /**
+     * anira's own code moves the bytes: an engine adapter's copy. The slots with this bit are
+     * exactly the copies anira makes, the ones it counts and could remove.
+     */
+    ANIRA_MOVER_ANIRA = 1,
+    /**
+     * The engine's runtime moves the bytes: a copy its own API makes (a memory-planned
+     * ExecuTorch input), the upload and readback of a device provider over host memory, or a
+     * registered engine's code.
+     */
+    ANIRA_MOVER_ENGINE = 2,
+    ANIRA_MOVER_FLAGS_FORCE32 = 0x7fffffff
+} anira_mover_flags;
 
 /**
  * @brief The rung a context probe reached for an edge (section 4).
@@ -529,6 +662,36 @@ typedef enum anira_probe_rung {
     ANIRA_RUNG_FUNCTIONAL = 2,  /**< A round trip succeeded. */
     ANIRA_RUNG_FORCE32 = 0x7fffffff
 } anira_probe_rung;
+
+/**
+ * @brief The physical memory a provider's device computes in, against the host's (section 7):
+ * the fact a device provider's edge over host memory takes its class from. Asked of the
+ * device's own API at run time, never inferred from a platform's name: Metal's
+ * hasUnifiedMemory, the Vulkan device type cross-checked with its memory heaps, the CUDA
+ * driver's CU_DEVICE_ATTRIBUTE_INTEGRATED, HIP's hipDeviceAttributeIntegrated, OpenCL's
+ * CL_DEVICE_HOST_UNIFIED_MEMORY, D3D12's ARCHITECTURE.UMA; a browser exposes none.
+ */
+typedef enum anira_memory_kind {
+    /**
+     * No probe established it: the device's API is missing or failed, the provider maps to no
+     * API anira can ask (an NPU, a custom provider, the web), or the adapters a self-choosing
+     * runtime picks among disagree. The edge is ANIRA_EDGE_UNKNOWN, which every limit of the
+     * edge cost refuses.
+     */
+    ANIRA_MEMORY_UNKNOWN = 0,
+    /**
+     * The host's own physical memory: the CPU path, an integrated GPU, a CPU device. A crossing
+     * between the CPU's domain and the device's is a unified transfer: a copy plus a hand-over
+     * between the processors, no bus.
+     */
+    ANIRA_MEMORY_UNIFIED = 1,
+    /**
+     * Memory of the device's own across a bus (a discrete GPU's VRAM): a crossing to or from it
+     * is a dedicated transfer over the bus.
+     */
+    ANIRA_MEMORY_DEDICATED = 2,
+    ANIRA_MEMORY_FORCE32 = 0x7fffffff
+} anira_memory_kind;
 
 /**
  * @brief num_threads sentinel: the library's default pool size; 0 means bring your own threads.
@@ -771,22 +934,14 @@ typedef enum anira_phase {
 } anira_phase;
 
 /**
- * @brief anira_processor_desc.flags bit: the processor promises that its pre_process and
- * post_process allocate nothing, lock nothing and block on nothing (its reset runs on
- * the same thread and is covered by the same promise). Required by anira_handler_prepare
- * for a filled pre_process, post_process or reset under a Hard contract, where the three
- * phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not
- * required under an Async contract.
+ * @brief The bit of one anira_phase in a set of phases, 1u << phase:
+ * anira_processor_desc.realtime_phases is an OR of them, the processor's real-time
+ * promise per phase (ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) |
+ * ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_RESET) for a
+ * processor whose three driving-thread phases are real-time). The index space of
+ * anira.hpp's Processor::phase_bit and its k_* phase bits.
  */
-#define ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST 1u
-
-/**
- * @brief anira_processor_desc.flags bit: the processor promises the same of its
- * before_inference and after_inference. Not required by any contract of this pre-release
- * (the hooks run on an inference thread); a later contract option that runs them on the
- * driving thread will require it together with ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST.
- */
-#define ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS 2u
+#define ANIRA_PHASE_BIT(phase) (1u << (phase))
 
 /**
  * @brief anira_engine_desc.flags bit: a model entry of this engine may have no source, neither

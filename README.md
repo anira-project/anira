@@ -10,7 +10,7 @@
 
 ---
 
-**Anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference engines, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing. In the [paper](https://doi.org/10.1109/IS262782.2024.10704099) you can find more information about the architecture and the design decisions of **anira**, as well as extensive performance evaluations with the built-in benchmarking capabilities.
+**Anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with five inference engines, [ONNX Runtime](https://github.com/microsoft/onnxruntime/), [LibTorch](https://github.com/pytorch/pytorch/), [LiteRT](https://github.com/google-ai-edge/LiteRT), [TensorFlow Lite](https://github.com/tensorflow/tensorflow/) and [ExecuTorch](https://github.com/pytorch/executorch), and with engines of your own, anira bridges the gap between advanced neural network architectures and real-time audio processing. In the [paper](https://doi.org/10.1109/IS262782.2024.10704099) you can find more information about the architecture and the design decisions of **anira**, as well as extensive performance evaluations with the built-in benchmarking capabilities.
 
 ## Documentation
 
@@ -21,29 +21,27 @@ An extensive documentation of anira can be found at [https://anira-project.githu
 ## Features
 
 - **Real-time Safe Execution**: Ensures deterministic runtimes suitable for real-time audio applications
-- **Thread Pool Management**: Utilizes a static thread pool to avoid oversubscription and enables efficient parallel inference
+- **Thread Pool Management**: One inference thread pool per process, shared by every handler, avoids oversubscription and runs inferences in parallel
 - **Minimal Latency**: Designed to minimize latency while maintaining real-time safety
 - **Built-in Benchmarking**: Includes tools for evaluating the real-time performance of neural networks
-- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, LiteRT, TensorFlow Lite and ExecuTorch
+- **Comprehensive Inference Engine Support**: Integrates ONNX Runtime, LibTorch, LiteRT, TensorFlow Lite and ExecuTorch, and runs engines you register yourself
 - **Flexible Neural Network Integration**: Supports a variety of neural network models, including stateful and stateless models
 - **Cross-Platform Compatibility**: Works seamlessly on macOS, Linux, Windows, Android and iOS, and in the browser via WebAssembly
 
 ## Usage
 
-anira takes its configuration from two JSON files that travel with the model: the *model file* names the model's exports per inference engine (paths relative to the file) and describes the tensors, the *contract file* holds the per-inference budget and the warm-up. The host blocks are patched in at prepare.
+anira takes its configuration from two JSON files that travel with the model: the *model file* names the model's exports per inference engine (paths relative to the file) and describes the tensors, the *contract file* says how it runs: the inference budget and the warm-up. By default the warm-up pass at prepare measures the budget on the machine; `"budget": { "ms": 5.33 }` pins it for a reproducible latency. The host blocks are patched in at prepare.
 
 ```json
 {
   "models": [ { "engine": "onnxruntime", "path": "model.onnx" } ],
-  "inputs":  [ { "name": "audio_in",  "axes": [["time", 256], ["channel", 1], ["any", 1]],
-                 "window": { "min": 256, "max": 256 } } ],
-  "outputs": [ { "name": "audio_out", "axes": [["time", 256], ["any", 1]],
-                 "window": { "min": 256, "max": 256 } } ]
+  "inputs":  [ { "name": "audio_in",  "axes": [["time", 256], ["channel", 1], ["any", 1]] } ],
+  "outputs": [ { "name": "audio_out", "axes": [["time", 256], ["any", 1]] } ]
 }
 ```
 
 ```json
-{ "hard": { "budget": { "ms": 5.33 }, "warmup": { "fixed": 2 } } }
+{ "hard": { "budget": "measured", "warmup": "until_stable" } }
 ```
 
 The basic usage of anira is as follows:
@@ -62,12 +60,17 @@ anira::Pipeline pipeline;
 pipeline.add_inference(model_config);
 anira::InferenceHandler inference_handler(context, pipeline);
 
-// Complete the contract with the host blocks and allocate memory for audio processing;
-// prepare returns the plans, one per engine the model runs on here
+// Complete the contract with the host blocks; prepare allocates, warms the model up, measures
+// it and returns the plans, one per engine the model runs on here
 contract.hard_host_blocks(buffer_size, buffer_size, sample_rate);
 const anira::PlanReport report = inference_handler.prepare(contract);
 
-// Optionally select another plan (the first one runs by default) and get the latency
+// Whether the running plan keeps up on this machine (hold a NOT_REALTIME one and ask the user)
+const anira_plan_info row = report.plans()[inference_handler.get_plan()];
+const bool realtime = static_cast<anira_rt_verdict>(row.rt_verdict) != ANIRA_RT_NOT_REALTIME;
+
+// Optionally select another plan (the default engine's plan runs first, plan 0 without one) and
+// get the latency
 inference_handler.set_plan(0);
 uint32_t latency_in_samples = inference_handler.get_latency();
 
@@ -168,7 +171,7 @@ cmake --install build/desktop/Install/Release --prefix /path/to/install/director
 
 Without `--prefix`, the tree is installed to `<build dir>/anira-<version>`.
 
-The install tree also carries the Apache-2.0 core component of [tanh-lib](https://github.com/tanh-lab/tanh-lib) that backs anira's buffers, together with its own CMake package; `find_package(anira)` resolves it automatically via `find_dependency(tanh COMPONENTS Core)`, so consumers only add the anira prefix to `CMAKE_PREFIX_PATH`.
+The Apache-2.0 core component of [tanh-lib](https://github.com/tanh-lab/tanh-lib) that backs anira's buffers is built into the library and installs nothing of its own: `find_package(anira)` looks up `Threads` and the engines alone, so consumers only add the anira prefix to `CMAKE_PREFIX_PATH`.
 
 ### C++ Build Options
 
@@ -215,7 +218,7 @@ asset's published SHA256 and re-downloads any engine whose archive changed upstr
 incompletely (the download is verified against that hash). Nothing is pinned in-repo. The source is
 configurable (the linkage is not: it follows ``BUILD_SHARED_LIBS``, see above):
 
-- Backends release tag: ``-DANIRA_BACKENDS_VERSION=v2.1.1``.
+- Backends release tag: ``-DANIRA_BACKENDS_VERSION=v2.4.0`` (the built-in default).
 - Offline / reproducible builds: ``-DANIRA_BACKENDS_SKIP_REMOTE_CHECK=ON`` skips the GitHub query and reuses whatever is already in `modules/`.
 - Bring your own engine (no fork): ``-DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt`` (a tree with `include/` + `lib/`), or a custom source via ``-DANIRA_<ENGINE>_URL=... -DANIRA_<ENGINE>_SHA256=...``.
 
@@ -278,16 +281,17 @@ A debug preset is also available via `cmake --preset wasm-debug` / `cmake --buil
 
 ## Examples
 
-### Build in examples
+### Bundled examples
 
-- [Simple JUCE Audio Plugin](https://github.com/anira-project/anira/tree/main/examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
-- [CLAP Plugin Example](https://github.com/anira-project/anira/tree/main/examples/clap-audio-plugin/): Demonstrates how to use anira in a real-time clap plugin.
+- [Simple JUCE Audio Plugin](https://github.com/anira-project/anira/tree/main/examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time JUCE / VST3 plugin, with a "Try nonetheless" button for a backend too slow for the machine.
+- [CLAP Plugin Example](https://github.com/anira-project/anira/tree/main/examples/clap-audio-plugin/): Demonstrates how to use anira in a real-time CLAP plugin, with a "Try nonetheless" parameter.
 - [Benchmark](https://github.com/anira-project/anira/tree/main/examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations, with the Google Benchmark fixture of `examples/benchmark/fixture/` to copy into a project of your own.
 - [Minimal Inference](https://github.com/anira-project/anira/tree/main/examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in every engine.
+- [Web examples](https://github.com/anira-project/anira/tree/main/web/examples/): A model file in the browser, and a processor and an engine written in TypeScript.
 
 ### Other examples
 
-- [nn-inference-template](https://github.com/Torsion-Audio/nn-inference-template): Another more JUCE / VST3-Plugin that uses anira for real-time safe neural network inference. This plugin is more complex than the simple JUCE Audio Plugin example as it has a more appealing GUI.
+- [nn-inference-template](https://github.com/Torsion-Audio/nn-inference-template): A more elaborate JUCE / VST3 plugin that uses anira for real-time safe neural network inference, with a more appealing GUI than the simple JUCE example.
 
 ## Real-time safety
 

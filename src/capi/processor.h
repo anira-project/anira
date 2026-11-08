@@ -86,6 +86,7 @@ public:
 
 private:
     anira_processor_desc m_desc;
+    std::string m_id;  ///< the descriptor's id, copied (m_desc.id names it; NULL for none)
     std::vector<std::string> m_kinds;
     std::vector<const char*> m_kind_pointers;
     mutable std::mutex m_init_mutex;
@@ -177,8 +178,7 @@ public:
     /// The entries of the bound session: the size of its pool, what anira_handler_num_entries
     /// answers. 0 before bind().
     uint32_t num_entries() const noexcept {
-        return m_session != nullptr ? static_cast<uint32_t>(m_session->m_inference_queue.size())
-                                    : 0U;
+        return m_session != nullptr ? static_cast<uint32_t>(m_session->m_struct_pool.size()) : 0U;
     }
 
     /// The handler's ports, indexed by slot; the session reads the rings of its Streamed slots

@@ -119,7 +119,8 @@ anira_status ANIRA_CALL record_after(const anira_processor_ctx* ctx,
 anira_processor_desc recording_processor(Recorder& recorder) {
     anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
     desc.user_data = &recorder;
-    desc.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
+    desc.realtime_phases =
+        ANIRA_PHASE_BIT(ANIRA_PHASE_PRE_PROCESS) | ANIRA_PHASE_BIT(ANIRA_PHASE_POST_PROCESS);
     desc.pre_process = record_pre;
     desc.post_process = record_post;
     desc.before_inference = record_before;
@@ -343,7 +344,7 @@ TEST(PlanSwitch, TwoPlansOnOneEngineStayDistinct) {
     const std::shared_ptr<SessionElement> session = anira_test::session_of(rig.handler());
     ASSERT_NE(session, nullptr);
     size_t stamped = 0;
-    for (const auto& chunk : session->m_inference_queue) {
+    for (const auto& chunk : session->m_struct_pool) {
         if (chunk->m_plan == 1U) { ++stamped; }
     }
     EXPECT_EQ(stamped, 1U) << "exactly the submitted chunk carries plan 1";

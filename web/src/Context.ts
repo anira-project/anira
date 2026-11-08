@@ -30,8 +30,9 @@ const pageUrl = (): string | undefined =>
  * and its pool of inference threads, Wasm Workers on the web. Where the web differs: the
  * options are the context config's fields in one object (`anira::ContextConfig` on the C++
  * side), the worker module is a web-only field, the log is drained by the host
- * (`ANIRA_LOG_DRAIN_MANUAL`: `anira.startLogPump()`), `ready()` waits for the Workers, which
- * start only once the main thread yields, and the context is destroyed with `destroy()`.
+ * (`ANIRA_LOG_DRAIN_MANUAL`: `anira.startLogPump()`), the pool's Workers start with the context
+ * and `ready()` waits for them, since they enter their loops only once the main thread yields, and
+ * the context is destroyed with `destroy()`.
  */
 export class Context {
   readonly abi: AniraBindings
@@ -88,13 +89,17 @@ export class Context {
   }
 
   /**
-   * Resolve once every inference thread of the pool is inside its loop: a Wasm Worker starts only
-   * after this thread yields and imports its module first. Await it before a render that waits
-   * for its inferences (an `OfflineAudioContext`); a live context just misses its first quanta.
+   * Resolve once every inference thread of the pool is inside its loop, and at least one: the
+   * pool starts with the context, but a Wasm Worker enters its loop only after this thread yields
+   * and imports its module first. A context without a pool (`threads: 0`) resolves once one of
+   * the page's own threads is. Await it before a prepare whose contract warms up (the default:
+   * its pass runs on the Workers, else `ANIRA_ERROR_INVALID_STATE`) and before a render that waits
+   * for its inferences (an `OfflineAudioContext`).
    */
   async ready(timeoutMs = 10000): Promise<void> {
     const deadline = performance.now() + timeoutMs
-    while (this.abi.anira_em_inference_threads_in_loop() < this.numInferenceThreads()) {
+    const wanted = Math.max(this.numInferenceThreads(), 1)
+    while (this.abi.anira_em_inference_threads_in_loop() < wanted) {
       if (performance.now() > deadline) {
         throw new Error('anira: the inference Workers did not start in time')
       }

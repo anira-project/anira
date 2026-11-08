@@ -17,6 +17,7 @@ import {
   InferenceHandler,
   ModelConfig,
   Pipeline,
+  anira_warmup_mode,
 } from '../../dist/index.js'
 import { ONNXRUNTIME_WEB_ENGINE_ID } from '../../dist/engines/onnxruntime-web.js'
 
@@ -42,6 +43,7 @@ const renderGain = async (anira, context, model) => {
     hostBlockMin: QUANTUM,
     hostRate: RATE,
     budgetMs: 2,
+    warmup: anira_warmup_mode.ANIRA_WARMUP_NONE,
   })
   const handler = InferenceHandler.create(context, pipeline)
   handler.prepare(contract)

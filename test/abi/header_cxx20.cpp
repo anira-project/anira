@@ -188,7 +188,7 @@ static_assert(
         std::declval<anira::ProcessorContext&>())) &&
     noexcept(std::declval<anira::Processor&>().release()) &&
     noexcept(std::declval<const anira::Processor&>().consumed_kinds()) &&
-    noexcept(std::declval<const anira::Processor&>().flags()) &&
+    noexcept(std::declval<const anira::Processor&>().realtime_phases()) &&
     noexcept(std::declval<const anira::ProcessorContext&>().entry()) &&
     !noexcept(
         std::declval<anira::Processor&>().prepare(std::declval<const anira::PrepareInfo&>())) &&
@@ -434,9 +434,13 @@ private:
 
 class ProbeProcessor final : public anira::Processor {
 public:
-    uint32_t phases() const noexcept override { return k_pre_process | k_after_inference; }
-    // The real-time promise a Hard contract requires of a filled pre_process.
-    uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+    // reset only with k_reset: the Prepared overrides it.
+    uint32_t phases() const noexcept override {
+        return k_pre_process | k_after_inference | k_reset;
+    }
+    // The real-time promise a Hard contract requires of a filled pre_process and reset, and the
+    // hook's beside them: every body here is real-time.
+    uint32_t realtime_phases() const noexcept override { return phases(); }
 
     void init(const anira::InitInfo& info) override {
         if (info.context() == nullptr || info.log_level() > ANIRA_LOG_ERROR) {
@@ -610,10 +614,10 @@ std::optional<uint32_t> find_probe(const anira::PlanReport& report) noexcept ANI
     return engine.has_value() ? engine : provider;
 }
 
-// The budget of a Hard aggregate is required: no Hard without one, a duration is an explicit
-// budget, Budget::measured() the measured one.
-static_assert(!std::is_default_constructible_v<anira::Hard>);
-static_assert(!std::is_default_constructible_v<anira::Budget>);
+// The budget of a Hard aggregate is measured by default, as the C contract's: a Hard needs no
+// budget, a duration is an explicit one, Budget{} and Budget::measured() the measured one.
+static_assert(std::is_default_constructible_v<anira::Hard>);
+static_assert(std::is_nothrow_default_constructible_v<anira::Budget>);
 static_assert(std::is_convertible_v<std::chrono::milliseconds, anira::Budget>);
 static_assert(std::is_aggregate_v<anira::Hard>);
 
@@ -633,7 +637,7 @@ int anira_header_cxx20_probe() {
                             .wait_ratio = 0.5,
                             .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}},
                             .latencies = {{"audio_out", 4096}},
-                            .edge_cost = ANIRA_EDGE_COST_STRICT};
+                            .edge_cost = ANIRA_EDGE_ZERO_COPY};
     const anira::Async async{.deadline = std::chrono::milliseconds(20), .on_late = ANIRA_LATE_DROP};
     const anira::Contract contract = hard;
     const anira::JobOptions options{.head_trim = {0, 0}, .tail_flush = false};
@@ -703,17 +707,18 @@ int anira_header_cxx20_probe() {
         const std::shared_ptr<anira::Processor> processor = std::make_shared<ProbeProcessor>();
         anira::Pipeline other;
         other.add_inference(model).add_processor(processor);
-        checks += processor->flags() != 0 ? 1 : 0;
+        checks += processor->realtime_phases() != 0 ? 1 : 0;
         checks += nonblocking_probe(nullptr) > 0 ? 1 : 0;
         // A custom engine added to the pipeline; the enum alias where the model config takes
         // one.
         const std::shared_ptr<anira::Engine> probe_engine = std::make_shared<ProbeEngine>();
         other.add_engine(probe_engine);
-        // The pipeline's capabilities on a context: the rows, an edge.
+        // The pipeline's capabilities on a context: the rows, an edge each way.
         const anira::PipelineCapabilities caps =
             other.capabilities(static_cast<const anira_context*>(nullptr));
         checks += caps.backends().empty() ? 0 : 1;
         checks += caps.edge(ANIRA_DOMAIN_HOST, caps.backends().front()).available == 1U ? 1 : 0;
+        checks += caps.edge(caps.backends().front(), ANIRA_DOMAIN_HOST).available == 1U ? 1 : 0;
         anira::Pipeline with_engine;
         with_engine.add_engine(probe_engine);
         with_engine.add_inference(model);
@@ -765,11 +770,12 @@ int anira_header_cxx20_probe() {
                                         report.slots(0, true).size() + report.extensions(0).size();
         checks += report_rows > 0 ? 1 : 0;
         const anira_edge_info edge = capabilities.edge(ANIRA_DOMAIN_HOST, first);
-        running.probe(true);
+        const anira_edge_info back = capabilities.edge(first, ANIRA_DOMAIN_HOST);
+        running.probe();
         const std::size_t rows = capabilities.domains().size() + capabilities.ext_kinds().size() +
                                  capabilities.edges().size() + anira::enabled_engines().size() +
                                  anira::drain_log();
-        const uint64_t numbers = anira::num_inference_threads() + edge.available +
+        const uint64_t numbers = anira::num_inference_threads() + edge.available + back.available +
                                  running.byte_image_bytes(1, ANIRA_DTYPE_F32) + anira::now_ns();
         checks += rows > 0 ? 1 : 0;
         checks += numbers > 0 ? 1 : 0;

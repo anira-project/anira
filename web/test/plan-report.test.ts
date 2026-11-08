@@ -6,9 +6,13 @@ import { test } from 'node:test'
 import type { AniraBindings } from '../src/abi/bindings'
 import {
   ANIRA_VARIANT_ANY,
+  anira_edge_class,
   anira_engine,
+  anira_memory_kind,
   anira_provider,
+  anira_rt_verdict,
   anira_status,
+  anira_warmup_outcome,
 } from '../src/abi/enums'
 import { AniraError } from '../src/AniraError'
 import { PlanReport } from '../src/PlanReport'
@@ -136,4 +140,105 @@ test('a miss is null; a refused query throws; an unprepared report is refused', 
     (error: AniraError) => error.status === anira_status.ANIRA_ERROR_INVALID_ARGUMENT
   )
   assert.equal(calls, 0, 'refused before the C entry')
+})
+
+test('a slot row reads the mover beside the class and the window in its tail, at the wasm32 offsets of anira_plan_slot', () => {
+  const buffer = new ArrayBuffer(65536)
+  const u32 = new Uint32Array(buffer)
+  const i64 = new BigInt64Array(buffer)
+  let next = 1024
+  const module = {
+    HEAPU8: new Uint8Array(buffer),
+    HEAPU32: u32,
+    HEAP64: i64,
+    _malloc: (bytes: number) => {
+      const at = next
+      next += (bytes + 15) & ~15
+      return at
+    },
+    _free: () => {},
+    UTF8ToString: () => '',
+  }
+  const strides: number[] = []
+  const abi = {
+    module,
+    anira_plan_report_slots: (
+      _report: number,
+      _plan: number,
+      _inputs: boolean,
+      stride: number,
+      count: number,
+      out: number
+    ) => {
+      strides.push(stride)
+      u32[count >>> 2] = 1
+      if (out === 0) return anira_status.ANIRA_OK
+      u32[(out + 20) >>> 2] = anira_edge_class.ANIRA_EDGE_DEDICATED_TRANSFER
+      u32[(out + 56) >>> 2] = 2 // moved_by: ANIRA_MOVER_ENGINE
+      u32[(out + 60) >>> 2] = 1 // window_derived
+      i64[(out + 64) >>> 3] = 15380n // window
+      i64[(out + 72) >>> 3] = 2048n // hop
+      return anira_status.ANIRA_OK
+    },
+  } as unknown as AniraBindings
+  const [row] = new PlanReport(abi, 1024).slots(0, true)
+  assert.deepEqual(strides, [80, 80], 'the caller passes its sizeof as the stride')
+  assert.equal(row.edgeClass, anira_edge_class.ANIRA_EDGE_DEDICATED_TRANSFER)
+  assert.equal(row.movedBy, 2)
+  assert.equal(row.windowDerived, true)
+  assert.equal(row.window, 15380)
+  assert.equal(row.hop, 2048)
+})
+
+test('a plan row reads the memory kind in its tail, at the wasm32 offset of anira_plan_info', () => {
+  const buffer = new ArrayBuffer(65536)
+  const u32 = new Uint32Array(buffer)
+  let next = 1024
+  const module = {
+    HEAPU8: new Uint8Array(buffer),
+    HEAPU32: u32,
+    HEAPF64: new Float64Array(buffer),
+    _malloc: (bytes: number) => {
+      const at = next
+      next += (bytes + 15) & ~15
+      return at
+    },
+    _free: () => {},
+    UTF8ToString: () => '',
+  }
+  const strides: number[] = []
+  const abi = {
+    module,
+    anira_plan_report_plans: (
+      _report: number,
+      stride: number,
+      count: number,
+      out: number
+    ) => {
+      strides.push(stride)
+      u32[count >>> 2] = 1
+      if (out === 0) return anira_status.ANIRA_OK
+      u32[(out + 44) >>> 2] = anira_memory_kind.ANIRA_MEMORY_DEDICATED
+      // The warm-up and real-time fields of the tail, at their wasm32 offsets.
+      const f64 = new Float64Array(buffer)
+      u32[(out + 48) >>> 2] = 6
+      f64[(out + 56) >>> 3] = 1.842
+      f64[(out + 64) >>> 3] = 1.701
+      u32[(out + 72) >>> 2] = anira_warmup_outcome.ANIRA_WARMUP_OUTCOME_STABLE
+      u32[(out + 76) >>> 2] = 4
+      f64[(out + 80) >>> 3] = 0.17
+      u32[(out + 88) >>> 2] = anira_rt_verdict.ANIRA_RT_COMFORTABLE
+      return anira_status.ANIRA_OK
+    },
+  } as unknown as AniraBindings
+  const [plan] = new PlanReport(abi, 1024).plans()
+  assert.deepEqual(strides, [96, 96], 'the caller passes its sizeof as the stride')
+  assert.equal(plan.memoryKind, anira_memory_kind.ANIRA_MEMORY_DEDICATED)
+  assert.equal(plan.warmupIterations, 6)
+  assert.equal(plan.measuredMs, 1.842)
+  assert.equal(plan.medianMs, 1.701)
+  assert.equal(plan.warmupOutcome, anira_warmup_outcome.ANIRA_WARMUP_OUTCOME_STABLE)
+  assert.equal(plan.rtParallel, 4)
+  assert.equal(plan.rtFactor, 0.17)
+  assert.equal(plan.rtVerdict, anira_rt_verdict.ANIRA_RT_COMFORTABLE)
 })
