@@ -2712,8 +2712,8 @@ TEST(AbiEngine, AProviderOptionsSetReachesARegisteredEngineThatConsumesIt) {
               (std::vector<std::pair<std::string, std::string>>{{"units", "cpu"}}));
     ASSERT_EQ(anira_handler_prepare(on_third, contract.native(), &err), ANIRA_OK) << err.message;
     EXPECT_EQ(gain.m_loaded, 2) << "an equal set: the first loaded model, shared";
-    EXPECT_EQ(anira_test::session_of(on_first)->m_plans.at(0).m_loaded,
-              anira_test::session_of(on_third)->m_plans.at(0).m_loaded);
+    EXPECT_EQ(anira_test::session_of(on_first)->m_plans.at(0)->m_loaded,
+              anira_test::session_of(on_third)->m_plans.at(0)->m_loaded);
     anira_handler_destroy(on_first);
     anira_handler_destroy(on_second);
     anira_handler_destroy(on_third);
@@ -3253,10 +3253,10 @@ TEST(AbiEngine, EqualConfigsShareOneLoadedModelStatefulOrNot) {
         EXPECT_EQ(gain.m_instances_seen, (std::vector<uint32_t>{2}));
         EXPECT_EQ(gain.m_flags_seen, (std::vector<uint32_t>{0, 0}));
         EXPECT_EQ(gain.m_bad_prepare_record, 0);
-        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_loaded,
-                  anira_test::session_of(second)->m_plans.at(0).m_loaded)
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0)->m_loaded,
+                  anira_test::session_of(second)->m_plans.at(0)->m_loaded)
             << "the pooled loaded model";
-        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_loaded->model().m_instances, 2U)
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0)->m_loaded->model().m_instances, 2U)
             << "the record agrees with the load record";
         ASSERT_EQ(gain.m_handed_out.size(), 2U);
         EXPECT_EQ(handle_of(gain, 0).m_loaded, handle_of(gain, 1).m_loaded);
@@ -3300,12 +3300,12 @@ TEST(AbiEngine, EqualConfigsShareOneLoadedModelStatefulOrNot) {
             << "no shared slot: the handlers run on what their prepare built";
         EXPECT_EQ(gain.m_flags_seen,
                   (std::vector<uint32_t>{ANIRA_PREPARE_EXCLUSIVE, ANIRA_PREPARE_EXCLUSIVE}));
-        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_loaded,
-                  anira_test::session_of(second)->m_plans.at(0).m_loaded)
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0)->m_loaded,
+                  anira_test::session_of(second)->m_plans.at(0)->m_loaded)
             << "pooled: exclusivity is not in the key";
         for (const anira_handler* handler : {first, second}) {
             const anira::SessionElement::PlanSlot& plan =
-                anira_test::session_of(handler)->m_plans.at(0);
+                *anira_test::session_of(handler)->m_plans.at(0);
             EXPECT_EQ(plan.m_loaded->model().m_instances, 0U)
                 << "the record agrees with the load record";
             ASSERT_NE(plan.m_prepared, nullptr);
@@ -3407,7 +3407,8 @@ TEST(AbiEngine, ASessionExclusiveHandlerHasNoSharedSlotOnAnyEngine) {
     ASSERT_NE(session, nullptr);
     EXPECT_EQ(session->m_plans.size(), anira_test::oracle_engines().size() + 1)
         << "one plan per engine of the build, plus the custom row";
-    for (const anira::SessionElement::PlanSlot& plan : session->m_plans) {
+    for (const std::shared_ptr<anira::SessionElement::PlanSlot>& slot : session->m_plans) {
+        const anira::SessionElement::PlanSlot& plan = *slot;
         ASSERT_NE(plan.m_loaded, nullptr);
         EXPECT_EQ(plan.m_loaded->model().m_instances, 0U) << "the plan of engine " << plan.m_engine;
         EXPECT_EQ(plan.m_loaded->num_instances(), 0U) << "the plan of engine " << plan.m_engine;
@@ -4058,8 +4059,8 @@ TEST(AbiEngine, TwoEngineObjectsUnderOneIdShareNothing) {
     EXPECT_EQ(second_engine.m_loaded, 1);
     EXPECT_EQ(first_engine.m_prepared, 1);
     EXPECT_EQ(second_engine.m_prepared, 1);
-    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0).m_loaded,
-              anira_test::session_of(second_handler)->m_plans.at(0).m_loaded);
+    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0)->m_loaded,
+              anira_test::session_of(second_handler)->m_plans.at(0)->m_loaded);
     ASSERT_NO_FATAL_FAILURE(run_ramp(first_handler, 2));
     ASSERT_NO_FATAL_FAILURE(run_ramp(second_handler, 2));
     EXPECT_EQ(first_engine.m_processed.load(), 2);
@@ -4113,8 +4114,8 @@ TEST(AbiEngine, OneEngineInTwoPipelinesSharesOneLoadedModel) {
     EXPECT_EQ(shared.m_inited, 1) << "one engine object: one init";
     EXPECT_EQ(shared.m_loaded, 1) << "one engine, one model: one load";
     EXPECT_EQ(shared.m_prepared, 2) << "a prepare per handler";
-    EXPECT_EQ(anira_test::session_of(first_handler)->m_plans.at(0).m_loaded,
-              anira_test::session_of(second_handler)->m_plans.at(0).m_loaded);
+    EXPECT_EQ(anira_test::session_of(first_handler)->m_plans.at(0)->m_loaded,
+              anira_test::session_of(second_handler)->m_plans.at(0)->m_loaded);
     ASSERT_NO_FATAL_FAILURE(run_ramp(first_handler, 2));
     ASSERT_NO_FATAL_FAILURE(run_ramp(second_handler, 2));
     EXPECT_EQ(shared.m_processed.load(), 4);
@@ -4161,8 +4162,8 @@ TEST(AbiEngine, OneEngineOverTwoVariantsLoadsTwice) {
         << err.message;
     EXPECT_EQ(gain.m_loaded, 2);
     EXPECT_EQ(gain.m_prepared, 2);
-    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0).m_loaded,
-              anira_test::session_of(second_handler)->m_plans.at(0).m_loaded);
+    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0)->m_loaded,
+              anira_test::session_of(second_handler)->m_plans.at(0)->m_loaded);
     anira_handler_destroy(first_handler);
     anira_handler_destroy(second_handler);
     first.destroy();

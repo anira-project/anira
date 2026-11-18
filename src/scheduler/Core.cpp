@@ -463,9 +463,11 @@ const char* drain_word(anira_log_drain drain) {
 bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions,
                     const std::shared_ptr<engine::Loaded>& loaded) {
     return std::ranges::any_of(sessions, [&loaded](const std::shared_ptr<SessionElement>& s) {
-        return std::ranges::any_of(s->m_plans, [&loaded](const SessionElement::PlanSlot& slot) {
-            return slot.m_loaded == loaded;
-        });
+        return std::ranges::any_of(
+            s->m_plans,
+            [&loaded](const std::shared_ptr<SessionElement::PlanSlot>& slot) {
+                return slot->m_loaded == loaded;
+            });
     });
 }
 
@@ -977,21 +979,25 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
         // initial plan once the table exists.
         session->m_plans.reserve(requests.size());
         for (const engine::PlanRequest& request : requests) {
-            SessionElement::PlanSlot slot;
+            // An object of its own, at one address for its life: the chunks stamped with the
+            // plan carry a pointer to it.
+            std::shared_ptr<SessionElement::PlanSlot> owned =
+                std::make_shared<SessionElement::PlanSlot>();
+            SessionElement::PlanSlot& slot = *owned;
             acquire_loaded_locked(state, request, pool_size, slot);
             slot.m_registered = request.m_source == engine::Source::Registered;
             slot.m_variant = request.m_variant;
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
-            slot.m_engine_id = request.m_model.m_engine_id;
-            slot.m_provider_id = request.m_model.m_provider_id;
+            slot.m_engine_id = session->intern_id(request.m_model.m_engine_id);
+            slot.m_provider_id = session->intern_id(request.m_model.m_provider_id);
             slot.m_state_alias = (slot.m_loaded->flags() &
                                   static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS)) != 0;
             // Into the table before the prepare: a prepare that throws (an exclusive session's
             // own executor, its warm-up) leaves the slot where the rollback below finds its
             // loaded model and lets the pool entry go.
-            session->m_plans.push_back(std::move(slot));
-            SessionElement::PlanSlot& placed = session->m_plans.back();
+            session->m_plans.push_back(std::move(owned));
+            SessionElement::PlanSlot& placed = *session->m_plans.back();
             if (!placed.m_registered) {
                 placed.m_prepared = placed.m_loaded->prepare(
                     engine::PrepareRequest{.m_exclusive = session->exclusive(), .m_info = nullptr});
@@ -1004,7 +1010,9 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
         // The session is not registered, so the "another session shares this loaded model"
         // check sees only the sessions that really exist. The prepared handles made so far
         // go back first (nothing ran on them), then the loaded models.
-        for (SessionElement::PlanSlot& slot : session->m_plans) { slot.m_prepared.reset(); }
+        for (const std::shared_ptr<SessionElement::PlanSlot>& slot : session->m_plans) {
+            slot->m_prepared.reset();
+        }
         release_loaded_locked(state, session);
         throw;
     }
@@ -1087,14 +1095,14 @@ void Core::acquire_loaded_locked(State& state,
 }
 
 void Core::release_loaded_locked(State& state, const std::shared_ptr<SessionElement>& session) {
-    for (const SessionElement::PlanSlot& slot : session->m_plans) {
-        if (slot.m_loaded == nullptr) { continue; }
+    for (const std::shared_ptr<SessionElement::PlanSlot>& slot : session->m_plans) {
+        if (slot->m_loaded == nullptr) { continue; }
         // The pool entry stays while the plan table of another registered session holds
         // the loaded model (the releasing session left the registry already, or never
         // entered it); the check is by pointer identity, never by the record.
-        if (any_plan_holds(state.m_sessions, slot.m_loaded)) { continue; }
+        if (any_plan_holds(state.m_sessions, slot->m_loaded)) { continue; }
         std::erase_if(state.m_loaded_models, [&slot](const State::PoolEntry& entry) {
-            return entry.m_loaded == slot.m_loaded;
+            return entry.m_loaded == slot->m_loaded;
         });
     }
 }
@@ -1106,10 +1114,20 @@ void Core::release_session(const std::shared_ptr<SessionElement>& session) {
 
     drain_inference_queue(session);
 
+    // An exclusive session's chunks that still wait for their turn are never dispatched now
+    // (nothing of the session is queued or running, and no driving thread submits): they stop
+    // counting on their plan slots, so every slot's count is zero from here.
+    std::shared_ptr<SessionElement::ThreadSafeStruct> pending;
+    while (session->m_dispatch_pending.try_dequeue(pending)) {
+        if (pending != nullptr) { pending->leave_slot(); }
+    }
+
     // The session's prepared handles go back now, on this thread, after its in-flight
     // inferences drained and before its loaded models are released (a registered engine's
     // unprepare runs here, ahead of any unload): nothing runs on them any more.
-    for (SessionElement::PlanSlot& slot : session->m_plans) { slot.m_prepared.reset(); }
+    for (const std::shared_ptr<SessionElement::PlanSlot>& slot : session->m_plans) {
+        slot->m_prepared.reset();
+    }
 
     // Everything above only touches this session (the drain waits on its own
     // in-flight inferences), so it runs unlocked. From here on we mutate the
@@ -1561,11 +1579,11 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
     for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {
         if (session->m_struct_pool[i]->m_free.exchange(false)) {
             // The one load of the session's selection for this chunk: the plan index is
-            // stamped on the struct and resolved from there by the hooks, the engine call
-            // and post_process, so a select_plan() that lands later applies from the next
-            // chunk on and never inside this one.
+            // stamped on the struct with the plan's slot and what it reports, and the hooks,
+            // the engine call and post_process use what the struct carries, so a select_plan()
+            // that lands later applies from the next chunk on and never inside this one.
             const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
-            session->m_struct_pool[i]->m_plan = plan;
+            session->stamp_plan(*session->m_struct_pool[i], plan);
             session->m_struct_pool[i]->m_completed_as_zeros = false;
             session->m_struct_pool[i]->m_fills_after = 0;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
@@ -1578,8 +1596,10 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // The state epoch beside it: a new one when this chunk runs another variant than
             // the chunk formed before it and the contract starts a variant fresh (its State
             // pairs and its engine start over ahead of this chunk's inference). No chunk
-            // becomes stale by it: what is in flight is delivered.
-            session->m_struct_pool[i]->m_state_epoch = session->stamp_state_epoch(plan);
+            // becomes stale by it: what is in flight is delivered. The variant is the stamped
+            // plan's, from the chunk's copy.
+            session->m_struct_pool[i]->m_state_epoch =
+                session->stamp_state_epoch(session->m_struct_pool[i]->m_variant);
             const anira_status formed =
                 session->m_processor.pre_process(*session->m_struct_pool[i]);
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
@@ -1720,7 +1740,7 @@ int64_t Core::warm_up_inference(const std::shared_ptr<SessionElement>& session, 
     }
     // The stamps pre_process() gives a chunk, without its pre_process and its time stamp: the
     // chunk is no position of the stream.
-    chunk->m_plan = plan;
+    session->stamp_plan(*chunk, plan);
     chunk->m_completed_as_zeros = false;
     chunk->m_fills_after = 0;
     chunk->m_inference_ns = 0;

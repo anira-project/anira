@@ -72,13 +72,13 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
     ASSERT_NE(session_a, nullptr);
     ASSERT_NE(session_b, nullptr);
     ASSERT_FALSE(session_a->m_plans.empty());
-    ASSERT_NE(session_a->m_plans[0].m_loaded, nullptr);
-    ASSERT_EQ(session_a->m_plans[0].m_loaded, session_b->m_plans[0].m_loaded)
+    ASSERT_NE(session_a->m_plans[0]->m_loaded, nullptr);
+    ASSERT_EQ(session_a->m_plans[0]->m_loaded, session_b->m_plans[0]->m_loaded)
         << "Handlers over equal configs are expected to share one pooled loaded model";
 
     // Keep the pooled loaded model alive independently so it can be inspected after handler A
     // is gone (this is what the core's pool does internally).
-    const std::shared_ptr<engine::Loaded> pooled = session_b->m_plans[0].m_loaded;
+    const std::shared_ptr<engine::Loaded> pooled = session_b->m_plans[0]->m_loaded;
     const void* released_config_storage =
         static_cast<const void*>(&handler_a->m_handler->m_pipeline.m_variants[0]);
 

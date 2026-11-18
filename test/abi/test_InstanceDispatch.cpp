@@ -251,7 +251,7 @@ uint32_t loaded_instances(const anira_handler* handler) {
     const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(handler);
     if (session == nullptr) { return UINT32_MAX; }
     const uint32_t plan = session->m_current_plan.load();
-    return session->m_plans[plan].m_loaded->num_instances();
+    return session->m_plans[plan]->m_loaded->num_instances();
 }
 
 /// The bound, counted rather than timed (a timed bound, B's delay within twice its delay alone,
@@ -336,7 +336,7 @@ TEST(AbiInstanceDispatch, WaitingJobsCountAsInFlight) {
     // wait list: then no job is left in the queue and the holder is inside the engine, so the
     // count only falls, to 3, and stays.
     const anira::InstanceWaitList& waiting =
-        *anira_test::session_of(handler.m_handler)->m_plans[0].m_waiting;
+        *anira_test::session_of(handler.m_handler)->m_plans[0]->m_waiting;
     const auto deadline = Clock::now() + std::chrono::seconds(anira_test::k_wait_s);
     while ((waiting.num_waiting() != 2U ||
             anira::scheduler::InferenceThread::get_num_in_flight() != 3U) &&
@@ -386,8 +386,8 @@ TEST(AbiInstanceDispatch, TwoHandlersLeftToThePoolShareOneLoadedModel) {
     const std::shared_ptr<anira::SessionElement> b = anira_test::session_of(second.m_handler);
     ASSERT_NE(a, nullptr);
     ASSERT_NE(b, nullptr);
-    EXPECT_EQ(a->m_plans[a->m_current_plan.load()].m_loaded,
-              b->m_plans[b->m_current_plan.load()].m_loaded);
+    EXPECT_EQ(a->m_plans[a->m_current_plan.load()]->m_loaded,
+              b->m_plans[b->m_current_plan.load()]->m_loaded);
     EXPECT_EQ(loaded_instances(first.m_handler), k_threads);
 }
 

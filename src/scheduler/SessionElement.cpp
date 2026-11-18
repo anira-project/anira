@@ -44,8 +44,6 @@ namespace anira {
 // complete (the public header forward-declares them).
 SessionElement::PlanSlot::PlanSlot() = default;
 SessionElement::PlanSlot::~PlanSlot() = default;
-SessionElement::PlanSlot::PlanSlot(PlanSlot&&) noexcept = default;
-SessionElement::PlanSlot& SessionElement::PlanSlot::operator=(PlanSlot&&) noexcept = default;
 
 SessionElement::SessionElement(int new_session_id,
                                capi::ProcessorRunner& processor,
@@ -84,8 +82,7 @@ bool SessionElement::select_plan_if(uint32_t& expected, uint32_t plan) noexcept 
                                                 std::memory_order_relaxed);
 }
 
-uint64_t SessionElement::stamp_state_epoch(uint32_t plan) noexcept ANIRA_NONBLOCKING {
-    const uint32_t variant = plan < m_plans.size() ? m_plans[plan].m_variant : 0U;
+uint64_t SessionElement::stamp_state_epoch(uint32_t variant) noexcept ANIRA_NONBLOCKING {
     if (variant != m_last_variant) {
         // The stream's first chunk is no switch, and under KEEP a switch starts nothing over.
         if (m_last_variant != k_no_variant && m_hard.m_variant_state == ANIRA_VARIANT_STATE_FRESH) {
@@ -94,6 +91,46 @@ uint64_t SessionElement::stamp_state_epoch(uint32_t plan) noexcept ANIRA_NONBLOC
         m_last_variant = variant;
     }
     return m_state_epoch;
+}
+
+void SessionElement::stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept ANIRA_NONBLOCKING {
+    chunk.m_plan = plan;
+    if (plan >= m_plans.size()) {
+        // A selection is always in range (select_plan); the check keeps a defect from reading
+        // past the table.
+        chunk.m_slot = nullptr;
+        chunk.m_variant = 0;
+        chunk.m_engine = ANIRA_ENGINE_NONE;
+        chunk.m_provider = ANIRA_PROVIDER_NONE;
+        chunk.m_engine_id = nullptr;
+        chunk.m_provider_id = nullptr;
+        chunk.m_state_alias = false;
+        return;
+    }
+    PlanSlot& slot = *m_plans[plan];
+    // Counted before anything else can see the chunk: the slot is needed from here until the
+    // chunk's worker side is finished, whatever path the chunk takes.
+    slot.retain_chunk();
+    chunk.m_slot = &slot;
+    chunk.m_variant = slot.m_variant;
+    chunk.m_engine = slot.m_engine;
+    chunk.m_provider = slot.m_provider;
+    chunk.m_engine_id = slot.m_engine_id;
+    chunk.m_provider_id = slot.m_provider_id;
+    chunk.m_state_alias = slot.m_state_alias;
+}
+
+const char* SessionElement::intern_id(const std::string& id) {
+    if (id.empty()) { return nullptr; }
+    return m_interned_ids.insert(id).first->c_str();
+}
+
+SessionElement::PlanSlot* SessionElement::ThreadSafeStruct::take_slot() noexcept {
+    return std::exchange(m_slot, nullptr);
+}
+
+void SessionElement::ThreadSafeStruct::leave_slot() noexcept {
+    if (PlanSlot* const slot = take_slot()) { slot->release_chunk(); }
 }
 
 SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<capi::DerivedSpec>& inputs,
@@ -324,6 +361,9 @@ std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_ne
                 // check and the new_data_request generation guard catch it, at the
                 // cost of one wasted dispatch. Do not "fix" this into a stronger
                 // invariant.
+                // No inference thread gets the entry: its count on its plan slot goes back
+                // first, while the chunk is still the gate-holder's.
+                next->leave_slot();
                 next->m_free.store(true, std::memory_order_release);
                 continue;
             }
@@ -377,7 +417,9 @@ void SessionElement::discard_pending_dispatches() {
     std::shared_ptr<ThreadSafeStruct> pending;
     while (m_dispatch_pending.try_dequeue(pending)) {
         // Never handed to a worker while we hold the gate — the direct-free is
-        // exclusive. Only m_free is written (see the filter above for why).
+        // exclusive. Only m_free is written (see the filter above for why), behind the
+        // chunk's count on its plan slot, which goes back with it.
+        pending->leave_slot();
         pending->m_free.store(true, std::memory_order_release);
     }
     release_dispatch(token);
@@ -406,9 +448,13 @@ void SessionElement::force_reset_dispatch_chain() {
     }
     // Epoch bumped first: a laggard acquiring from here on does so under the new
     // epoch and finds only stale entries to filter. Flush whatever remains — the
-    // entries reference structs the caller is about to rebuild or wipe.
+    // entries reference structs the caller is about to rebuild or wipe. No inference
+    // thread gets them: each gives its count on its plan slot back, since the slots
+    // outlive the structs.
     std::shared_ptr<ThreadSafeStruct> drained;
-    while (m_dispatch_pending.try_dequeue(drained)) {}
+    while (m_dispatch_pending.try_dequeue(drained)) {
+        if (drained != nullptr) { drained->leave_slot(); }
+    }
 }
 
 void SessionElement::reserve_pending_dispatch() {
@@ -449,6 +495,10 @@ void SessionElement::complete_with_zeros(
     // and frees the struct, it just yields silence for this chunk.
     thread_safe_struct->zero_outputs();
     thread_safe_struct->m_completed_as_zeros = true;  // before the done signal
+    // No inference thread gets a chunk dropped here: its count on its plan slot goes back
+    // while the chunk is still the caller's. Nothing for a chunk an inference thread's job
+    // completes this way: the job took the slot and gives the count back at its end.
+    thread_safe_struct->leave_slot();
     if (uses_semaphore()) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
@@ -590,9 +640,9 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     // Every chunk's buffers start on the boundary the session's engines need to bind them in
     // place: the largest any plan's engine asks for (engine::Loaded::buffer_alignment).
     size_t alignment = engine::Loaded::k_default_buffer_alignment;
-    for (const PlanSlot& plan : m_plans) {
-        if (plan.m_loaded != nullptr) {
-            alignment = std::max(alignment, plan.m_loaded->buffer_alignment());
+    for (const std::shared_ptr<PlanSlot>& plan : m_plans) {
+        if (plan->m_loaded != nullptr) {
+            alignment = std::max(alignment, plan->m_loaded->buffer_alignment());
         }
     }
     for (size_t i = 0; i < m_num_structs; ++i) {
@@ -608,9 +658,9 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     // The first inference of the new session is the first of a new stream: the engine of each
     // session-exclusive plan resets before its own first one. The state epoch starts over with
     // it: no chunk has been formed, so the stream's first one is no variant switch.
-    for (PlanSlot& plan : m_plans) {
-        plan.m_engine_generation = k_no_generation;
-        plan.m_engine_state_epoch = 0;
+    for (const std::shared_ptr<PlanSlot>& plan : m_plans) {
+        plan->m_engine_generation = k_no_generation;
+        plan->m_engine_state_epoch = 0;
     }
     m_state_epoch = 0;
     m_last_variant = k_no_variant;

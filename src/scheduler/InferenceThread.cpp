@@ -420,13 +420,18 @@ void InferenceThread::process_dequeued_inference() {
         // push on another thread may take the job, finish it and let its session's release
         // proceed, which frees the plan slots that hold the model and its list: the session's
         // count is held once more until this thread is done with them (the release waits for
-        // it; a job taken here holds its own session).
+        // it; a job taken here holds its own session), and so is the count of the job's plan
+        // slot, which says on its own that an inference thread still needs the slot's model
+        // and list (a job taken here counts on its own slot, over the same model and list).
         const std::shared_ptr<std::atomic<int>> active = job.m_session->m_active_inferences;
+        SessionElement::PlanSlot* const slot = job.m_thread_safe_struct->m_slot;
         active->fetch_add(1, std::memory_order::seq_cst);
+        slot->retain_chunk();
         s_num_in_flight.fetch_add(1, std::memory_order::acq_rel);
         waiting->push(std::move(job));
         const bool taken = (claimed || loaded->try_claim(hold.m_instance)) &&
                            take_waiting(*waiting, *loaded, hold.m_instance, job);
+        slot->release_chunk();
         active->fetch_sub(1, std::memory_order::release);
         if (!taken) { return; }
         from_wait_list = true;
@@ -462,8 +467,10 @@ InstanceWaitList* InferenceThread::wait_list_of(const InferenceData& job, engine
         !session->m_initialized.load(std::memory_order::seq_cst)) {
         return nullptr;
     }
-    if (chunk.m_plan >= session->m_plans.size()) { return nullptr; }
-    const SessionElement::PlanSlot& slot = session->m_plans[chunk.m_plan];
+    // The slot the chunk was stamped with, which the chunk counts on until its job ends: never
+    // the session's table.
+    if (chunk.m_slot == nullptr) { return nullptr; }
+    const SessionElement::PlanSlot& slot = *chunk.m_slot;
     if (slot.m_waiting == nullptr || slot.m_prepared == nullptr ||
         !slot.m_prepared->claims_instance()) {
         return nullptr;
@@ -504,10 +511,17 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
     // A thread that holds an instance of the job's model takes the model's next waiting job,
     // or gives the instance back, first (take_waiting): while the job counts, its session
     // cannot be released, so the plan slot's model and wait list are alive for that step.
+    // The chunk's plan slot is the job's from here: taken off the chunk while the chunk is this
+    // thread's (ahead of its done signal, after which the driving thread may stamp it anew), used
+    // for the engine call, and its count given back at every exit, behind that same step and
+    // ahead of the session's count, which keeps the slot's owner alive.
     const std::shared_ptr<std::atomic<int>> active = job.m_session->m_active_inferences;
     struct JobGuard {
         JobGuard(InferenceData& data, std::atomic<int>& counter, InstanceHold* hold) noexcept
-            : m_data(data), m_counter(counter), m_hold(hold) {}
+            : m_data(data)
+            , m_counter(counter)
+            , m_hold(hold)
+            , m_slot(data.m_thread_safe_struct->take_slot()) {}
         ~JobGuard() {
             if (m_hold != nullptr) {
                 m_hold->m_taken = take_waiting(*m_hold->m_waiting,
@@ -516,6 +530,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
                                                m_hold->m_next);
             }
             m_data = InferenceData{};
+            if (m_slot != nullptr) { m_slot->release_chunk(); }
             m_counter.fetch_sub(1, std::memory_order::release);
         }
         JobGuard(const JobGuard&) = delete;
@@ -523,6 +538,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
         InferenceData& m_data;
         std::atomic<int>& m_counter;
         InstanceHold* m_hold;
+        SessionElement::PlanSlot* m_slot;
     } const guard(job, *active, hold);
     const std::shared_ptr<SessionElement>& session = job.m_session;
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct =
@@ -556,7 +572,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
                 dispatch_next_pending(session);
             }
         } else if (session->m_initialized.load(std::memory_order::seq_cst)) {
-            do_inference(session, thread_safe_struct, signalled, instance);
+            do_inference(session, thread_safe_struct, guard.m_slot, signalled, instance);
         } else {
             // Session momentarily uninitialized (prepare/release drain in progress).
             // Complete as silence so the struct is not stranded without a completion
@@ -617,11 +633,13 @@ void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement
 void InferenceThread::do_inference(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
+    SessionElement::PlanSlot* slot,
     bool& signalled,
     uint32_t instance) {
-    // The plan the chunk was submitted under (the index stamped in Core::pre_process), never
-    // the session's atomic: the hooks and the engine call below agree with each other and
-    // with the chunk's pre_process and post_process, whatever select_plan() does meanwhile.
+    // The plan the chunk was submitted under (the index stamped in Core::pre_process, and the
+    // slot stamped with it), never the session's atomic or its table: the hooks and the engine
+    // call below agree with each other and with the chunk's pre_process and post_process,
+    // whatever select_plan() does meanwhile.
     const uint32_t plan = thread_safe_struct->m_plan;
     // A before or after hook, or an engine, that throws must not unwind the pool thread: the
     // failed inference delivers zeros, the done signal is published below exactly as on
@@ -639,7 +657,7 @@ void InferenceThread::do_inference(
         // itself) skips the rest, and the chunk delivers zeros.
         anira_status status = session->m_processor.before_inference(*thread_safe_struct);
         if (status == ANIRA_OK) {
-            const anira_status engine = inference(session, plan, *thread_safe_struct, instance);
+            const anira_status engine = inference(session, slot, *thread_safe_struct, instance);
             if (engine == ANIRA_OK) {
                 status = session->m_processor.after_inference(*thread_safe_struct);
             } else {
@@ -716,15 +734,16 @@ void InferenceThread::do_inference(
 }
 
 anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
-                                        uint32_t plan,
+                                        SessionElement::PlanSlot* plan_slot,
                                         SessionElement::ThreadSafeStruct& chunk,
                                         uint32_t instance) {
-    // One index, one plan: exactly one plan's prepared handle runs per call. The session's
-    // atomic is not read here (it used to be re-read per engine block, so a switch landing between
-    // two reads ran two engines for one chunk, or none). A stamp is always in range; the check
-    // keeps a defect from reading past the table.
-    if (plan >= session->m_plans.size()) { return ANIRA_ERROR_INTERNAL; }
-    SessionElement::PlanSlot& slot = session->m_plans[plan];
+    // One stamp, one plan: exactly one plan's prepared handle runs per call, the one of the
+    // slot the chunk was stamped with. Neither the session's atomic nor its table is read here
+    // (the atomic used to be re-read per engine block, so a switch landing between two reads
+    // ran two engines for one chunk, or none). A stamp always has a slot; the check keeps a
+    // defect (an index the table did not have) from running on no plan.
+    if (plan_slot == nullptr) { return ANIRA_ERROR_INTERNAL; }
+    SessionElement::PlanSlot& slot = *plan_slot;
 
     // The engine context of the chunk, on this stack for the duration of the call: the
     // struct's descriptor arrays in slot order (State tensors included), the chunk's entry,

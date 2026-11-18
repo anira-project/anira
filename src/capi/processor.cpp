@@ -420,8 +420,8 @@ anira_status ANIRA_CALL anira_processor_output_tensor(const anira_processor_ctx*
 }
 
 // The pairs of the chunk's plan: the record's value field and its id slot, which make_ctx
-// filled from the session's table (the pair rule: the id is set beside CUSTOM alone). The id
-// out-parameter may be NULL; both are reset on a refusal.
+// filled from the chunk's copies of its plan slot's (the pair rule: the id is set beside CUSTOM
+// alone). The id out-parameter may be NULL; both are reset on a refusal.
 anira_status ANIRA_CALL anira_processor_engine(const anira_processor_ctx* ctx,
                                                anira_engine* engine,
                                                const char** engine_id)
@@ -653,25 +653,19 @@ anira_processor_ctx ProcessorRunner::make_ctx(anira_phase phase,
                                               const ProcessorFrame& frame) const noexcept
     ANIRA_NONBLOCKING {
     // The plan the chunk was stamped with (Core::pre_process), never the session's atomic: all
-    // four phases of a chunk report one plan, and one entry. The session's table names the
-    // plan's variant, engine and provider; a stamp is always in range.
-    const uint32_t plan = chunk.m_plan;
-    const std::vector<anira::SessionElement::PlanSlot>& plans = m_session->m_plans;
+    // four phases of a chunk report one plan, and one entry. The chunk carries the plan's
+    // variant, engine and provider, copied at the stamp: no phase reads the session's table or
+    // the plan's slot, which nothing keeps for a phase on the driving thread behind the
+    // inference.
     anira_processor_ctx ctx{};  // every slot NULL, the high halves of the pointer slots zero
     ctx.phase = static_cast<uint32_t>(phase);
-    ctx.engine = plan < plans.size() ? static_cast<uint32_t>(plans[plan].m_engine)
-                                     : static_cast<uint32_t>(ANIRA_ENGINE_NONE);
-    ctx.provider = plan < plans.size() ? static_cast<uint32_t>(plans[plan].m_provider)
-                                       : static_cast<uint32_t>(ANIRA_PROVIDER_NONE);
+    ctx.engine = static_cast<uint32_t>(chunk.m_engine);
+    ctx.provider = static_cast<uint32_t>(chunk.m_provider);
     // The pairs' names for anira_processor_engine / _provider: the session's own strings,
-    // which live as long as its table; NULL for a built-in engine and a provider of the enum.
-    if (plan < plans.size()) {
-        const std::string& engine_id = plans[plan].m_engine_id;
-        const std::string& provider_id = plans[plan].m_provider_id;
-        ctx.engine_id = engine_id.empty() ? nullptr : engine_id.c_str();
-        ctx.provider_id = provider_id.empty() ? nullptr : provider_id.c_str();
-    }
-    ctx.variant = plan < plans.size() ? plans[plan].m_variant : 0U;
+    // which live as long as the session; NULL for a built-in engine and a provider of the enum.
+    ctx.engine_id = chunk.m_engine_id;
+    ctx.provider_id = chunk.m_provider_id;
+    ctx.variant = chunk.m_variant;
     ctx.num_inputs = static_cast<uint32_t>(m_input_ports.size());
     ctx.num_outputs = static_cast<uint32_t>(m_output_ports.size());
     ctx.ticket = ANIRA_TICKET_INVALID;
@@ -874,8 +868,7 @@ anira_status ProcessorRunner::post_process(Chunk& chunk) noexcept {
 }
 
 bool ProcessorRunner::aliases_state(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING {
-    const std::vector<anira::SessionElement::PlanSlot>& plans = m_session->m_plans;
-    return chunk.m_plan < plans.size() && plans[chunk.m_plan].m_state_alias;
+    return chunk.m_state_alias;
 }
 
 void ProcessorRunner::bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING {

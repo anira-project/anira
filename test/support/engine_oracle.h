@@ -37,7 +37,7 @@ public:
     EngineOracle(anira_handler* handler, uint32_t plan) {
         const std::shared_ptr<anira::SessionElement> session = session_of(handler);
         if (session == nullptr || plan >= session->m_plans.size()) { return; }
-        anira::engine::Model record = session->m_plans[plan].m_loaded->model();
+        anira::engine::Model record = session->m_plans[plan]->m_loaded->model();
         if (record.m_engine == ANIRA_ENGINE_CUSTOM) { return; }
         record.m_instances = 0;  // an executor of the oracle's own, no shared slot
         m_loaded = anira::engine::make_builtin_loaded(anira::Core::builtin_engine(record.m_engine));

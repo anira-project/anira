@@ -618,7 +618,7 @@ TEST(Variants, ThePlanTableSpansTheVariantsInOrder) {
         // The handler's own table and the session's carry the same variant under the index.
         EXPECT_EQ(rig.h()->m_plans.at(plan).m_variant, plan / 2);
         EXPECT_EQ(rig.h()->m_plans.at(plan).m_row, 0U);
-        EXPECT_EQ(anira_test::session_of(rig.h())->m_plans.at(plan).m_variant, plan / 2);
+        EXPECT_EQ(anira_test::session_of(rig.h())->m_plans.at(plan)->m_variant, plan / 2);
     }
     EXPECT_EQ(anira_handler_get_plan(rig.h()), 0U) << "prepare selects the first variant's plan";
 
@@ -1053,8 +1053,8 @@ TEST(Variants, WhatIsFreePerVariantMayDiffer) {
     const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(rig.h());
     ASSERT_NE(session, nullptr);
     EXPECT_EQ(session->m_num_instances, 1U);
-    EXPECT_EQ(session->m_plans.at(0).m_loaded->model().m_instances, 1U);
-    EXPECT_EQ(session->m_plans.at(2).m_loaded->model().m_instances, 3U);
+    EXPECT_EQ(session->m_plans.at(0)->m_loaded->model().m_instances, 1U);
+    EXPECT_EQ(session->m_plans.at(2)->m_loaded->model().m_instances, 3U);
     Rig fewest({&first}, {}, nullptr, /*threads=*/4);
     ASSERT_EQ(fewest.prepare(plain_contract()), ANIRA_OK) << fewest.m_message;
     EXPECT_EQ(anira_handler_get_latency(rig.h(), 0), anira_handler_get_latency(fewest.h(), 0));
@@ -1322,7 +1322,7 @@ TEST(Variants, ABundledModelTwiceRunsOnEveryEngine) {
     for (uint32_t plan = 0; plan < rows.size(); ++plan) {
         EXPECT_EQ(rows[plan].variant, plan / per_variant) << "plan " << plan;
     }
-    EXPECT_NE(session->m_plans.at(0).m_loaded, session->m_plans.at(per_variant).m_loaded)
+    EXPECT_NE(session->m_plans.at(0)->m_loaded, session->m_plans.at(per_variant)->m_loaded)
         << "the two variants are two loaded models";
     const uint32_t latency = anira_handler_get_latency(h, 0);
 

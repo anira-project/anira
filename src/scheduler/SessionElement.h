@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -327,6 +328,9 @@ public:
     size_t queue_capacity() const noexcept;
     /** @} */
 
+    /// One plan of the table (defined below): a chunk points at the slot of its plan.
+    struct PlanSlot;
+
     /**
      * @brief Thread-safe data structure for concurrent inference processing
      *
@@ -384,6 +388,17 @@ public:
         /// The boundary every slot's buffer of this chunk starts on, in bytes.
         size_t alignment() const noexcept { return m_block.alignment(); }
 
+        /// Takes the chunk's plan slot off the chunk (m_slot is NULL afterwards): the caller
+        /// holds the chunk, uses the slot for the rest of the chunk's worker side and gives the
+        /// chunk's count back (PlanSlot::release_chunk) when it is done with the slot. NULL
+        /// when the slot was taken before, or never stamped.
+        PlanSlot* take_slot() noexcept;
+        /// Ends the chunk's count on its plan slot, for a chunk that no inference thread gets
+        /// (dropped before or at an enqueue, discarded from a queue, completed by a drain): the
+        /// slot is taken off the chunk and the count given back at once. Nothing for a chunk
+        /// whose slot was taken before. The caller holds the chunk.
+        void leave_slot() noexcept;
+
         std::atomic<bool> m_free{true};  ///< Atomic flag indicating if this structure is available
                                          ///< for use
         anira::Semaphore m_done_semaphore{0};    ///< Semaphore for blocking wait on inference
@@ -420,15 +435,40 @@ public:
         // Plain field, synced by the queue handoffs like the stamps above.
         uint64_t m_state_epoch{0};
         // The plan this chunk runs on: the dense index into SessionElement::m_plans,
-        // stamped in Core::pre_process from SessionElement::m_current_plan with one load.
-        // The hooks, the engine call and post_process all resolve this stamp and never read
-        // the session's atomic again, so a plan switch that lands while the chunk is queued
-        // or in flight cannot split it across two plans (or run two engines, or none, for
-        // it). The index and not the backend: two plans may run on one backend (two variants
-        // of a model, two providers of an engine), and only the index tells them apart.
+        // stamped in Core::pre_process from SessionElement::m_current_plan with one load
+        // (SessionElement::stamp_plan, which stamps the plan's slot and its copies below with
+        // it). The hooks, the engine call and post_process all use what was stamped and never
+        // read the session's atomic or its table again, so a plan switch that lands while the
+        // chunk is queued or in flight cannot split it across two plans (or run two engines, or
+        // none, for it). The index and not the backend: two plans may run on one backend (two
+        // variants of a model, two providers of an engine), and only the index tells them apart.
         // Plain field: written on the driving thread at dispatch, stable for the dispatch's
         // lifetime, synced by the queue handoffs like the two stamps above.
         uint32_t m_plan{0};
+        // The slot of that plan, for the worker side alone: the chunk counts on it from the
+        // stamp (PlanSlot::active_chunks) until whoever finishes the chunk's worker side took
+        // the pointer off the chunk (take_slot, leave_slot) and gave the count back. NULL from
+        // then on, and for a chunk never stamped: the driving thread's steps behind the
+        // inference (post_process, the collection, the miss path) have the copies below and
+        // never a slot, which nothing keeps alive for them. Plain field: written by the thread
+        // that holds the chunk (the stamp; the taker, ahead of the chunk's done signal or of
+        // its return to the free pool), synced by the queue handoffs like the stamps above.
+        PlanSlot* m_slot = nullptr;
+        // What the chunk's plan reports, copied off its slot at the stamp: the variant and the
+        // backend every phase's processor context names (PlanSlot::m_variant, m_engine,
+        // m_provider and the two ids, the session's own strings, see SessionElement::intern_id)
+        // and whether the plan's engine keeps its own aliasing of a declared State pair
+        // (PlanSlot::m_state_alias). The processor runner reads these and nothing of the slot,
+        // so the chunk's phases on the driving thread need no slot; the state epoch of the
+        // stream compares the variant too (SessionElement::stamp_state_epoch). Variant 0, no
+        // engine and no provider for an index the table did not have. Plain fields, written
+        // with m_plan.
+        uint32_t m_variant = 0;
+        anira_engine m_engine = ANIRA_ENGINE_NONE;
+        anira_provider m_provider = ANIRA_PROVIDER_NONE;
+        const char* m_engine_id = nullptr;
+        const char* m_provider_id = nullptr;
+        bool m_state_alias = false;
         // Whether the chunk completed as zeros: dropped (SessionElement::complete_with_zeros:
         // a full queue, a failed pre_process, a stale or unclaimable task) or failed on the
         // inference thread (a throw, a failed before_inference or after_inference), its output
@@ -488,6 +528,10 @@ public:
     /**
      * @brief One plan of the table: the adapter the plan runs on and what a chunk stamped
      * with the plan reports.
+     *
+     * An object of its own, at one address for its life: the table holds it by pointer, and so
+     * does every chunk stamped with the plan (ThreadSafeStruct::m_slot) until its worker side is
+     * finished. Neither copied nor moved.
      */
     struct PlanSlot {
         /// The loaded model the plan runs on (never null in a registered session): shared with
@@ -514,21 +558,24 @@ public:
         // unique_ptr over a forward-declared type needs its deleter there, not here.
         PlanSlot();
         ~PlanSlot();
-        PlanSlot(PlanSlot&&) noexcept;
-        PlanSlot& operator=(PlanSlot&&) noexcept;
         PlanSlot(const PlanSlot&) = delete;
         PlanSlot& operator=(const PlanSlot&) = delete;
+        PlanSlot(PlanSlot&&) = delete;
+        PlanSlot& operator=(PlanSlot&&) = delete;
         /// The variant the plan runs: its index in the inference stage's list
         /// (anira_plan_info.variant), what a processor context reports for the chunk
-        /// (anira_processor_ctx.variant).
+        /// (anira_processor_ctx.variant; a chunk copies it at its stamp).
         uint32_t m_variant = 0;
         /// The backend a processor context reports for the chunk: a built-in engine, or
         /// ANIRA_ENGINE_CUSTOM with m_engine_id for a custom one, on a provider of the enum, or
-        /// ANIRA_PROVIDER_CUSTOM with m_provider_id for a custom one.
+        /// ANIRA_PROVIDER_CUSTOM with m_provider_id for a custom one. The two ids are the
+        /// session's own strings (SessionElement::intern_id), NULL for a built-in engine and a
+        /// provider of the enum: a chunk copies the pointers at its stamp, and they stay valid
+        /// for the session's life whatever happens to the slot.
         anira_engine m_engine = ANIRA_ENGINE_NONE;
         anira_provider m_provider = ANIRA_PROVIDER_CPU;
-        std::string m_engine_id;
-        std::string m_provider_id;
+        const char* m_engine_id = nullptr;
+        const char* m_provider_id = nullptr;
         /// The plan's engine keeps its own aliasing of a declared State pair
         /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the processor runner binds one stable
         /// buffer as both halves of every pair for a chunk of this plan and never flips it.
@@ -554,17 +601,49 @@ public:
         /// ANIRA_VARIANT_STATE_FRESH, resets its engine too. Read and written like the
         /// generation; 0 after prepare.
         uint64_t m_engine_state_epoch = 0;
+
+        /**
+         * @brief Who still needs the slot: the chunks stamped with the plan whose worker side
+         * is not finished
+         *
+         * A chunk counts from its stamp (SessionElement::stamp_plan) until nothing on the
+         * worker side touches it or the slot any more: an inference thread finished its job
+         * (run, failed, skipped as stale or given up; after the thread took the next waiting job
+         * of the slot's model or gave its instance back), or the chunk was dropped, discarded
+         * or completed as zeros without one (ThreadSafeStruct::leave_slot). While it waits in an
+         * exclusive session's pending queue, in the inference queue or on the model's wait
+         * list, it counts. An inference thread that put a chunk on the wait list counts once
+         * more until it is done with the slot's model and list. The count does not wait for the
+         * driving thread: a chunk whose inference finished and that nobody collected does not
+         * count. Zero therefore means that no inference thread reads the slot and none will
+         * unless a new chunk is stamped with it.
+         */
+        uint32_t active_chunks() const noexcept {
+            return m_active_chunks.load(std::memory_order::seq_cst);
+        }
+        /// Counts one in: the stamp, and an inference thread's own hold around a wait-list
+        /// push. Sequentially consistent, like the session's count of its jobs.
+        void retain_chunk() noexcept { m_active_chunks.fetch_add(1, std::memory_order::seq_cst); }
+        /// Counts one out: the caller is done with the slot and does not touch it again.
+        void release_chunk() noexcept { m_active_chunks.fetch_sub(1, std::memory_order::release); }
+
+    private:
+        static_assert(std::atomic<uint32_t>::is_always_lock_free,
+                      "the stamp of a chunk on the driving thread requires a lock-free count");
+        std::atomic<uint32_t> m_active_chunks{0};
     };
 
     /**
      * @brief The plan table: dense plan index -> the plan.
      *
      * Built by Core::create_session from the requests the C handler gives it
-     * (engine::PlanRequest): exactly its plans. Never empty in a registered session, and never
-     * changed afterwards, so the driving thread and the inference threads read it without
-     * synchronization.
+     * (engine::PlanRequest): exactly its plans, each an object of its own that the table holds
+     * by pointer. Never empty in a registered session, and never changed afterwards. Read by
+     * the stamp of a chunk (stamp_plan: the driving thread, and the control thread for a
+     * warm-up chunk) and by control-thread code; an inference thread and every later step of a
+     * chunk use the slot and the copies the chunk carries, never the table.
      */
-    std::vector<PlanSlot> m_plans;
+    std::vector<std::shared_ptr<PlanSlot>> m_plans;
 
     /**
      * @brief The selected plan: the one the next submitted chunk is stamped with.
@@ -604,10 +683,39 @@ public:
     uint64_t m_state_epoch = 0;
     uint32_t m_last_variant = k_no_variant;  ///< The variant of the chunk formed last
 
-    /// The state epoch of a chunk formed on `plan`, which becomes the chunk formed last: the
-    /// current epoch, or a new one when the plan's variant differs from the last chunk's under
+    /// The state epoch of a chunk formed on a plan of `variant` (the stamped chunk's copy,
+    /// ThreadSafeStruct::m_variant), which becomes the chunk formed last: the current epoch, or
+    /// a new one when the variant differs from the last chunk's under
     /// ANIRA_VARIANT_STATE_FRESH. Driving thread only; no allocation, no lock.
-    uint64_t stamp_state_epoch(uint32_t plan) noexcept ANIRA_NONBLOCKING;
+    uint64_t stamp_state_epoch(uint32_t variant) noexcept ANIRA_NONBLOCKING;
+
+    /**
+     * @brief Stamps a chunk with a plan: the index, the plan's slot and what the slot reports
+     *
+     * The one place a chunk gets its plan (Core::pre_process on the driving thread,
+     * Core::warm_up_inference on the control thread), and the one read of the table on a
+     * real-time path: the chunk counts on the slot from here (PlanSlot::active_chunks) and
+     * carries the slot's backend and aliasing as copies (ThreadSafeStruct::m_engine and the
+     * fields beside it). An index the table does not have, which a selection never is, leaves
+     * the chunk without a slot and without a backend: its inference fails
+     * (ANIRA_ERROR_INTERNAL). Wait-free, no allocation. The caller holds the chunk (it took
+     * it from the free pool).
+     */
+    void stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept ANIRA_NONBLOCKING;
+
+    /**
+     * @brief The session's own copy of an id string a plan names, for the session's life
+     *
+     * A custom engine's id or a custom provider's name of a plan request, kept once per
+     * distinct string in a store the session owns and never shrinks: the pointer a plan slot
+     * holds and a chunk copies (PlanSlot::m_engine_id, ThreadSafeStruct::m_engine_id), valid
+     * until the session dies whatever happens to the slot. Allocates: the table's builder
+     * calls it, on a control thread, never a real-time path.
+     *
+     * @param id The string; empty for a built-in engine or a provider of the enum
+     * @return The stored string, or NULL for an empty one
+     */
+    const char* intern_id(const std::string& id);
 
     unsigned long m_current_queue = 0;         ///< The time stamp of the next submitted chunk
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
@@ -743,7 +851,11 @@ public:
     void force_reset_dispatch_chain() ANIRA_BLOCKING;
     /** @brief Complete a task without running inference: zero its output tensors and signal
      * completion. Used when the global queue rejects a task, so the dropped inference still
-     * yields (silent) output at its correct stream position and the struct is freed normally. */
+     * yields (silent) output at its correct stream position and the struct is freed normally.
+     * The chunk stops counting on its plan slot ahead of the signal
+     * (ThreadSafeStruct::leave_slot), unless an inference thread's job took the slot off it
+     * before (a session momentarily uninitialized, the last resort): that job gives the count
+     * back at its end. */
     void complete_with_zeros(const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct);
 
     capi::ProcessorRunner& m_processor;  ///< The handler's processor runner: the four phases of
@@ -811,6 +923,9 @@ public:
                                                 ///< access)
 
 private:
+    /// The id strings of intern_id(): node-based, so a stored string never moves.
+    std::set<std::string> m_interned_ids;
+
     /**
      * @brief Whether any input tensor is streamable
      *

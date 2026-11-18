@@ -274,6 +274,8 @@ private:
      *
      * @param session Shared pointer to the SessionElement containing inference configuration
      * @param thread_safe_struct Shared pointer to thread-safe data structures for the session
+     * @param slot The plan slot the chunk was stamped with, which process_job() took off it
+     * (see inference())
      * @param signalled Set to true right after the struct's done signal is published (on
      * success and on a failed inference alike), so the caller's last-resort handler never
      * signals a struct twice
@@ -281,6 +283,7 @@ private:
      */
     void do_inference(const std::shared_ptr<SessionElement>& session,
                       const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
+                      SessionElement::PlanSlot* slot,
                       bool& signalled,
                       uint32_t instance);
 
@@ -290,8 +293,9 @@ private:
      * Builds the anira_engine_ctx of the chunk on this stack (instance 0 until the adapter
      * claims one, the chunk's entry, the two descriptor arrays of the struct in slot order,
      * ANIRA_TICKET_INVALID under the Hard contract, no flags) and runs the plan's prepared
-     * handle on it: exactly one plan runs per call, the one of @p plan, the index the chunk
-     * was stamped with in Core::pre_process; the session's m_current_plan is not read here.
+     * handle on it: exactly one plan runs per call, the one of @p plan_slot, the slot the chunk
+     * was stamped with in Core::pre_process; neither the session's m_current_plan nor its plan
+     * table is read here.
      * A shared session's call runs on the instance process_dequeued_inference() claimed for
      * the job (Prepared::run_claimed); a waiting job a thread told to stop gave up fails with
      * ANIRA_ERROR_INVALID_STATE without an engine call; every other call (an exclusive
@@ -302,15 +306,17 @@ private:
      * before this call's process and the stamp is adopted (per plan: a plan switched to
      * after a reset resets at its first inference too).
      *
-     * @param session Shared pointer to the SessionElement containing the plan table
-     * @param plan The plan the chunk was submitted under (ThreadSafeStruct::m_plan)
+     * @param session Shared pointer to the SessionElement the chunk belongs to
+     * @param plan_slot The slot of the plan the chunk was submitted under, which the job holds
+     * (ThreadSafeStruct::m_slot until process_job() took it); nullptr fails the chunk with
+     * ANIRA_ERROR_INTERNAL
      * @param chunk The chunk: its descriptors, its buffers, its stamps
      * @param instance The shared instance claimed for the chunk; UINT32_MAX for a call that
      * claims none; UINT32_MAX - 1 for a waiting job given up at a stop
      * @return What the adapter returned: ANIRA_OK, or the status that fails the chunk
      */
     anira_status inference(const std::shared_ptr<SessionElement>& session,
-                           uint32_t plan,
+                           SessionElement::PlanSlot* plan_slot,
                            SessionElement::ThreadSafeStruct& chunk,
                            uint32_t instance);
 
@@ -359,8 +365,9 @@ private:
     /**
      * @brief The wait list of the model a request runs on, if its plan claims a shared instance
      *
-     * The plan slot's InstanceWaitList, with the loaded model in @p loaded, for a live request
-     * (not stale, its session initialized) whose plan's prepared handle claims an instance
+     * The InstanceWaitList of the plan slot the request's chunk carries
+     * (ThreadSafeStruct::m_slot), with the loaded model in @p loaded, for a live request (not
+     * stale, its session initialized) whose plan's prepared handle claims an instance
      * (engine::Prepared::claims_instance); nullptr for every other request, which needs no
      * instance.
      */
@@ -405,7 +412,9 @@ private:
      * reset) or its session is momentarily uninitialized (a prepare/release drain is in
      * progress), otherwise runs do_inference() on @p instance. Skip paths still publish the
      * completion signal, and for session-exclusive tasks end the task's turn on the dispatch
-     * chain. The session's active-inference count is released and @p job emptied on every
+     * chain. The chunk's plan slot is taken off the chunk at the start and used from there
+     * (ThreadSafeStruct::take_slot). The chunk's count on that slot and the session's
+     * active-inference count are released and @p job emptied on every
      * exit path, and a last-resort handler completes a struct that was not signalled yet with
      * zeros (never signalling one twice), ends its turn on the chain and records
      * ANIRA_ERROR_ENGINE on the session's latch.

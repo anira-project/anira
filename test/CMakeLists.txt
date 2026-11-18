@@ -145,6 +145,7 @@ anira_add_test_binary(test_utils WHITE_BOX
 
 anira_add_test_binary(test_scheduler WHITE_BOX
 	scheduler/test_PlanSwitch.cpp
+	scheduler/test_PlanSlot.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_ContextConfigMismatch.cpp
 	scheduler/test_CopyPathOracle.cpp

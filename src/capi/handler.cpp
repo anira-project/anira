@@ -1466,10 +1466,10 @@ std::vector<anira::engine::PlanRequest> plan_requests(
 // plan without a loaded model.
 anira_memory_kind memory_kind_of(const anira_handler& handler, size_t plan) noexcept {
     const anira::SessionElement& session = handler.m_manager->session();
-    if (plan >= session.m_plans.size() || session.m_plans[plan].m_loaded == nullptr) {
+    if (plan >= session.m_plans.size() || session.m_plans[plan]->m_loaded == nullptr) {
         return ANIRA_MEMORY_UNKNOWN;
     }
-    return session.m_plans[plan].m_loaded->model().m_device_memory.m_kind;
+    return session.m_plans[plan]->m_loaded->model().m_device_memory.m_kind;
 }
 
 // The plan table of the report: one plan per variant, row and provider of the validator's
@@ -1600,8 +1600,8 @@ anira::engine::Loaded::SlotEdge edge_of(const anira::SessionElement& session,
                                         size_t plan,
                                         bool is_input,
                                         uint32_t slot) noexcept {
-    if (plan >= session.m_plans.size() || session.m_plans[plan].m_loaded == nullptr) { return {}; }
-    return session.m_plans[plan].m_loaded->slot_edge(is_input, slot);
+    if (plan >= session.m_plans.size() || session.m_plans[plan]->m_loaded == nullptr) { return {}; }
+    return session.m_plans[plan]->m_loaded->slot_edge(is_input, slot);
 }
 
 // The dtype a slot's ring holds (its stream port's), 0 for a slot without a ring.
@@ -1619,10 +1619,10 @@ anira_binding binding_of(const anira::SessionElement& session,
                          size_t plan,
                          bool is_input,
                          uint32_t slot) noexcept {
-    if (plan >= session.m_plans.size() || session.m_plans[plan].m_loaded == nullptr) {
+    if (plan >= session.m_plans.size() || session.m_plans[plan]->m_loaded == nullptr) {
         return ANIRA_BINDING_POSITION;
     }
-    const anira::engine::Bindings& bindings = session.m_plans[plan].m_loaded->bindings();
+    const anira::engine::Bindings& bindings = session.m_plans[plan]->m_loaded->bindings();
     const std::vector<anira_binding>& side = is_input ? bindings.m_inputs : bindings.m_outputs;
     return slot < side.size() ? side[slot] : ANIRA_BINDING_POSITION;
 }
@@ -1955,10 +1955,10 @@ void set_real_time(anira_plan_info& info,
 // the variants (anira::VariantBounds), which is this figure in a stage of one variant.
 uint32_t parallel_of(const anira::SessionElement& session, uint32_t plan) noexcept {
     if (session.exclusive() || plan >= session.m_plans.size() ||
-        session.m_plans[plan].m_loaded == nullptr) {
+        session.m_plans[plan]->m_loaded == nullptr) {
         return std::max<uint32_t>(session.m_num_instances, 1);
     }
-    return std::max<uint32_t>(session.m_plans[plan].m_loaded->model().m_instances, 1);
+    return std::max<uint32_t>(session.m_plans[plan]->m_loaded->model().m_instances, 1);
 }
 
 // What a prepare knows of one plan's inference time: nothing (no warm-up, or not yet), what its
@@ -2009,7 +2009,7 @@ anira::FigureKey figure_key(const anira_handler& handler,
                             const anira::SessionElement& session,
                             uint32_t plan) {
     anira::FigureKey key;
-    key.m_model = session.m_plans[plan].m_loaded->model();
+    key.m_model = session.m_plans[plan]->m_loaded->model();
     // A bytes model by its content (hash and size, the record's m_num_bytes), never by the
     // bytes' address or owner: two plugins that each borrow or copy the same model bytes are
     // one model, and a buffer reused for other bytes never matches.
@@ -2583,9 +2583,9 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // handles made so far back with the session; the processor's unprepare is not owed for a
     // refused prepare.
     const auto prepare_user_code = [&] {
-        for (anira::SessionElement::PlanSlot& slot : session.m_plans) {
-            if (!slot.m_registered || slot.m_prepared != nullptr) { continue; }
-            slot.m_prepared = slot.m_loaded->prepare(
+        for (const std::shared_ptr<anira::SessionElement::PlanSlot>& slot : session.m_plans) {
+            if (!slot->m_registered || slot->m_prepared != nullptr) { continue; }
+            slot->m_prepared = slot->m_loaded->prepare(
                 anira::engine::PrepareRequest{.m_exclusive = prepared.m_exclusive,
                                               .m_info = &info});
         }
@@ -2659,8 +2659,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         // inside this one call). Below the first struct edge nothing moves, and the first prepare
         // stands.
         if (handler.m_num_entries != pass_entries) {
-            for (anira::SessionElement::PlanSlot& slot : session.m_plans) {
-                if (slot.m_registered) { slot.m_prepared.reset(); }
+            for (const std::shared_ptr<anira::SessionElement::PlanSlot>& slot : session.m_plans) {
+                if (slot->m_registered) { slot->m_prepared.reset(); }
             }
             unprepare_processor(handler);
             info.num_entries = handler.m_num_entries;
