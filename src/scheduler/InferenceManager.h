@@ -82,6 +82,8 @@ public:
      * @param context_config The context's configuration (anira_context_config_*)
      * @param rt_latch The handler's latch the session records its failures into; nullptr
      * gives the session its own
+     * @param selection The handler's atomic that holds the selected plan (it outlives the
+     * manager); nullptr gives the session its own
      * @throws std::invalid_argument for an empty request list
      */
     InferenceManager(capi::ProcessorRunner& processor,
@@ -90,7 +92,8 @@ public:
                      const capi::HardContract& hard,
                      std::vector<engine::PlanRequest> requests,
                      const anira_context_config& context_config,
-                     anira::RtLatch* rt_latch = nullptr);
+                     anira::RtLatch* rt_latch = nullptr,
+                     std::atomic<uint32_t>* selection = nullptr);
 
     /**
      * @brief Destructor that properly cleans up inference resources

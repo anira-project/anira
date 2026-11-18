@@ -155,6 +155,9 @@ public:
      * handler's own (so anira_handler_rt_error reads one word); nullptr gives the session
      * its own. Reaches the SessionElement constructor and is published by the same
      * lifecycle lock that registers the session
+     * @param selection The atomic that holds the session's selected plan: a 3.x handler's own
+     * (so anira_handler_get_plan reads one word of the handler); nullptr gives the session its
+     * own. Reaches the SessionElement constructor, which sets it to 0
      * @return Shared pointer to the newly created session
      * @throws std::invalid_argument for an empty request list
      *
@@ -168,7 +171,8 @@ public:
         const capi::HardContract& hard,
         std::vector<engine::PlanRequest> requests,
         const anira_context_config& context_config,
-        RtLatch* rt_latch = nullptr);
+        RtLatch* rt_latch = nullptr,
+        std::atomic<uint32_t>* selection = nullptr);
 
     /**
      * @brief Releases an inference session and its resources

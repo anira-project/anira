@@ -143,6 +143,8 @@ which of ``providers`` are usable here, now, as a bitmask over the list (bit *i*
 a descriptor without a list serves the CPU path without a bit). It runs before ``init`` and any number
 of times, on the main thread, at ``anira_handler_create`` and at the pipeline's capabilities entries,
 with an ``anira_init_info``; it may log and never calls an entry that takes the lifecycle lock.
+``anira_handler_create`` asks every engine of the pipeline that declares providers, also one no plan
+of the handler runs on.
 ``anira_handler_prepare`` never calls it: the handler keeps its create's answer and checks the plans
 against it again. A status other than ``ANIRA_OK`` fails the calling entry, naming the engine; a
 declared provider the query cleared is refused for a candidate as "declares provider 'x' but its

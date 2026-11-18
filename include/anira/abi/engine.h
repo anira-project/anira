@@ -420,14 +420,15 @@ typedef void (ANIRA_CALL* anira_engine_release_fn)(void* user_data);
  * @brief The query function of an engine, its own GetAvailableProviders: which of the providers
  * its descriptor declares it can serve here, now (a device present, a library loaded).
  * Called before init and any number of times, on the main thread only: at
- * anira_handler_create, where every candidate's provider of the engine is checked
- * against the answer, and at anira_pipeline_capabilities_backends / _edge, which report
- * the engine's rows. anira_handler_prepare, which may run on another thread, never calls
- * it: the handler keeps the answer its create got and checks the plans against that
- * again. It must not take the core's lifecycle lock (no context, handler or thread
- * entry) and may log. A status other than ANIRA_OK fails the calling entry with it,
- * naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable, the
- * rule for an engine without a query.
+ * anira_handler_create, which asks every engine of its pipeline that declares providers,
+ * also one no plan of the handler runs on, and checks every candidate's provider of the
+ * engine against the answer, and at anira_pipeline_capabilities_backends / _edge, which
+ * report the engine's rows. anira_handler_prepare, which may run on another thread,
+ * never calls it: the handler keeps the answer its create got and checks the plans
+ * against that again. It must not take the core's lifecycle lock (no context, handler or
+ * thread entry) and may log. A status other than ANIRA_OK fails the calling entry with
+ * it, naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable,
+ * the rule for an engine without a query.
  * @param info The facts of the core in effect at the call (the log level, the thread count the
  *        context asks for, the context asking); valid until the callback returns.
  * @param user_data The descriptor's user_data.

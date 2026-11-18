@@ -15,7 +15,9 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "../scheduler/InferenceManager.h"
@@ -48,6 +50,45 @@ struct Plan {
     size_t m_row = 0;                               ///< the index in that variant's models[]
     anira_plan_info m_info = ANIRA_PLAN_INFO_INIT;  ///< engine_id and provider_id point into
                                                     ///< the report's string store
+};
+
+/**
+ * @brief The slot signature of a handler: what a slot number names on either side, for the
+ * handler's life
+ *
+ * A slot is the tensor's position in the model config's list of its side, and every variant of
+ * the inference stage has the same tensors there (anira::capi::check_same_form). The signature
+ * is the handler's own record of them, so that no entry a host calls while the stream runs
+ * reads the pipeline copy or a variant's derivation: a variant may be added to a playing
+ * handler and the first one removed from it, and neither changes what a slot is.
+ *
+ * Fixed at anira_handler_create: the canonical name of every tensor (m_names). Fixed at every
+ * anira_handler_prepare: one empty tensor per slot (m_empty). The rest of what a slot is lives
+ * in the handler's ports and nowhere else, one fact in one place: the role is the port's arm, a
+ * Static tensor's shape and dtype are its static port's value's (both anira_handler_create's),
+ * the channel count, the ring dtype and the largest block of a Streamed tensor are its stream
+ * port's fields (prepare's; port.h). Signature and ports are written by create and by prepare
+ * alone, which no real-time entry overlaps, and only read between two prepares.
+ */
+struct SlotSignature {
+    /// One side of the handler, indexed by slot.
+    struct Side {
+        /// The canonical names, in slot order: the model file names a tensor by it, a record of
+        /// a refusal names it beside the slot number. Empty strings on a handler that
+        /// anira_handler_create did not build (a test's white-box handler).
+        std::vector<std::string> m_names;
+        /// One empty tensor per slot, built at prepare from the ports: rank 2, shape
+        /// {channels, 0}, the slot's dtype, host memory, no pointer (the channel count and the
+        /// dtype are the stream port's; 1 and the spec's dtype for a Static slot, which has no
+        /// host block). What a position of a multi form holds for a slot the call leaves out,
+        /// and what a single form's staged slot goes back to (anira_handler::m_staged_inputs).
+        /// Empty before the first prepare.
+        std::vector<anira_tensor> m_empty;
+    };
+    Side m_inputs;
+    Side m_outputs;
+
+    const Side& side(bool input) const noexcept { return input ? m_inputs : m_outputs; }
 };
 
 }  // namespace anira::capi
@@ -104,9 +145,14 @@ struct anira_plan_report {
 
 struct anira_handler {
     /// A handler over `num_inputs` and `num_outputs` tensors: its ports, one per tensor, made
-    /// here once (anira::capi::Ports never resizes).
+    /// here once (anira::capi::Ports never resizes), and with them what is sized by the slot
+    /// counts and never resized either: the names of the slot signature (empty until
+    /// anira_handler_create fills them) and one latency per output.
     anira_handler(size_t num_inputs, size_t num_outputs)
-        : m_input_ports(num_inputs), m_output_ports(num_outputs) {}
+        : m_input_ports(num_inputs), m_output_ports(num_outputs), m_latencies(num_outputs) {
+        m_signature.m_inputs.m_names.resize(num_inputs);
+        m_signature.m_outputs.m_names.resize(num_outputs);
+    }
 
     anira_context* m_context = nullptr;  ///< add-ref'd at create, released at destroy
     anira_pipeline m_pipeline;           ///< the copy
@@ -156,12 +202,23 @@ struct anira_handler {
                                                              ///< / host_rate
     /// dense index -> variant/row/backend, over every variant in variant order; rebuilt at
     /// prepare only, in the order the session's plan table is built in from the same
-    /// derivations (plan_requests). The selected plan has no storage
-    /// here: it is the session's one atomic, the dense index itself (SessionElement::
-    /// m_current_plan), so set_plan has no pair to tear and two plans on one backend stay
-    /// distinct.
+    /// derivations (plan_requests).
     std::vector<anira::capi::Plan> m_plans;
+    /**
+     * @brief The selected plan: the dense index the next submitted chunk is stamped with.
+     *
+     * The whole runtime selection is this one atomic, so set_plan has no pair to tear and two
+     * plans on one backend stay distinct. The handler's, not the session's: the session is bound
+     * to it (SessionElement::m_current_plan refers to it, as its latch pointer does to m_rt), so
+     * anira_handler_get_plan answers with one load and never reaches into the session. A new
+     * session starts it at 0; prepare then selects its initial plan.
+     */
+    std::atomic<uint32_t> m_selected_plan{0};
     anira_plan_report m_report;
+    /// The report anira_handler_plan_report hands out: m_report while the handler is prepared,
+    /// NULL else. Stored by the control thread (prepare, before its callbacks run; unprepare),
+    /// loaded by the getter, which never reaches into the session or the report itself.
+    std::atomic<const anira_plan_report*> m_published_report{nullptr};
     std::atomic<bool> m_prepared{false};  ///< release before the engines' and the processor's
                                           ///< prepares of a prepare, so the getters answer
                                           ///< inside them; acquire in every getter
@@ -175,24 +232,45 @@ struct anira_handler {
     /// inside a process call, so anira_handler_prepare refuses; the node re-prepares the handler
     /// under its own hold (anira_em_audio_node_prepare). Always 0 on other targets.
     std::atomic<uint32_t> m_audio_nodes{0};
-    // One array of empty tensors per side, built at prepare from the ports (rank 2, shape
-    // {channels, 0}, the slot's dtype, host memory, no pointer; the channel count and the dtype
-    // are the stream port's, 1 and the spec's dtype for a Static slot, which has no host
-    // block). A single-tensor form on a side with several slots copies the caller's descriptor
-    // into its slot of the array, hands the array to the manager, which takes one tensor per
-    // slot, and sets that entry back to the empty tensor before it returns. The entry of a
-    // Static or a State slot stays empty: a single form never names one. Indexed by slot, like
-    // the ports: the tensor's position in the model config's list of its side.
-    std::vector<anira_tensor> m_input_tensors;
-    std::vector<anira_tensor> m_output_tensors;
+    /// What a slot number names on either side (SlotSignature): the canonical names, set by
+    /// anira_handler_create, and the empty tensors, set by every prepare. With the ports it is
+    /// everything an entry reads about a slot while the stream runs; none of them reads
+    /// m_pipeline or m_variant_derived.
+    anira::capi::SlotSignature m_signature;
+    // The per-slot arrays a single-tensor form stages its one tensor in, one per side: copies
+    // of the signature's empty tensors, made at prepare. A single form on a side with several
+    // slots copies the caller's descriptor into its slot of the array, hands the array to the
+    // manager, which takes one tensor per slot, and sets that entry back to the signature's
+    // empty tensor before it returns. The entry of a Static or a State slot stays empty: a
+    // single form never names one. Indexed by slot, like the ports. Driving thread only.
+    std::vector<anira_tensor> m_staged_inputs;
+    std::vector<anira_tensor> m_staged_outputs;
     /// The lengths of the model config's two tensor lists, set by anira_handler_create (the
     /// two Static entries are legal on an unprepared handler and need their bound).
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
     /// The entries of the prepared session (the structs of its pool, what a processor context
-    /// reports as the chunk's entry): set by prepare from the processor's table, 0 while
-    /// unprepared. anira_handler_num_entries reads it.
-    uint32_t m_num_entries = 0;
+    /// reports as the chunk's entry): stored by prepare from the processor's table at every
+    /// sizing of the session, 0 while unprepared. anira_handler_num_entries loads it.
+    std::atomic<uint32_t> m_num_entries{0};
+    /// The latency of every output slot in samples, 0 for a tensor without a ring (Static,
+    /// State): stored by prepare from the session's vector at every sizing of the session, so
+    /// anira_handler_get_latency and anira_handler_get_latencies answer with plain loads and
+    /// never reach into the session. One atomic per output slot, sized by the constructor and
+    /// never resized.
+    std::vector<std::atomic<uint32_t>> m_latencies;
+    /**
+     * @brief The control lock: one control entry of the handler at a time.
+     *
+     * Serialises anira_handler_prepare (anira_em_audio_node_prepare's included) and
+     * anira_handler_destroy. No real-time entry takes it, and none waits for it: the getters
+     * answer from the atomics above, the Hard entries are the driver thread's. m_control_holder
+     * is the thread inside the locked region (std::thread::id() while nobody is): a callback of
+     * that region (an engine's or a processor's prepare, a load) runs on the holding thread, so
+     * a control entry called from it finds itself there and does not lock again.
+     */
+    std::mutex m_control;
+    std::atomic<std::thread::id> m_control_holder{};
     /// What the processor's prepare handed back for this handler (the out_prepared of
     /// anira_processor_prepare_fn; NULL is a legal value): the `prepared` pointer every phase call,
     /// the reset and the unprepare of this handler receive beside the registration's user_data.

@@ -538,7 +538,7 @@ TEST(AbiHandlerTensor, ASingleTensorFormLeavesTheOtherSlotsEmpty) {
         Block stream_in(Layout::Interleaved, 3, k_hop);
         fill_input(stream_in, position);
         ASSERT_EQ(anira_handler_push_data(handler, &stream_in.tensor(), 0), ANIRA_OK);
-        for (const anira_tensor& slot : handler->m_input_tensors) {
+        for (const anira_tensor& slot : handler->m_staged_inputs) {
             EXPECT_EQ(slot.shape[1], 0) << "a staged slot is an empty tensor again";
         }
 
@@ -546,7 +546,7 @@ TEST(AbiHandlerTensor, ASingleTensorFormLeavesTheOtherSlotsEmpty) {
         size_t delivered = k_unset;
         ASSERT_EQ(anira_handler_pop_data(handler, &stream_out.tensor(), 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_hop);
-        for (const anira_tensor& slot : handler->m_output_tensors) {
+        for (const anira_tensor& slot : handler->m_staged_outputs) {
             EXPECT_EQ(slot.shape[1], 0) << "a staged slot is an empty tensor again";
         }
         for (size_t channel = 0; channel < 3; ++channel) {
@@ -1454,8 +1454,8 @@ TEST_F(AbiHandlerTensorMiss, AMultiFormHandsOverTheCallersArrays) {
         anira_handler_process(rig.get(), &stream_in.tensor(), 0, &single_out.tensor(), 0, nullptr),
         ANIRA_MISSED);
     ASSERT_EQ(m_state.m_calls, 2);
-    EXPECT_EQ(m_state.m_inputs, rig.get()->m_input_tensors.data());
-    EXPECT_EQ(m_state.m_outputs, rig.get()->m_output_tensors.data());
+    EXPECT_EQ(m_state.m_inputs, rig.get()->m_staged_inputs.data());
+    EXPECT_EQ(m_state.m_outputs, rig.get()->m_staged_outputs.data());
     EXPECT_EQ(bytes_of(m_state.m_input_copies[0]), bytes_of(stream_in.tensor()));
     EXPECT_EQ(bytes_of(m_state.m_output_copies[0]), bytes_of(single_out.tensor()));
     EXPECT_EQ(m_state.m_input_copies[1].shape[1], 0) << "the slot the call did not carry";
@@ -1503,8 +1503,8 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
                   ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_EQ(m_state.m_calls, 0);
     }
-    EXPECT_EQ(bytes_of(handler->m_input_tensors[1]), empty_values) << "never staged";
-    EXPECT_EQ(bytes_of(handler->m_output_tensors[1]), empty_values);
+    EXPECT_EQ(bytes_of(handler->m_staged_inputs[1]), empty_values) << "never staged";
+    EXPECT_EQ(bytes_of(handler->m_staged_outputs[1]), empty_values);
 
     // Two delivered blocks of slot 0 empty the ring, the third one starves.
     starve(rig, 3);
@@ -1516,8 +1516,8 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
                   ANIRA_MISSED);
     }
     ASSERT_EQ(m_state.m_calls, 1);
-    ASSERT_EQ(m_state.m_inputs, handler->m_input_tensors.data());
-    ASSERT_EQ(m_state.m_outputs, handler->m_output_tensors.data());
+    ASSERT_EQ(m_state.m_inputs, handler->m_staged_inputs.data());
+    ASSERT_EQ(m_state.m_outputs, handler->m_staged_outputs.data());
     EXPECT_GT(m_state.m_input_copies[0].shape[1], 0) << "the slot the call carried";
     // What the function was handed in the other slot, copied while it ran.
     for (const anira_tensor* slot : {&m_state.m_input_copies[1], &m_state.m_output_copies[1]}) {
@@ -1530,8 +1530,8 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
         EXPECT_EQ(bytes_of(*slot), empty_values);
     }
     // The carried slot is un-staged the same way once the missed call has returned.
-    EXPECT_EQ(bytes_of(handler->m_input_tensors[0]), bytes_of(empty_slot(3)));
-    EXPECT_EQ(bytes_of(handler->m_output_tensors[0]), bytes_of(empty_slot(3)));
+    EXPECT_EQ(bytes_of(handler->m_staged_inputs[0]), bytes_of(empty_slot(3)));
+    EXPECT_EQ(bytes_of(handler->m_staged_outputs[0]), bytes_of(empty_slot(3)));
 }
 
 // A float host: channel pointers presented as planar float32 tensors through an

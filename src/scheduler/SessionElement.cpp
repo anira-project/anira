@@ -52,8 +52,10 @@ SessionElement::SessionElement(int new_session_id,
                                const capi::HardContract& hard,
                                uint32_t num_instances,
                                moodycamel::ProducerToken&& producer_token,
-                               anira::RtLatch* rt_latch)
-    : m_session_id(new_session_id)
+                               anira::RtLatch* rt_latch,
+                               std::atomic<uint32_t>* selection)
+    : m_current_plan(selection != nullptr ? *selection : m_current_plan_own)
+    , m_session_id(new_session_id)
     , m_producer_token(std::move(producer_token))
     // No blocks: an exclusive session's prepare reserves them for its struct pool through the
     // token (reserve_pending_dispatch), so enqueue_pending_dispatch() never allocates.
@@ -67,7 +69,11 @@ SessionElement::SessionElement(int new_session_id,
     , m_budget_ms(hard.m_budget_ms)
     // A 2.x session records into its own latch; a 3.x session into its handler's, which
     // outlives the session (the handler destroys its manager first).
-    , m_rt(rt_latch != nullptr ? rt_latch : &m_rt_own) {}
+    , m_rt(rt_latch != nullptr ? rt_latch : &m_rt_own) {
+    // A new session starts on plan 0, whoever owns the atomic: a handler's keeps the value of
+    // the session before this one.
+    m_current_plan.store(0, std::memory_order_relaxed);
+}
 
 bool SessionElement::select_plan(uint32_t plan) noexcept {
     if (plan >= m_plans.size()) { return false; }

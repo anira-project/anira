@@ -215,6 +215,7 @@ anira_add_test_binary(test_abi WHITE_BOX
 	abi/test_Context.cpp
 	abi/test_Thread.cpp
 	abi/test_Handler.cpp
+	abi/test_HandlerControl.cpp
 	abi/test_HandlerCopyOracle.cpp
 	abi/test_HandlerStatic.cpp
 	abi/test_HandlerTensor.cpp

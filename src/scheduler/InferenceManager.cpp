@@ -33,14 +33,16 @@ InferenceManager::InferenceManager(capi::ProcessorRunner& processor,
                                    const capi::HardContract& hard,
                                    std::vector<engine::PlanRequest> requests,
                                    const anira_context_config& context_config,
-                                   anira::RtLatch* rt_latch)
+                                   anira::RtLatch* rt_latch,
+                                   std::atomic<uint32_t>* selection)
     : m_session(Core::create_session(processor,
                                      bounds,
                                      derived,
                                      hard,
                                      std::move(requests),
                                      context_config,
-                                     rt_latch)) {}
+                                     rt_latch,
+                                     selection)) {}
 
 InferenceManager::~InferenceManager() {
     m_session->m_dropped_hops = nullptr;

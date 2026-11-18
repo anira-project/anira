@@ -2376,6 +2376,59 @@ TEST(AbiEngine, TheQueryRunsAtCreateAndPrepareReusesItsAnswer) {
     EXPECT_EQ(gain.m_queried_off_thread.load(), 0);
 }
 
+// An engine not reached at create has an answer: anira_handler_create asks the query of every
+// engine of the pipeline that declares providers, whether a plan of the handler runs on it or
+// not, and the handler keeps the answer, so a plan that reaches the engine later is checked
+// against it without a query (the query runs on the main thread only, a later check on any
+// control thread). An engine without a list has no bit a query could clear and is not asked. A
+// prepare asks nothing again. A refused query of an engine no plan reaches fails the create with
+// its status, naming the engine, as a reached engine's does.
+TEST(AbiEngine, AnEngineNoPlanReachesHasAQueryAnswer) {
+    constexpr const char* k_unreached_id = "org.example.unreached";
+    constexpr const char* k_listless_id = "org.example.listless";
+    const Context context;
+    static constexpr std::array<const char*, 2> k_served{"coreml", "com.example.npu"};
+    GainEngine reached;    // the model's entry names it
+    GainEngine unreached;  // declares providers, and no entry names it
+    unreached.m_available = 0b10;
+    GainEngine listless;  // no providers list, and no entry names it
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(reached, k_served)), ANIRA_OK)
+        << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_unreached_id, gain_desc_serving(unreached, k_served)), ANIRA_OK)
+        << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_listless_id, gain_desc(listless)), ANIRA_OK)
+        << pipe.m_err.message;
+    pipe.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    EXPECT_EQ(reached.m_queried, 1);
+    EXPECT_EQ(unreached.m_queried, 1) << "asked at create although no plan runs on it";
+    EXPECT_EQ(unreached.m_query_context, context.m_context);
+    EXPECT_EQ(listless.m_queried, 0) << "no list: nothing a query could answer";
+    const uint64_t* kept = handler->m_query_answers.find(k_unreached_id);
+    ASSERT_NE(kept, nullptr) << "the handler keeps the answer";
+    EXPECT_EQ(*kept, 0b10U);
+    ASSERT_NE(handler->m_query_answers.find(k_gain_id), nullptr);
+    EXPECT_EQ(handler->m_query_answers.find(k_listless_id), nullptr);
+
+    anira_error err = ANIRA_ERROR_INIT;
+    const anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(reached.m_queried, 1) << "a prepare never calls a query";
+    EXPECT_EQ(unreached.m_queried, 1);
+    EXPECT_EQ(unreached.m_inited, 0) << "no plan reached it: never initialised";
+    EXPECT_EQ(unreached.m_loaded, 0);
+    anira_handler_destroy(handler);
+    handler = nullptr;
+
+    unreached.m_refuse_query = ANIRA_ERROR_DEVICE;
+    EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_ERROR_DEVICE);
+    EXPECT_EQ(handler, nullptr);
+    EXPECT_NE(std::strstr(pipe.m_err.message, "'org.example.unreached' refused query"), nullptr)
+        << pipe.m_err.message;
+}
+
 // A pipeline's capabilities are the context's rows and then one row per custom engine of the
 // pipeline and provider usable here: the declared providers the query keeps, in list order,
 // or the CPU path alone for an engine without a list, with the engine's id; every call runs

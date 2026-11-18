@@ -259,8 +259,8 @@ ServedProviders served_providers(const anira_context& context,
             }
             const uint64_t* kept = answers.find(engine->id());
             if (kept == nullptr) {
-                // create asked the query of every engine whose plans the check reaches, and
-                // prepare reaches the same plans.
+                // create asked the query of every engine of the pipeline that declares
+                // providers, whether one of its plans reached it or not.
                 throw StatusError(ANIRA_ERROR_INTERNAL,
                                   "providers: custom engine '" + engine->id() +
                                       "' has no query answer from anira_handler_create");

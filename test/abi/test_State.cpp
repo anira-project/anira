@@ -1564,8 +1564,8 @@ TEST(AbiState, MissFunctionReceivesTheCallersArrays) {
                                     nullptr),
               ANIRA_MISSED);
     ASSERT_EQ(log.m_calls, 2U);
-    EXPECT_EQ(log.m_inputs, h->m_input_tensors.data());
-    EXPECT_EQ(log.m_outputs, h->m_output_tensors.data());
+    EXPECT_EQ(log.m_inputs, h->m_staged_inputs.data());
+    EXPECT_EQ(log.m_outputs, h->m_staged_outputs.data());
     EXPECT_EQ(log.m_num_inputs, 3U);
     EXPECT_EQ(log.m_num_outputs, 3U);
     EXPECT_EQ(log.m_input_requests, (std::vector<int64_t>{0, 0, k_hop}));

@@ -62,6 +62,7 @@
 #include <ratio>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -257,15 +258,14 @@ const anira::capi::Ports& side_ports(const anira_handler& handler,
 
 // The canonical name of a slot's tensor, for a record: the host names the tensor by its slot
 // number, the model file by this name. `slot` is below the side's count. A pointer into the
-// pipeline copy, which never changes: no allocation.
+// handler's slot signature, whose names anira_handler_create set and nothing changes: no
+// allocation, and no read of the pipeline copy, whose variants may come and go. A handler
+// create did not build (a test's white-box handler, which reaches the Static entries
+// unprepared) has empty names.
 [[maybe_unused]] const char* slot_name(const anira_handler& handler,
                                        bool input,
                                        uint32_t slot) noexcept ANIRA_NONBLOCKING {
-    // A handler anira_handler_create built has its variant; a bare one (a test's white-box
-    // handler, which reaches the Static entries unprepared) has no name.
-    if (handler.m_pipeline.m_variants.empty()) { return ""; }
-    const anira_model_config& model = handler.m_pipeline.m_variants[0];
-    return (input ? model.m_inputs[slot] : model.m_outputs[slot]).m_name.c_str();
+    return handler.m_signature.side(input).m_names[slot].c_str();
 }
 
 // The argument predicates of the single-tensor forms (the pointers are checked for NULL only;
@@ -546,30 +546,32 @@ bool slot_array(const anira_tensor* tensors, uint32_t count, uint32_t slots) noe
 
 // The per-slot array a single-tensor form hands the manager, with the caller's one tensor
 // staged in its slot. The manager takes one tensor per slot: on a side with one slot the
-// caller's descriptor is that array; on a side with more the handler's array of empty tensors
-// with the caller's descriptor copied into its slot (one struct copy, nothing is built). When
-// the call returns the slot is the empty tensor of prepare again, every field of it: a later
-// call that does not carry the slot hands the array to the miss function, which must not find
-// the memory arm, the byte offset, the flags or the release pair of an earlier caller in it
-// (the memory they name may be gone by then).
+// caller's descriptor is that array; on a side with more the handler's staging array of that
+// side (anira_handler::m_staged_inputs / m_staged_outputs: the signature's empty tensors as
+// prepare copied them) with the caller's descriptor copied into its slot (one struct copy,
+// nothing is built). When the call returns the slot is the signature's empty tensor again,
+// every field of it: a later call that does not carry the slot hands the array to the miss
+// function, which must not find the memory arm, the byte offset, the flags or the release pair
+// of an earlier caller in it (the memory they name may be gone by then).
 class StagedSlotArray {
 public:
-    StagedSlotArray(std::vector<anira_tensor>& slots,
+    /// `tensor` staged in `slot` of the handler's input side (`input`) or its output side.
+    StagedSlotArray(anira_handler& handler,
+                    bool input,
                     const anira_tensor& tensor,
                     uint32_t slot) noexcept ANIRA_NONBLOCKING : m_array(&tensor) {
+        std::vector<anira_tensor>& slots =
+            input ? handler.m_staged_inputs : handler.m_staged_outputs;
         if (slots.size() > 1) {
             slots[slot] = tensor;
             m_staged = &slots[slot];
+            m_empty = &handler.m_signature.side(input).m_empty[slot];
             m_array = slots.data();
         }
     }
     ~StagedSlotArray() {
-        if (m_staged == nullptr) { return; }
-        // What empty_tensors() built: the staged descriptor passed the check, so its dtype and
-        // shape[0] are the slot's. A field fill (zero, then a few stores), and the factory
-        // reads its arguments before it zeroes the record.
-        const std::array<int64_t, 2> shape{m_staged->shape[0], 0};
-        anira_tensor_init_host(m_staged, nullptr, m_staged->dtype, 2, shape.data());
+        // One struct copy back: the empty tensor of the slot as prepare built it.
+        if (m_staged != nullptr) { *m_staged = *m_empty; }
     }
     StagedSlotArray(const StagedSlotArray&) = delete;
     StagedSlotArray& operator=(const StagedSlotArray&) = delete;
@@ -581,6 +583,7 @@ public:
 private:
     const anira_tensor* m_array;
     anira_tensor* m_staged = nullptr;
+    const anira_tensor* m_empty = nullptr;
 };
 
 // ==== the status and the count ================================================================
@@ -810,15 +813,33 @@ void zero_state_ports(anira_handler& handler) noexcept {
 // with the last session), then the processor, the processor's unprepare, the report and the plan
 // table; the contract snapshot and the derivation stay until the next prepare replaces them or
 // destroy frees them. The rings stay in their stream ports, which the next prepare re-sizes.
+// What the getters answer from goes back to its unprepared value first, behind m_prepared: no
+// report, no entries, no latency (the selection stays; the next session starts it at 0).
 void unprepare(anira_handler& handler) noexcept {
     handler.m_runnable.store(false, std::memory_order_release);
     handler.m_prepared.store(false, std::memory_order_release);
+    handler.m_published_report.store(nullptr, std::memory_order_release);
+    handler.m_num_entries.store(0, std::memory_order_relaxed);
+    for (std::atomic<uint32_t>& latency : handler.m_latencies) {
+        latency.store(0, std::memory_order_relaxed);
+    }
     handler.m_manager.reset();
     handler.m_pp.reset();
     unprepare_processor(handler);
     clear_report(handler.m_report);
     handler.m_plans.clear();
-    handler.m_num_entries = 0;
+}
+
+// What the latency getters answer from, after a sizing of the session: one figure per output
+// slot off the session's vector, 0 for a slot it does not cover (a tensor without a ring has 0
+// there anyway). Control thread.
+void publish_latencies(anira_handler& handler) noexcept {
+    const std::vector<unsigned int>& latencies = handler.m_manager->latencies();
+    for (size_t slot = 0; slot < handler.m_latencies.size(); ++slot) {
+        handler.m_latencies[slot].store(
+            slot < latencies.size() ? static_cast<uint32_t>(latencies[slot]) : 0U,
+            std::memory_order_relaxed);
+    }
 }
 
 // The host-block rule of prepare: the session is sized for the contract's host_block_max at its
@@ -2230,7 +2251,7 @@ void log_measurement([[maybe_unused]] const anira_handler& handler,
                           session.m_num_instances,
                           session.m_num_instances == 1 ? "" : "s",
                           latency.c_str(),
-                          handler.m_num_entries);
+                          handler.m_num_entries.load(std::memory_order_relaxed));
         return;
     }
     ANIRA_LOG_INFO(anira::log_group::k_capi,
@@ -2239,7 +2260,7 @@ void log_measurement([[maybe_unused]] const anira_handler& handler,
                    budget.c_str(),
                    rt_verdict_word(worst),
                    latency.c_str(),
-                   handler.m_num_entries);
+                   handler.m_num_entries.load(std::memory_order_relaxed));
 #endif
 }
 
@@ -2394,7 +2415,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
             prepared_hard,
             plan_requests(handler, handler.m_variant_derived),
             handler.m_context->m_config,
-            &handler.m_rt);
+            &handler.m_rt,
+            &handler.m_selected_plan);
     };
     handler.m_manager = make_session();
     // The contract's edge cost, checked on the loaded plans (a plan's edges are its engine's):
@@ -2426,6 +2448,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     const auto size_session = [&](double budget_ms) {
         handler.m_manager->set_budget(budget_ms);
         handler.m_manager->prepare(latencies, ring_dtypes);
+        // What the latency getters answer from: the figures of this sizing.
+        publish_latencies(handler);
         // The session's structs exist now, and its rings are sized in their stream ports, and no
         // chunk exists: the processor binds to the session (the plan table included: what a ctx
         // reports for a chunk is the engine and the provider of the plan it was stamped with).
@@ -2433,13 +2457,14 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         // The entries of the session, what anira_processor_ctx.entry indexes and
         // anira_handler_num_entries answers: the processor's prepare (below) sizes its scratch by
         // it.
-        handler.m_num_entries = processor_runner->num_entries();
+        handler.m_num_entries.store(processor_runner->num_entries(), std::memory_order_relaxed);
 
         // What the driver thread knows per Streamed slot, on its stream port: the dtype a host
         // block must carry (the resolved ring dtype), the channel count of a host block and the
         // most samples it may carry (one host block of host_block_max on the slot's stream, from
-        // the block in hops the session's prepare computed); then the empty tensors of the
-        // single-tensor forms. A Static slot has no ring and no host block: its entry of either
+        // the block in hops the session's prepare computed); then the empty tensors of the slot
+        // signature and the arrays the single-tensor forms stage their tensor in, which start
+        // as copies of them. A Static slot has no ring and no host block: its entry of either
         // array stays the empty tensor, and its tensors are checked against the static port's
         // value. A State slot has neither a ring nor a value: its entry is an empty tensor
         // nothing ever replaces.
@@ -2462,8 +2487,12 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
             if (stream == nullptr) { continue; }
             stream_of(*stream, prepared.m_outputs[slot], ring_dtypes.m_outputs[slot]);
         }
-        handler.m_input_tensors = empty_tensors(handler.m_input_ports, ring_dtypes.m_inputs);
-        handler.m_output_tensors = empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);
+        handler.m_signature.m_inputs.m_empty =
+            empty_tensors(handler.m_input_ports, ring_dtypes.m_inputs);
+        handler.m_signature.m_outputs.m_empty =
+            empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);
+        handler.m_staged_inputs = handler.m_signature.m_inputs.m_empty;
+        handler.m_staged_outputs = handler.m_signature.m_outputs.m_empty;
     };
 
     // The contract's warm-up (validate refused a MEASURED budget without one): what decides each
@@ -2547,6 +2576,9 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                  prepared_contract,
                  anira::capi::pipeline_consumers(&processors, &engines),
                  host_domains);
+    // The getters answer from here on: the report first, then the flag they check first (the
+    // entries and the latencies were stored by the sizing above, the selection by build_plans).
+    handler.m_published_report.store(&handler.m_report, std::memory_order_release);
     handler.m_prepared.store(true, std::memory_order_release);
 
     // The shared prepare record (anira/abi/lifecycle.h), the same for every registered engine
@@ -2562,7 +2594,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     const std::vector<const char*> input_names = canonical_names(model.m_inputs);
     const std::vector<const char*> output_names = canonical_names(model.m_outputs);
     anira_prepare_info info = ANIRA_PREPARE_INFO_INIT;
-    info.num_entries = handler.m_num_entries;
+    info.num_entries = handler.m_num_entries.load(std::memory_order_relaxed);
     info.handler = &handler;
     info.report = &handler.m_report;
     info.inputs = input_templates.data();
@@ -2652,18 +2684,19 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         // its prepared handles stay. Its prepare drains, bumps the generation (every exclusive
         // engine is reset at the stream's first inference) and rebuilds the struct pool, so
         // nothing of the pass survives in it; the processor binds again.
-        const uint32_t pass_entries = handler.m_num_entries;
+        const uint32_t pass_entries = handler.m_num_entries.load(std::memory_order_relaxed);
         size_session(measured ? slowest_ms : prepared_hard.m_budget_ms);
         // The user code saw the record of the pass's sizing: when the entry count moved, it is
         // unprepared and prepared again with the final one (the documented re-prepare sequence,
         // inside this one call). Below the first struct edge nothing moves, and the first prepare
         // stands.
-        if (handler.m_num_entries != pass_entries) {
+        const uint32_t final_entries = handler.m_num_entries.load(std::memory_order_relaxed);
+        if (final_entries != pass_entries) {
             for (const std::shared_ptr<anira::SessionElement::PlanSlot>& slot : session.m_plans) {
                 if (slot->m_registered) { slot->m_prepared.reset(); }
             }
             unprepare_processor(handler);
-            info.num_entries = handler.m_num_entries;
+            info.num_entries = final_entries;
             prepare_user_code();
         }
         // The pass fed the declared state: both buffers of every pair start the stream at zeros
@@ -2715,11 +2748,41 @@ anira_status enumerate_rows(const std::vector<T>& rows,
     return capacity < total ? ANIRA_INCOMPLETE : ANIRA_OK;
 }
 
+// The control lock of a handler for the length of one control entry (anira_handler::m_control),
+// with the thread that holds it recorded for that time. A control entry called from a callback
+// of the locked region runs on the holding thread: it does not lock again and proceeds as it
+// did before the lock existed (what such a call may do is the entries' own rule).
+class ControlScope {
+public:
+    explicit ControlScope(anira_handler& handler) : m_handler(handler) {
+        const std::thread::id self = std::this_thread::get_id();
+        if (handler.m_control_holder.load(std::memory_order_acquire) == self) { return; }
+        handler.m_control.lock();
+        handler.m_control_holder.store(self, std::memory_order_release);
+        m_locked = true;
+    }
+    ~ControlScope() {
+        if (!m_locked) { return; }
+        m_handler.m_control_holder.store(std::thread::id(), std::memory_order_release);
+        m_handler.m_control.unlock();
+    }
+    ControlScope(const ControlScope&) = delete;
+    ControlScope& operator=(const ControlScope&) = delete;
+    ControlScope(ControlScope&&) = delete;
+    ControlScope& operator=(ControlScope&&) = delete;
+
+private:
+    anira_handler& m_handler;
+    bool m_locked = false;
+};
+
 }  // namespace
 
 namespace anira::capi {
 
 void prepare_or_unprepare(anira_handler& handler, const anira_contract& contract) {
+    // One control entry of the handler at a time (a destroy on another thread waits here).
+    const ControlScope control(handler);
     try {
         prepare_handler(handler, contract);
     } catch (...) {
@@ -3283,6 +3346,15 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
                         anira::capi::QueryUse::Ask);
     }
     check_option_sets(*context, *pipeline, answers);
+    // Every other engine of the pipeline that declares providers is asked too, whether a plan
+    // of this handler reaches it or not: the query runs on the main thread only, here, and a
+    // plan that reaches the engine later (a variant added to the handler) is checked against
+    // the answer the handler kept. An engine without a list has no bit its query could clear
+    // and is not asked. A query that fails fails the create, as for an engine a plan reaches.
+    for (const std::shared_ptr<const anira::capi::EngineCarrier>& engine : pipeline->m_engines) {
+        if (engine->providers().empty()) { continue; }
+        static_cast<void>(anira::capi::ask_query(*context, *engine, answers));
+    }
     // The form of the stream: the first variant's, which every other one has.
     const anira::capi::Derived& derived = variants.front();
 
@@ -3339,6 +3411,14 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     // that names a slot, the two Static entries on an unprepared handler included.
     handler->m_num_inputs = static_cast<uint32_t>(model.m_inputs.size());
     handler->m_num_outputs = static_cast<uint32_t>(model.m_outputs.size());
+    // The names of the slot signature: the handler's own copy of every tensor's canonical name
+    // (the same in every variant), which the records of the real-time entries name a slot by.
+    for (size_t slot = 0; slot < model.m_inputs.size(); ++slot) {
+        handler->m_signature.m_inputs.m_names[slot] = model.m_inputs[slot].m_name;
+    }
+    for (size_t slot = 0; slot < model.m_outputs.size(); ++slot) {
+        handler->m_signature.m_outputs.m_names[slot] = model.m_outputs[slot].m_name;
+    }
     // A handler counts as a user of the core (anira_shutdown refuses while one lives) and
     // holds its context's memory until destroy.
     anira::Core::register_handler();
@@ -3352,8 +3432,13 @@ void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NOEXCEPT try
     if (handler == nullptr) { return; }
     // The session goes first: in-flight work drains, the pool joins with the last session of
     // this copy (the !loader-lock tag). Then the processor, the report and the plan table;
-    // the contract snapshot and the derivation go with the handler.
-    unprepare(*handler);
+    // the contract snapshot and the derivation go with the handler. Under the control lock,
+    // which a prepare on another thread holds until it is done; given back before the handler,
+    // and the lock with it, is deleted.
+    {
+        const ControlScope control(*handler);
+        unprepare(*handler);
+    }
     // create registers the handler with the core and add-refs the context together.
     if (handler->m_context != nullptr) {
         anira::Core::unregister_handler();
@@ -3389,12 +3474,14 @@ const anira_plan_report* ANIRA_CALL anira_handler_plan_report(const anira_handle
     if (handler == nullptr || !handler->m_prepared.load(std::memory_order_acquire)) {
         return nullptr;
     }
-    return &handler->m_report;
+    // One load of the handler's own atomic, which prepare stored before the flag above: never
+    // a read of the session.
+    return handler->m_published_report.load(std::memory_order_acquire);
 }
 
 uint32_t ANIRA_CALL anira_handler_num_entries(const anira_handler* handler) ANIRA_NOEXCEPT {
     if (handler == nullptr || !handler->m_prepared.load(std::memory_order_acquire)) { return 0U; }
-    return handler->m_num_entries;
+    return handler->m_num_entries.load(std::memory_order_relaxed);
 }
 
 uint32_t ANIRA_CALL anira_plan_report_num_plans(const anira_plan_report* report) ANIRA_NOEXCEPT {
@@ -3529,7 +3616,9 @@ anira_status ANIRA_CALL anira_handler_set_plan(anira_handler* handler,
 uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handler)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr || !handler->m_prepared.load(std::memory_order_acquire)) { return 0U; }
-    return handler->m_manager->get_plan();
+    // The selection is the handler's own atomic (the session refers to it): one load, and no
+    // read of the session, which a prepare on another thread may be replacing.
+    return handler->m_selected_plan.load(std::memory_order_relaxed);
 }
 
 anira_status ANIRA_CALL anira_handler_set_model(anira_handler* handler,
@@ -3585,8 +3674,8 @@ anira_status ANIRA_CALL anira_handler_process(anira_handler* handler,
         status = slot_tensor_status(*handler, *out, false, out_slot, __func__);
     }
     if (status != ANIRA_OK) { return status; }
-    const StagedSlotArray inputs(handler->m_input_tensors, *in, in_slot);
-    const StagedSlotArray outputs(handler->m_output_tensors, *out, out_slot);
+    const StagedSlotArray inputs(*handler, true, *in, in_slot);
+    const StagedSlotArray outputs(*handler, false, *out, out_slot);
     const size_t* counts = handler->m_manager->process_nowait(inputs.array(), outputs.array());
     set_delivered(delivered, counts[out_slot]);
     return block_status(*handler);
@@ -3629,7 +3718,7 @@ anira_status ANIRA_CALL anira_handler_push_data(anira_handler* handler,
     }
     const anira_status status = slot_tensor_status(*handler, *in, true, slot, __func__);
     if (status != ANIRA_OK) { return status; }
-    const StagedSlotArray inputs(handler->m_input_tensors, *in, slot);
+    const StagedSlotArray inputs(*handler, true, *in, slot);
     handler->m_manager->push_data(inputs.array());
     return ANIRA_OK;
 }
@@ -3662,7 +3751,7 @@ anira_status ANIRA_CALL anira_handler_pop_data(anira_handler* handler,
     }
     const anira_status status = slot_tensor_status(*handler, *out, false, slot, __func__);
     if (status != ANIRA_OK) { return status; }
-    const StagedSlotArray outputs(handler->m_output_tensors, *out, slot);
+    const StagedSlotArray outputs(*handler, false, *out, slot);
     const size_t* counts = handler->m_manager->pop_data(outputs.array());
     set_delivered(delivered, counts[slot]);
     return block_status(*handler);
@@ -3726,16 +3815,16 @@ anira_status ANIRA_CALL anira_handler_get_static_output(anira_handler* handler,
 }
 
 // ==== latencies, the ring state, reset, rt_error =============================================
-// The latency accessors are not Hard entries: nothing is recorded. They read the session's
-// vector by reference while the handler is prepared (prepare is the quiescence point): one
-// entry per output slot, 0 for a tensor without a ring (Static, State).
+// The latency accessors are not Hard entries: nothing is recorded. They load the handler's own
+// figures, which prepare stores at every sizing of the session (publish_latencies), and never
+// reach into the session: one entry per output slot, 0 for a tensor without a ring (Static,
+// State).
 
 uint32_t ANIRA_CALL anira_handler_get_latency(const anira_handler* handler,
                                               uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr || !handler->m_prepared.load(std::memory_order_acquire)) { return 0U; }
-    if (slot >= handler->m_num_outputs) { return 0U; }
-    const std::vector<unsigned int>& latencies = handler->m_manager->latencies();
-    return slot < latencies.size() ? static_cast<uint32_t>(latencies[slot]) : 0U;
+    if (slot >= handler->m_latencies.size()) { return 0U; }
+    return handler->m_latencies[slot].load(std::memory_order_relaxed);
 }
 
 anira_status ANIRA_CALL anira_handler_get_latencies(const anira_handler* handler,
@@ -3744,8 +3833,7 @@ anira_status ANIRA_CALL anira_handler_get_latencies(const anira_handler* handler
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr || count == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!handler->m_prepared.load(std::memory_order_acquire)) { return ANIRA_ERROR_NOT_PREPARED; }
-    const std::vector<unsigned int>& latencies = handler->m_manager->latencies();
-    const uint32_t total = handler->m_num_outputs;
+    const auto total = static_cast<uint32_t>(handler->m_latencies.size());
     if (out == nullptr) {
         *count = total;
         return ANIRA_OK;
@@ -3753,7 +3841,7 @@ anira_status ANIRA_CALL anira_handler_get_latencies(const anira_handler* handler
     const uint32_t capacity = *count;
     const uint32_t written = std::min(capacity, total);
     for (uint32_t slot = 0; slot < written; ++slot) {
-        out[slot] = slot < latencies.size() ? static_cast<uint32_t>(latencies[slot]) : 0U;
+        out[slot] = handler->m_latencies[slot].load(std::memory_order_relaxed);
     }
     *count = total;
     return capacity < total ? ANIRA_INCOMPLETE : ANIRA_OK;
@@ -3770,16 +3858,19 @@ anira_status ANIRA_CALL anira_handler_get_available_samples(anira_handler* handl
     if (!has_arguments(*handler, out != nullptr && slot < handler->m_num_outputs, __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    const anira::capi::DerivedSpec& spec = handler->m_derived.m_outputs[slot];
+    // What the slot is, off its port (a tensor with a stream has a stream port, and its channel
+    // count is prepare's): no read of a variant's derivation.
+    const anira::capi::StreamPort* const stream =
+        anira::capi::stream_port(handler->m_output_ports, slot);
     // An output without a ring (Static, State): 0, nothing recorded, and the completed
     // inferences collected all the same (the manager's call collects before it answers 0), so a
     // Static output's stored value is the latest collected one after this call too.
-    if (spec.m_hop == 0) {
+    if (stream == nullptr) {
         static_cast<void>(handler->m_manager->get_available_samples(slot, 0));
         return ANIRA_OK;
     }
     // The ring's own accessor is unbounded on the channel.
-    if (!has_arguments(*handler, std::cmp_less(channel, spec.m_channels), __func__)) {
+    if (!has_arguments(*handler, channel < stream->m_channels, __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     *out = handler->m_manager->get_available_samples(slot, channel);
@@ -3826,8 +3917,8 @@ anira_status ANIRA_CALL anira_handler_process_wait(anira_handler* handler,
         status = slot_tensor_status(*handler, *out, false, out_slot, __func__);
     }
     if (status != ANIRA_OK) { return status; }
-    const StagedSlotArray inputs(handler->m_input_tensors, *in, in_slot);
-    const StagedSlotArray outputs(handler->m_output_tensors, *out, out_slot);
+    const StagedSlotArray inputs(*handler, true, *in, in_slot);
+    const StagedSlotArray outputs(*handler, false, *out, out_slot);
     const size_t* counts = nullptr;
     status = process_tensors_wait_body(*handler,
                                        inputs.array(),
@@ -3879,7 +3970,7 @@ anira_status ANIRA_CALL anira_handler_pop_data_wait(anira_handler* handler,
     }
     anira_status status = slot_tensor_status(*handler, *out, false, slot, __func__);
     if (status != ANIRA_OK) { return status; }
-    const StagedSlotArray outputs(handler->m_output_tensors, *out, slot);
+    const StagedSlotArray outputs(*handler, false, *out, slot);
     const size_t* counts = nullptr;
     status = pop_tensors_wait_body(*handler, outputs.array(), timeout_ms, __func__, counts);
     set_delivered(delivered, counts[slot]);

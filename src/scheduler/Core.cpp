@@ -903,7 +903,8 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
                                                      const capi::HardContract& hard,
                                                      std::vector<engine::PlanRequest> requests,
                                                      const anira_context_config& context_config,
-                                                     RtLatch* rt_latch) {
+                                                     RtLatch* rt_latch,
+                                                     std::atomic<uint32_t>* selection) {
     if (requests.empty()) {
         throw std::invalid_argument("Core::create_session: an empty plan table");
     }
@@ -964,7 +965,8 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
                                          hard,
                                          num_instances,
                                          moodycamel::ProducerToken(state.m_next_inference),
-                                         rt_latch);
+                                         rt_latch,
+                                         selection);
 
     // Everything that can fail — an engine that cannot load its model, a custom
     // backend's prepare(), the pool build — happens before the session is registered.

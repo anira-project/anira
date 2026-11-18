@@ -185,6 +185,9 @@ public:
      * @param rt_latch The real-time latch this session records its failures into (see m_rt):
      * a 3.x handler's own, so anira_handler_rt_error reads one word; nullptr (a 2.x session)
      * gives the session its own latch (m_rt_own)
+     * @param selection The atomic that holds the session's selected plan (see m_current_plan):
+     * a 3.x handler's own, so anira_handler_get_plan reads one word of the handler; nullptr
+     * (a 2.x session) gives the session its own (m_current_plan_own). Set to 0 here.
      */
     SessionElement(int new_session_id,
                    capi::ProcessorRunner& processor,
@@ -193,7 +196,8 @@ public:
                    const capi::HardContract& hard,
                    uint32_t num_instances,
                    moodycamel::ProducerToken&& producer_token,
-                   anira::RtLatch* rt_latch = nullptr);
+                   anira::RtLatch* rt_latch = nullptr,
+                   std::atomic<uint32_t>* selection = nullptr);
 
     /**
      * @brief Wait-free clear of the session's audio-thread-owned state.
@@ -651,9 +655,13 @@ public:
      * The whole runtime selection is this one atomic (select_plan stores it, a chunk takes
      * it with one load in Core::pre_process), so concurrent callers have no pair to tear.
      * Always below m_plans.size(). 0 when Core::create_session returns; the C handler
-     * selects its initial plan before the first prepare.
+     * selects its initial plan before the first prepare. The atomic itself is the C handler's
+     * (anira_handler::m_selected_plan, which outlives the session as its latch does), so the
+     * handler's getter reads the selection without reaching into the session; a 2.x session
+     * refers to its own, m_current_plan_own.
      */
-    std::atomic<uint32_t> m_current_plan{0};
+    std::atomic<uint32_t> m_current_plan_own{0};
+    std::atomic<uint32_t>& m_current_plan;
 
     /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
     bool select_plan(uint32_t plan) noexcept;
