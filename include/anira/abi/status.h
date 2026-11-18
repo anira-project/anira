@@ -110,7 +110,8 @@ typedef enum anira_status {
     ANIRA_ERROR_EXTENSION_VERSION = -22,
     /**
      * The lookup found nothing that matches (anira_plan_report_find: no plan has every property
-     * the query names).
+     * the query names; anira_handler_set_model and anira_handler_set_backend: the variant has
+     * no plan on the backend, the selection unchanged, recorded in anira_handler_rt_error).
      */
     ANIRA_ERROR_NOT_FOUND = -23,
     /**

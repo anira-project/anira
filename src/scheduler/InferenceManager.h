@@ -368,6 +368,22 @@ public:
     uint32_t get_plan() const noexcept;
 
     /**
+     * @brief Selects a plan if the selection is still the one the caller computed it from
+     *
+     * One compare-and-swap of the selection (SessionElement::select_plan_if): what
+     * anira_handler_set_model and anira_handler_set_backend store with, each having resolved
+     * its plan from the selected one (one axis kept, the other moved), so that two of them on
+     * two threads both land.
+     *
+     * @param expected The plan the caller read as selected; the plan selected now on a false
+     * return
+     * @param plan A dense index into the plan table, in range
+     * @return False, and nothing stored, when the selection is no longer `expected` (or
+     * spuriously: the caller resolves again and loops)
+     */
+    bool set_plan_if(uint32_t& expected, uint32_t plan) noexcept ANIRA_NONBLOCKING;
+
+    /**
      * @brief Gets the processing latency for all tensors
      *
      * Returns the latency introduced by the inference processing in samples for each output

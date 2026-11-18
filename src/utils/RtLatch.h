@@ -40,8 +40,9 @@ enum class RtKind : uint32_t {
     InvalidArgument = 1U << 4,
     Engine = 1U << 5,
     NotSupported = 1U << 6,
-    Other = 1U << 7,    ///< any other status, through record_any only (a processor callback's)
-    Dropped = 1U << 8,  ///< ANIRA_ERROR_CAPACITY: a hop dropped, through record_drop only
+    Other = 1U << 7,     ///< any other status, through record_any only (a processor callback's)
+    Dropped = 1U << 8,   ///< ANIRA_ERROR_CAPACITY: a hop dropped, through record_drop only
+    NotFound = 1U << 9,  ///< ANIRA_ERROR_NOT_FOUND: a selection by axis that names no plan
 };
 
 /// The kind bit of a status; 0 for a status that never latches.
@@ -54,6 +55,7 @@ constexpr uint32_t rt_kind_bit(anira_status status) noexcept {
         case ANIRA_ERROR_INVALID_ARGUMENT: return static_cast<uint32_t>(RtKind::InvalidArgument);
         case ANIRA_ERROR_ENGINE: return static_cast<uint32_t>(RtKind::Engine);
         case ANIRA_ERROR_NOT_SUPPORTED: return static_cast<uint32_t>(RtKind::NotSupported);
+        case ANIRA_ERROR_NOT_FOUND: return static_cast<uint32_t>(RtKind::NotFound);
         default: return 0;
     }
 }

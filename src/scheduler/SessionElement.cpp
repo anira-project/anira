@@ -77,6 +77,13 @@ bool SessionElement::select_plan(uint32_t plan) noexcept {
     return true;
 }
 
+bool SessionElement::select_plan_if(uint32_t& expected, uint32_t plan) noexcept ANIRA_NONBLOCKING {
+    return m_current_plan.compare_exchange_weak(expected,
+                                                plan,
+                                                std::memory_order_relaxed,
+                                                std::memory_order_relaxed);
+}
+
 uint64_t SessionElement::stamp_state_epoch(uint32_t plan) noexcept ANIRA_NONBLOCKING {
     const uint32_t variant = plan < m_plans.size() ? m_plans[plan].m_variant : 0U;
     if (variant != m_last_variant) {

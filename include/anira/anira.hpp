@@ -66,8 +66,9 @@
  * once with Tensor::from_host_planar), the forms return the C status (the multi forms write one
  * delivered count per output slot), the latency vector is get_latencies(), the C entry's name,
  * the 2.x survivors (the static thread count, a member drain_log) are the free functions
- * num_inference_threads() and drain_log(), and set_model / set_backend arrive with the variant
- * axis (a later pre-release): select a plan of the PlanReport with set_plan.
+ * num_inference_threads() and drain_log(), and set_model / set_backend take the variant's index
+ * and a PlanQuery::Backend and return the C status: each moves one axis of the selection and
+ * keeps the other, where set_plan sets both by a plan's index of the PlanReport.
  *
  * Requirements: C++20 with exceptions; std::filesystem, which on Apple platforms means a
  * deployment target of macOS 10.15 / iOS 13 or later.
@@ -4109,6 +4110,30 @@ public:
     }
     uint32_t get_plan() const noexcept ANIRA_NONBLOCKING {
         return anira_handler_get_plan(m_handler);
+    }
+    /// anira_handler_set_model: the model the next chunk runs, on the backend that runs now: the
+    /// plan of `variant` (its position in the list Pipeline::add_inference took) on the selected
+    /// plan's engine and provider. One axis of the selection moves and the other stays, also
+    /// against a set_backend on another thread. ANIRA_ERROR_NOT_FOUND, with the selection as it
+    /// was and the status in rt_error(), when the variant has no plan on that backend. What the
+    /// switch does to the model's state is the contract's (Hard::variant_state).
+    anira_status set_model(uint32_t variant) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_set_model(m_handler, variant);
+    }
+    /// anira_handler_set_backend: the backend the next chunk runs on, for the model that runs
+    /// now: the first plan of the selected plan's variant with every property `backend` names
+    /// (an engine and a provider, each exact or left out, as PlanReport::find reads them:
+    /// `handler.set_backend({.engine = ANIRA_ENGINE_ONNXRUNTIME})`). ANIRA_ERROR_NOT_FOUND, with
+    /// the selection as it was and the status in rt_error(), when the variant has no plan there;
+    /// ANIRA_ERROR_INVALID_ARGUMENT for a backend that breaks the pair rule. A backend switch
+    /// inside one variant keeps the model's state.
+    anira_status set_backend(const PlanQuery::Backend& backend) noexcept ANIRA_NONBLOCKING {
+        const anira_backend_id native_backend{.struct_size = sizeof(anira_backend_id),
+                                              .engine = static_cast<uint32_t>(backend.engine),
+                                              .provider = static_cast<uint32_t>(backend.provider),
+                                              .engine_id = backend.engine_id,
+                                              .provider_id = backend.provider_id};
+        return anira_handler_set_backend(m_handler, &native_backend);
     }
 
     const anira_handler* native() const noexcept { return m_handler; }

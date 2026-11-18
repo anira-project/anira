@@ -92,6 +92,8 @@ _anira_handler_push_data
 _anira_handler_push_data_multi
 _anira_handler_reset
 _anira_handler_rt_error
+_anira_handler_set_backend
+_anira_handler_set_model
 _anira_handler_set_plan
 _anira_handler_set_static_input
 _anira_has_core

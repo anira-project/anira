@@ -54,6 +54,10 @@ uint32_t InferenceManager::get_plan() const noexcept {
     return m_session->m_current_plan.load(std::memory_order_relaxed);
 }
 
+bool InferenceManager::set_plan_if(uint32_t& expected, uint32_t plan) noexcept ANIRA_NONBLOCKING {
+    return m_session->select_plan_if(expected, plan);
+}
+
 void InferenceManager::set_budget(double budget_ms) noexcept {
     m_session->m_budget_ms = budget_ms;
 }

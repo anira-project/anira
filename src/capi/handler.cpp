@@ -109,6 +109,23 @@ constexpr uint32_t k_backend_id_head = 3 * sizeof(uint32_t);
 // The fixed head of anira_plan_query: struct_size, variant.
 constexpr uint32_t k_plan_query_head = 2 * sizeof(uint32_t);
 
+/// A backend record as its caller's header holds it, of which `readable` bytes may be read
+/// (at least k_backend_id_head): the engine and the provider, and each id where the record
+/// reaches its slot; a slot it ends before reads as ANIRA_BACKEND_ID_INIT holds it.
+anira_backend_id readable_backend(const anira_backend_id& backend,
+                                  size_t readable) noexcept ANIRA_NONBLOCKING {
+    anira_backend_id read = ANIRA_BACKEND_ID_INIT;
+    read.engine = backend.engine;
+    read.provider = backend.provider;
+    if (readable >= offsetof(anira_backend_id, engine_id) + sizeof(const char*)) {
+        read.engine_id = backend.engine_id;
+    }
+    if (readable >= offsetof(anira_backend_id, provider_id) + sizeof(const char*)) {
+        read.provider_id = backend.provider_id;
+    }
+    return read;
+}
+
 /// The query as the caller's header holds it: every field its record (or its backend record)
 /// ends before reads as ANIRA_PLAN_QUERY_INIT holds it.
 anira_plan_query readable_query(const anira_plan_query& query) noexcept ANIRA_NONBLOCKING {
@@ -121,15 +138,15 @@ anira_plan_query readable_query(const anira_plan_query& query) noexcept ANIRA_NO
     // query's and the backend's sizes cover.
     const size_t readable = std::min<size_t>(query.struct_size - backend_at, backend.struct_size);
     if (readable < k_backend_id_head) { return read; }
-    read.backend.engine = backend.engine;
-    read.backend.provider = backend.provider;
-    if (readable >= offsetof(anira_backend_id, engine_id) + sizeof(const char*)) {
-        read.backend.engine_id = backend.engine_id;
-    }
-    if (readable >= offsetof(anira_backend_id, provider_id) + sizeof(const char*)) {
-        read.backend.provider_id = backend.provider_id;
-    }
+    read.backend = readable_backend(backend, readable);
     return read;
+}
+
+/// The pair rule of each axis of a backend a query names: an id exactly beside its CUSTOM
+/// value.
+bool keeps_pair_rule(const anira_backend_id& backend) noexcept ANIRA_NONBLOCKING {
+    return (backend.engine == ANIRA_ENGINE_CUSTOM) == (backend.engine_id != nullptr) &&
+           (backend.provider == ANIRA_PROVIDER_CUSTOM) == (backend.provider_id != nullptr);
 }
 
 /// Two NUL-terminated names are equal (NULL equals nothing).
@@ -3422,12 +3439,7 @@ anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report* report,
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     const anira_plan_query read = readable_query(*query);
-    // The pair rule of each axis: an id exactly beside its CUSTOM value.
-    const anira_backend_id& backend = read.backend;
-    if ((backend.engine == ANIRA_ENGINE_CUSTOM) != (backend.engine_id != nullptr) ||
-        (backend.provider == ANIRA_PROVIDER_CUSTOM) != (backend.provider_id != nullptr)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
+    if (!keeps_pair_rule(read.backend)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::vector<anira_plan_info>& plans = report->m_plans;
     for (size_t i = 0; i < plans.size(); ++i) {
         if (matches(plans[i], read)) {
@@ -3439,6 +3451,61 @@ anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report* report,
 }
 
 // ==== the plan selection ======================================================================
+
+namespace {
+
+// The one resolver of a selection by its axes: the first plan of the handler's table, in
+// dense-index order, that runs the variant on the backend `query` names (matches(): a variant,
+// an engine and a provider each exact or left open, as anira_plan_report_find reads them).
+// False when the table has none. What anira_handler_set_model and anira_handler_set_backend
+// resolve with; a read of the table prepare built: no allocation, no lock.
+bool resolve_plan(const anira_handler& handler,
+                  const anira_plan_query& query,
+                  uint32_t& plan) noexcept ANIRA_NONBLOCKING {
+    for (size_t i = 0; i < handler.m_plans.size(); ++i) {
+        if (matches(handler.m_plans[i].m_info, query)) {
+            plan = static_cast<uint32_t>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+// The selection moved along one axis and kept on the other: to the plan of `variant` (NULL:
+// the selected plan's variant) on `backend` (NULL: the selected plan's engine and provider,
+// exactly). A compare-and-swap loop on the session's selection: the pair is resolved against
+// the plan selected now and stored only while that plan is still the selection, so a set_model
+// and a set_backend from two threads both land (the one that lost the race resolves again,
+// from the other's plan) and neither undoes the other's axis. A pair without a plan leaves the
+// selection as it is: ANIRA_ERROR_NOT_FOUND, recorded like every real-time refusal.
+anira_status select_along_axis(anira_handler& handler,
+                               const uint32_t* variant,
+                               const anira_backend_id* backend,
+                               const char* entry) noexcept ANIRA_NONBLOCKING {
+    uint32_t selected = handler.m_manager->get_plan();
+    while (true) {
+        // The selection is always a row of the table (set_plan and prepare store nothing else).
+        const anira_plan_info& current = handler.m_plans[selected].m_info;
+        anira_plan_query query = ANIRA_PLAN_QUERY_INIT;
+        query.variant = variant != nullptr ? *variant : current.variant;
+        if (backend != nullptr) {
+            query.backend = *backend;
+        } else {
+            query.backend.engine = current.engine;
+            query.backend.provider = current.provider;
+            query.backend.engine_id = current.engine_id;
+            query.backend.provider_id = current.provider_id;
+        }
+        uint32_t plan = 0;
+        if (!resolve_plan(handler, query, plan)) {
+            rt_refuse(handler, ANIRA_ERROR_NOT_FOUND, entry);
+            return ANIRA_ERROR_NOT_FOUND;
+        }
+        if (handler.m_manager->set_plan_if(selected, plan)) { return ANIRA_OK; }
+    }
+}
+
+}  // namespace
 
 anira_status ANIRA_CALL anira_handler_set_plan(anira_handler* handler,
                                                uint32_t plan) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
@@ -3460,6 +3527,37 @@ uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handler)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr || !handler->m_prepared.load(std::memory_order_acquire)) { return 0U; }
     return handler->m_manager->get_plan();
+}
+
+anira_status ANIRA_CALL anira_handler_set_model(anira_handler* handler,
+                                                uint32_t variant) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
+    // ANIRA_VARIANT_ANY is a query's "any variant", never a variant's index: it names none.
+    if (variant == ANIRA_VARIANT_ANY) {
+        rt_refuse(*handler, ANIRA_ERROR_NOT_FOUND, __func__);
+        return ANIRA_ERROR_NOT_FOUND;
+    }
+    return select_along_axis(*handler, &variant, nullptr, __func__);
+}
+
+anira_status ANIRA_CALL anira_handler_set_backend(anira_handler* handler,
+                                                  const anira_backend_id* backend)
+    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
+    // The record within its own struct_size, under the pair rule of each axis, as the backend
+    // of a plan query is read.
+    if (!has_arguments(*handler,
+                       backend != nullptr && backend->struct_size >= k_backend_id_head,
+                       __func__)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira_backend_id read = readable_backend(*backend, backend->struct_size);
+    if (!has_arguments(*handler, keeps_pair_rule(read), __func__)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    return select_along_axis(*handler, nullptr, &read, __func__);
 }
 
 // ==== the Hard entries over host tensors ======================================================

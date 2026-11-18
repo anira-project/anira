@@ -8,4 +8,4 @@ One stream through a pipeline on a context's core, the web twin of ``anira::Infe
 .. js:autoclass:: InferenceHandler.InferenceHandler
    :short-name:
    :members: create, prepare, planReport, numEntries, getLatency, getLatencies, setStaticInput,
-             rtError, setPlan, getPlan, createAudioNode, native, destroy
+             rtError, setPlan, getPlan, setModel, setBackend, createAudioNode, native, destroy

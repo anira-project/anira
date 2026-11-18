@@ -24,6 +24,12 @@ export type PlanQuery = {
   providerId?: string
 }
 
+/**
+ * The backend fields of a `PlanQuery` (`anira::PlanQuery::Backend`): what
+ * `InferenceHandler.setBackend` takes, an engine and a provider, each exact or left out.
+ */
+export type PlanQueryBackend = Omit<PlanQuery, 'variant'>
+
 /** One plan of a report (`anira_plan_info`): the engine and provider it runs on, its budget. */
 export type PlanInfo = {
   /** The variant the plan runs: its index in the list `Pipeline.addInference` took. */
@@ -185,6 +191,29 @@ const PLAN_EXT = { size: 20, index: 4, host: 8, kind: 12, consumer: 16 }
 const PLAN_QUERY = { size: 28, variant: 4, backend: 8 }
 const BACKEND_ID = { size: 20, engine: 4, provider: 8, engineId: 12, providerId: 16 }
 
+/** @internal The bytes of an `anira_backend_id` record on wasm32. */
+export const BACKEND_ID_SIZE = BACKEND_ID.size
+
+/**
+ * @internal Writes an `anira_backend_id` at `at` from the backend fields of a query, a field
+ * left out as `ANIRA_ENGINE_NONE` / `ANIRA_PROVIDER_NONE` (any). The two ids are C strings the
+ * caller placed (0 for none), which live as long as the record is read.
+ */
+export function writeBackendId(
+  u32: Uint32Array,
+  at: number,
+  backend: PlanQueryBackend,
+  engineId: number,
+  providerId: number
+): void {
+  u32[at >>> 2] = BACKEND_ID.size
+  u32[(at + BACKEND_ID.engine) >>> 2] = backend.engine ?? anira_engine.ANIRA_ENGINE_NONE
+  u32[(at + BACKEND_ID.provider) >>> 2] =
+    backend.provider ?? anira_provider.ANIRA_PROVIDER_NONE
+  u32[(at + BACKEND_ID.engineId) >>> 2] = engineId
+  u32[(at + BACKEND_ID.providerId) >>> 2] = providerId
+}
+
 /**
  * The plan report of a handler's last prepare (`anira_plan_report`): one plan per model entry
  * and candidate that matched, in plan order, with its slots and the extensions it consumes;
@@ -308,16 +337,10 @@ export class PlanReport {
       const providerId =
         query.providerId === undefined ? 0 : m.stringToUTF8OnStack(query.providerId)
       const q = m.stackAlloc(PLAN_QUERY.size)
-      const b = q + PLAN_QUERY.backend
       const u32 = heap(m).HEAPU32
       u32[q >>> 2] = PLAN_QUERY.size
       u32[(q + PLAN_QUERY.variant) >>> 2] = query.variant ?? ANIRA_VARIANT_ANY
-      u32[b >>> 2] = BACKEND_ID.size
-      u32[(b + BACKEND_ID.engine) >>> 2] = query.engine ?? anira_engine.ANIRA_ENGINE_NONE
-      u32[(b + BACKEND_ID.provider) >>> 2] =
-        query.provider ?? anira_provider.ANIRA_PROVIDER_NONE
-      u32[(b + BACKEND_ID.engineId) >>> 2] = engineId
-      u32[(b + BACKEND_ID.providerId) >>> 2] = providerId
+      writeBackendId(u32, q + PLAN_QUERY.backend, query, engineId, providerId)
       try {
         return this.abi.anira_plan_report_find(this.report, q)
       } catch (error) {

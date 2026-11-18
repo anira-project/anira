@@ -579,6 +579,13 @@ public:
     /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
     bool select_plan(uint32_t plan) noexcept;
 
+    /// Selects `plan` if `expected` is still the selected plan: one compare-and-swap of the
+    /// selection. False, nothing stored and `expected` the plan selected now, when another
+    /// caller moved it meanwhile (or spuriously: the caller loops), so a selection computed
+    /// from the selected plan (one axis of it kept, the other moved) is never stored over a
+    /// newer one. `plan` is in range (the caller resolved it in the table).
+    bool select_plan_if(uint32_t& expected, uint32_t plan) noexcept ANIRA_NONBLOCKING;
+
     /// No chunk has been formed since prepare: what m_last_variant holds then, so that the
     /// stream's first chunk is no variant switch.
     static constexpr uint32_t k_no_variant = UINT32_MAX;

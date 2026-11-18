@@ -916,6 +916,46 @@ TEST(AbiCxx, RegisteredExtKindsListsEntry) {
     EXPECT_NE(std::ranges::find(kinds, "entry"), kinds.end());
 }
 
+// InferenceHandler::set_model and set_backend over two variants of the bundled gain model plus
+// the custom row: each returns the C status, moves one axis of the selection and keeps the
+// other; a pair without a plan is ANIRA_ERROR_NOT_FOUND with the selection as it was.
+TEST(AbiCxx, SetModelAndSetBackendMoveOneAxisOfTheSelection) {
+    anira::Context context(anira::ContextConfig{}.threads(2).log_level(ANIRA_LOG_ERROR));
+    const anira::ModelConfig model = anira_test::gain_with_custom(false);
+    anira::Pipeline pipe;
+    anira_test::add_passthrough(pipe.native());
+    pipe.add_inference({std::cref(model), std::cref(model)}, {});
+    anira::InferenceHandler handler(context, pipe);
+    EXPECT_EQ(handler.set_model(1), ANIRA_ERROR_NOT_PREPARED);
+    const anira::PlanReport report = handler.prepare(anira_test::explicit_contract());
+    const std::vector<anira_plan_info> plans = report.plans();
+    ASSERT_GE(plans.size(), 2U);
+    ASSERT_EQ(plans.size() % 2, 0U) << "the same plans per variant";
+    const auto per_variant = static_cast<uint32_t>(plans.size() / 2);
+    // The custom row is the last entry of the model: the last plan of either variant.
+    const anira::PlanQuery::Backend custom{.engine = ANIRA_ENGINE_CUSTOM,
+                                           .engine_id = anira_test::k_custom};
+    EXPECT_EQ(report.find({.variant = 1, .backend = custom}), plans.size() - 1);
+
+    EXPECT_EQ(handler.get_plan(), 0U);
+    EXPECT_EQ(handler.set_model(1), ANIRA_OK);
+    EXPECT_EQ(handler.get_plan(), per_variant) << "variant 1, on the backend that ran";
+    EXPECT_EQ(handler.set_backend(custom), ANIRA_OK);
+    EXPECT_EQ(handler.get_plan(), plans.size() - 1) << "variant 1 still, on the custom engine";
+    EXPECT_EQ(handler.set_model(0), ANIRA_OK);
+    EXPECT_EQ(handler.get_plan(), per_variant - 1) << "variant 0, on the custom engine still";
+    EXPECT_EQ(handler.set_backend({}), ANIRA_OK) << "any backend: the variant's first plan";
+    EXPECT_EQ(handler.get_plan(), 0U);
+
+    EXPECT_EQ(handler.set_model(2), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(handler.set_backend({.engine = ANIRA_ENGINE_CUSTOM, .engine_id = "org.example.none"}),
+              ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(handler.get_plan(), 0U) << "a refusal leaves the selection";
+    EXPECT_EQ(handler.rt_error(), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(handler.set_backend({.engine = ANIRA_ENGINE_CUSTOM}), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "the pair rule";
+}
+
 TEST(AbiCxx, EmptyTextIsAJsonErrorNotANullPointer) {
     const Thrown empty = thrown_by([] { ModelConfig::from_json(std::string_view{}); });
     EXPECT_TRUE(empty.m_thrown);

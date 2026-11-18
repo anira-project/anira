@@ -6,7 +6,12 @@ import { createAudioNode, type AniraAudioNode, type AudioNodeOptions } from './A
 import type { Context } from './Context'
 import type { ContractHandle } from './ContractHandle'
 import type { Pipeline } from './Pipeline'
-import { PlanReport } from './PlanReport'
+import {
+  BACKEND_ID_SIZE,
+  PlanReport,
+  writeBackendId,
+  type PlanQueryBackend,
+} from './PlanReport'
 import { staticInputBytes, type InputSpec } from './staticInput'
 
 /**
@@ -144,6 +149,46 @@ export class InferenceHandler {
   /** The selected plan (`anira_handler_get_plan`). */
   getPlan(): number {
     return this.abi.anira_handler_get_plan(this.handler)
+  }
+
+  /**
+   * Select the model the next chunk runs, on the backend that runs now
+   * (`anira_handler_set_model`, as `anira::InferenceHandler::set_model`): the plan of `variant`
+   * (its position in the list `Pipeline.addInference` took) on the selected plan's engine and
+   * provider. One axis of the selection moves, the other stays. When the variant has no plan on
+   * that backend the selection stays as it was and the call throws an `AniraError` with
+   * `ANIRA_ERROR_NOT_FOUND` (where C++ returns the status). What the switch does to the
+   * model's state is the contract's (`HardContractOptions.variantState`).
+   */
+  setModel(variant: number): void {
+    this.abi.anira_handler_set_model(this.handler, variant)
+  }
+
+  /**
+   * Select the backend the next chunk runs on, for the model that runs now
+   * (`anira_handler_set_backend`, as `anira::InferenceHandler::set_backend`): the first plan of
+   * the selected plan's variant with every property `backend` names, an engine and a provider,
+   * each exact or left out, as `PlanReport.find` reads them
+   * (`handler.setBackend({ engine: anira_engine.ANIRA_ENGINE_ONNXRUNTIME })`). When the variant
+   * has no plan there the selection stays as it was and the call throws an `AniraError` with
+   * `ANIRA_ERROR_NOT_FOUND`; a backend against the pair rule (`ANIRA_ENGINE_CUSTOM` without
+   * `engineId`, an id beside a built-in value) throws one with `ANIRA_ERROR_INVALID_ARGUMENT`.
+   * A backend switch inside one variant keeps the model's state.
+   */
+  setBackend(backend: PlanQueryBackend): void {
+    const m = this.abi.module
+    const sp = m.stackSave()
+    try {
+      const engineId =
+        backend.engineId === undefined ? 0 : m.stringToUTF8OnStack(backend.engineId)
+      const providerId =
+        backend.providerId === undefined ? 0 : m.stringToUTF8OnStack(backend.providerId)
+      const record = m.stackAlloc(BACKEND_ID_SIZE)
+      writeBackendId(heap(m).HEAPU32, record, backend, engineId, providerId)
+      this.abi.anira_handler_set_backend(this.handler, record)
+    } finally {
+      m.stackRestore(sp)
+    }
   }
 
   /**

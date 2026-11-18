@@ -21,6 +21,10 @@
 //                       inference formed on the other variant), kept when the contract says so; a
 //                       plan switch inside one variant keeps it in both modes, and a chunk in
 //                       flight across a fresh switch keeps the state it ran with;
+//   the selection       anira_handler_set_model moves the variant and keeps the backend,
+//                       anira_handler_set_backend the reverse; a pair without a plan changes
+//                       nothing (ANIRA_ERROR_NOT_FOUND, latched); the two on two threads both
+//                       land;
 //   the measurement     every plan of every variant is warmed up, and the session runs the
 //                       slowest figure;
 //   real models         a bundled model file twice, as two variants, on every engine of the build.
@@ -1582,4 +1586,195 @@ TEST(Variants, AChunkInFlightKeepsItsStateAcrossAFreshSwitch) {
         ASSERT_EQ(delivered[n], ring[n]) << "sample " << n;
     }
     EXPECT_EQ(anira_handler_rt_error(rig.h()), ANIRA_OK);
+}
+
+// ============================================================================================
+// The selection by axis
+// ============================================================================================
+
+namespace {
+
+/// The factor of the loaded model that ran the engine's last inference.
+float last_factor(const FactorEngine& engine) {
+    const int calls = engine.m_calls.load();
+    return calls > 0 ? engine.m_factors.at(static_cast<size_t>(calls - 1)).load() : 0.0F;
+}
+
+}  // namespace
+
+// anira_handler_set_model moves the variant and keeps the backend, anira_handler_set_backend
+// moves the backend and keeps the variant; the next chunk runs the selected plan. Two variants
+// under two backends: plans 0 to 3 are (variant 0, cpu), (variant 0, npu), (variant 1, cpu),
+// (variant 1, npu).
+TEST(Variants, SetModelKeepsTheBackendAndSetBackendKeepsTheVariant) {
+    const anira::ModelConfig first = factor_model("2");
+    const anira::ModelConfig second = factor_model("4");
+    Rig rig({&first, &second}, cpu_and_npu());
+    ASSERT_EQ(rig.m_status, ANIRA_OK) << rig.m_message;
+    ASSERT_EQ(rig.prepare(plain_contract()), ANIRA_OK) << rig.m_message;
+    anira_handler* h = rig.h();
+    const anira_backend_id cpu = candidate(k_engine);
+    const anira_backend_id npu = candidate(k_engine, k_npu);
+    const std::vector<float> in = anira_test::ramp(1);
+    const auto selects = [&](uint32_t plan, float factor) {
+        EXPECT_EQ(anira_handler_get_plan(h), plan);
+        static_cast<void>(rig.run_block(in));
+        EXPECT_EQ(last_factor(rig.m_engine), factor) << "the chunk ran plan " << plan;
+    };
+
+    selects(0, 2.0F);
+    EXPECT_EQ(anira_handler_set_model(h, 1), ANIRA_OK);
+    selects(2, 4.0F);
+    EXPECT_EQ(anira_handler_set_backend(h, &npu), ANIRA_OK);
+    selects(3, 4.0F * k_npu_factor);
+    EXPECT_EQ(anira_handler_set_model(h, 0), ANIRA_OK);
+    selects(1, 2.0F * k_npu_factor);
+    EXPECT_EQ(anira_handler_set_backend(h, &cpu), ANIRA_OK);
+    selects(0, 2.0F);
+    // The axis as it stands is a selection too.
+    EXPECT_EQ(anira_handler_set_model(h, 0), ANIRA_OK);
+    EXPECT_EQ(anira_handler_set_backend(h, &cpu), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(h), 0U);
+
+    // A backend names what it names, as the backend of a plan query does: an engine alone is
+    // the variant's first plan on that engine, a provider alone its first on that provider,
+    // nothing its first plan.
+    ASSERT_EQ(anira_handler_set_plan(h, 3), ANIRA_OK);
+    anira_backend_id engine_alone = ANIRA_BACKEND_ID_INIT;
+    engine_alone.engine = ANIRA_ENGINE_CUSTOM;
+    engine_alone.engine_id = k_engine;
+    EXPECT_EQ(anira_handler_set_backend(h, &engine_alone), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(h), 2U) << "variant 1's first plan on the engine";
+    anira_backend_id provider_alone = ANIRA_BACKEND_ID_INIT;
+    provider_alone.provider = ANIRA_PROVIDER_CUSTOM;
+    provider_alone.provider_id = k_npu;
+    EXPECT_EQ(anira_handler_set_backend(h, &provider_alone), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(h), 3U);
+    const anira_backend_id any = ANIRA_BACKEND_ID_INIT;
+    EXPECT_EQ(anira_handler_set_backend(h, &any), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(h), 2U);
+    // A record that ends before the ids names the engine and the provider alone.
+    anira_backend_id head_only = ANIRA_BACKEND_ID_INIT;
+    head_only.struct_size = 3 * sizeof(uint32_t);
+    head_only.provider = ANIRA_PROVIDER_CPU;
+    head_only.engine_id = "never read";
+    ASSERT_EQ(anira_handler_set_plan(h, 1), ANIRA_OK);
+    EXPECT_EQ(anira_handler_set_backend(h, &head_only), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(h), 0U) << "variant 0's plan on the CPU path";
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+}
+
+// A pair without a plan changes nothing: ANIRA_ERROR_NOT_FOUND, the selection as it was, the
+// status in rt_error and one record, the kind latched. The second variant's entry is pinned to
+// the npu, so the table is (variant 0, cpu), (variant 0, npu), (variant 1, npu).
+TEST(Variants, ASelectionWithoutAPlanChangesNothing) {
+    const anira::ModelConfig first = factor_model("2");
+    anira::ModelConfig second = factor_model("4");
+    second.model_provider(0, std::string_view(k_npu));
+    anira_drain_log();
+    RecordCollector collector;
+    Rig rig({&first, &second}, cpu_and_npu());
+    ASSERT_EQ(rig.m_status, ANIRA_OK) << rig.m_message;
+    anira_handler* h = rig.h();
+    const anira_backend_id cpu = candidate(k_engine);
+    const anira_backend_id npu = candidate(k_engine, k_npu);
+
+    // Unprepared: a no-op recorded as NOT_PREPARED; a NULL handler has no word to record on.
+    EXPECT_EQ(anira_handler_set_model(h, 0), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_set_backend(h, &cpu), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_set_model(nullptr, 0), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_set_backend(nullptr, &cpu), ANIRA_ERROR_INVALID_ARGUMENT);
+
+    ASSERT_EQ(rig.prepare(plain_contract()), ANIRA_OK) << rig.m_message;
+    ASSERT_EQ(rig.plans().size(), 3U);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "prepare re-arms";
+
+    // Variant 1 has no plan on the CPU path, where the selection stands.
+    EXPECT_EQ(anira_handler_set_model(h, 1), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(anira_handler_get_plan(h), 0U) << "the selection is unchanged";
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_FOUND);
+    // Over the npu it has one; from there the CPU path has none for it.
+    EXPECT_EQ(anira_handler_set_backend(h, &npu), ANIRA_OK);
+    EXPECT_EQ(anira_handler_set_model(h, 1), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(h), 2U);
+    EXPECT_EQ(anira_handler_set_backend(h, &cpu), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(anira_handler_get_plan(h), 2U);
+    // An index that names no variant, the any-variant constant of a query included.
+    EXPECT_EQ(anira_handler_set_model(h, 2), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(anira_handler_set_model(h, ANIRA_VARIANT_ANY), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(anira_handler_get_plan(h), 2U);
+    // A backend no plan runs on: another engine, another provider.
+    const anira_backend_id other = candidate(k_other_engine);
+    EXPECT_EQ(anira_handler_set_backend(h, &other), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(anira_handler_get_plan(h), 2U);
+
+    // The arguments: a NULL backend, a record below its head, the pair rule on either axis.
+    anira_handler_reset(h);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    EXPECT_EQ(anira_handler_set_backend(h, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
+    anira_backend_id short_record = ANIRA_BACKEND_ID_INIT;
+    short_record.struct_size = 2 * sizeof(uint32_t);
+    EXPECT_EQ(anira_handler_set_backend(h, &short_record), ANIRA_ERROR_INVALID_ARGUMENT);
+    anira_backend_id custom_without_id = ANIRA_BACKEND_ID_INIT;
+    custom_without_id.engine = ANIRA_ENGINE_CUSTOM;
+    EXPECT_EQ(anira_handler_set_backend(h, &custom_without_id), ANIRA_ERROR_INVALID_ARGUMENT);
+    anira_backend_id id_beside_a_value = ANIRA_BACKEND_ID_INIT;
+    id_beside_a_value.provider = ANIRA_PROVIDER_CPU;
+    id_beside_a_value.provider_id = k_npu;
+    EXPECT_EQ(anira_handler_set_backend(h, &id_beside_a_value), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_get_plan(h), 2U);
+
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    EXPECT_EQ(anira_test::count_records(collector, "anira_handler_set_model: not found", "rt"), 1U)
+        << "the first refusal of the kind is the one record";
+    EXPECT_EQ(anira_test::count_records(collector, ": not found", "rt"), 1U)
+        << "the later ones, of either entry, are counted";
+    EXPECT_EQ(
+        anira_test::find_record(collector, "anira_handler_set_model: not found", "rt").m_flags,
+        ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
+#endif
+}
+
+// A set_model on one thread against a set_backend on another: both land, whichever comes first,
+// since each resolves its plan from the selected one and stores it only while that plan is still
+// selected. From (variant 0, cpu) the two calls end on (variant 1, npu), and back.
+TEST(Variants, ConcurrentSetModelAndSetBackendBothLand) {
+    const anira::ModelConfig first = factor_model("2");
+    const anira::ModelConfig second = factor_model("4");
+    Rig rig({&first, &second}, cpu_and_npu());
+    ASSERT_EQ(rig.m_status, ANIRA_OK) << rig.m_message;
+    ASSERT_EQ(rig.prepare(plain_contract()), ANIRA_OK) << rig.m_message;
+    anira_handler* h = rig.h();
+    const anira_backend_id cpu = candidate(k_engine);
+    const anira_backend_id npu = candidate(k_engine, k_npu);
+    struct Move {
+        uint32_t m_from;
+        uint32_t m_variant;
+        const anira_backend_id* m_backend;
+        uint32_t m_to;
+    };
+    const std::array<Move, 2> moves{{{.m_from = 0, .m_variant = 1, .m_backend = &npu, .m_to = 3},
+                                     {.m_from = 3, .m_variant = 0, .m_backend = &cpu, .m_to = 0}}};
+    for (int round = 0; round < 300; ++round) {
+        const Move& move = moves.at(static_cast<size_t>(round % 2));
+        ASSERT_EQ(anira_handler_get_plan(h), move.m_from) << "round " << round;
+        std::atomic<bool> go{false};
+        std::thread model([&] {
+            while (!go.load()) {}
+            EXPECT_EQ(anira_handler_set_model(h, move.m_variant), ANIRA_OK);
+        });
+        std::thread backend([&] {
+            while (!go.load()) {}
+            EXPECT_EQ(anira_handler_set_backend(h, move.m_backend), ANIRA_OK);
+        });
+        go.store(true);
+        model.join();
+        backend.join();
+        ASSERT_EQ(anira_handler_get_plan(h), move.m_to)
+            << "round " << round << ": one call undid the other's axis";
+    }
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
 }
