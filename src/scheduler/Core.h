@@ -122,10 +122,11 @@ public:
      * @brief Creates and registers a new inference session
      *
      * Applies or reconciles the given context config (see the class description), resolves
-     * the session's instance count (1 for an exclusive session, else the model config's
-     * max_instances: ANIRA_INSTANCES_AUTO becomes the pool's size, at least 1, and a count
-     * above the pool's size is clamped to it, with a warning; every request's instance count
-     * takes the same rule), builds the
+     * the session's instance count (1 for an exclusive session, else the fewest max_instances
+     * of the handler's variants, VariantBounds::m_max_instances: ANIRA_INSTANCES_AUTO becomes
+     * the pool's size, at least 1, and a count above the pool's size is clamped to it, with a
+     * warning; every request's instance count, its own variant's, takes the same rule), builds
+     * the
      * session over the handler's processor runner and configuration, builds its plan table
      * from the requests (one plan per request, in order: a built-in or a registered engine's
      * loaded model is taken from the pool when an equal one exists there and loaded once
@@ -140,9 +141,11 @@ public:
      *
      * @param processor The handler's processor runner: the phases of every chunk, and the port
      * vectors that hold the session's rings
-     * @param model The handler's model config (its variant), read by the session
-     * @param derived What the validator derived for it under the contract, read by the session
-     * @param hard The Hard half of the contract of the prepare, read by the session (the three
+     * @param bounds What sizes the session over the handler's variants: the largest internal
+     * latency per output and the fewest instances (VariantBounds), copied
+     * @param derived The form of the stream: what the validator derived for the handler's
+     * variants under the contract, read by the session
+     * @param hard The Hard half of the contract of the prepare, read by the session (the two
      * outlive the session: the C handler holds them)
      * @param requests One plan per entry, in dense-index order: what the session's plan
      * table holds (the C handler asks for exactly its plans); never empty
@@ -160,7 +163,7 @@ public:
      */
     static std::shared_ptr<SessionElement> create_session(
         capi::ProcessorRunner& processor,
-        const anira_model_config& model,
+        const VariantBounds& bounds,
         const capi::Derived& derived,
         const capi::HardContract& hard,
         std::vector<engine::PlanRequest> requests,

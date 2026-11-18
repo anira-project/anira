@@ -115,6 +115,27 @@ struct CustomLatencies {
 };
 
 /**
+ * @brief What a session is sized by over the variants of its handler's inference stage.
+ *
+ * The variants of a stage have one form (capi::check_same_form), which the session reads from
+ * the handler's derivation, and differ in what the stream cannot see. Two of those figures size
+ * the session, so the handler resolves them over every variant and hands them over as values:
+ * the session holds no model config.
+ */
+struct VariantBounds {
+    /// Per output tensor: the model's own latency in samples of its stream (the spec's
+    /// latency), the largest any variant declares. The reported latency carries it, and the
+    /// receive ring is primed without it, so a variant with less plays that many samples
+    /// early. One entry per tensor of the output list; 0 for an output without a stream.
+    std::vector<size_t> m_internal_latency;
+    /// The shared instances of a stateless model: the fewest any variant allows (its
+    /// max_instances), ANIRA_INSTANCES_AUTO when every variant leaves the count to the pool.
+    /// What Core::create_session resolves the session's instance count from; each plan's
+    /// loaded model keeps its own variant's count.
+    uint32_t m_max_instances = ANIRA_INSTANCES_AUTO;
+};
+
+/**
  * @brief What fills the hops a session's submission drops: the InferenceManager, under the
  * contract's miss policy
  *
@@ -149,15 +170,15 @@ public:
      * @param new_session_id Unique identifier for this session
      * @param processor The handler's processor runner: every phase of a chunk runs on it, and
      * its port vectors hold the session's rings (it outlives the session)
-     * @param model The handler's model config (its variant): the model's own latency of every
-     * output (it outlives the session)
-     * @param derived What the validator derived for the model config under the contract (it
-     * outlives the session)
+     * @param internal_latency The model's own latency of every output, the largest over the
+     * handler's variants (VariantBounds::m_internal_latency), copied
+     * @param derived The form of the stream: what the validator derived for the handler's
+     * variants under the contract, the same for every one (it outlives the session)
      * @param hard The Hard half of the contract the handler is prepared under (it outlives the
      * session)
      * @param num_instances The instance count, resolved by Core::create_session (1 for an
-     * exclusive session, else the model config's max_instances, ANIRA_INSTANCES_AUTO the
-     * pool's size, clamped to the pool)
+     * exclusive session, else the fewest max_instances of the handler's variants,
+     * ANIRA_INSTANCES_AUTO the pool's size, clamped to the pool)
      * @param producer_token Producer token bound to the global inference queue, moved into the
      * session (see m_producer_token)
      * @param rt_latch The real-time latch this session records its failures into (see m_rt):
@@ -166,7 +187,7 @@ public:
      */
     SessionElement(int new_session_id,
                    capi::ProcessorRunner& processor,
-                   const anira_model_config& model,
+                   std::vector<size_t> internal_latency,
                    const capi::Derived& derived,
                    const capi::HardContract& hard,
                    uint32_t num_instances,
@@ -270,9 +291,9 @@ public:
     /**
      * @name The facts of the configuration the core reads
      *
-     * Read from the handler's model config, what the validator derived for it and the Hard
-     * contract (m_model, m_derived, m_hard), one source each: nothing is copied into the
-     * session. A slot is a tensor's position in its side of the model config.
+     * Read from what the validator derived for the handler's variants (the form they share)
+     * and the Hard contract (m_derived, m_hard), one source each, by reference. A slot is a
+     * tensor's position in its side of the model config.
      * @{
      */
     /// The number of input and output tensors of the model config.
@@ -488,6 +509,10 @@ public:
         PlanSlot& operator=(PlanSlot&&) noexcept;
         PlanSlot(const PlanSlot&) = delete;
         PlanSlot& operator=(const PlanSlot&) = delete;
+        /// The variant the plan runs: its index in the inference stage's list
+        /// (anira_plan_info.variant), what a processor context reports for the chunk
+        /// (anira_processor_ctx.variant).
+        uint32_t m_variant = 0;
         /// The backend a processor context reports for the chunk: a built-in engine, or
         /// ANIRA_ENGINE_CUSTOM with m_engine_id for a custom one, on a provider of the enum, or
         /// ANIRA_PROVIDER_CUSTOM with m_provider_id for a custom one.
@@ -678,13 +703,16 @@ public:
 
     capi::ProcessorRunner& m_processor;  ///< The handler's processor runner: the four phases of
                                          ///< every chunk, and the port vectors of the rings
-    const anira_model_config& m_model;   ///< The handler's model config (its variant)
-    const capi::Derived& m_derived;      ///< What the validator derived for it under the contract
-    const capi::HardContract& m_hard;    ///< The Hard half of the contract of the prepare
-    /// The instance count (Core::create_session: 1 for an exclusive session, else the model
-    /// config's, ANIRA_INSTANCES_AUTO resolved and clamped to the pool): at most this many
-    /// inferences of the session run at once (LatencyCalculator's n), and the pending dispatch
-    /// queue of an exclusive session is sized by it.
+    /// The model's own latency of every output, in samples of its stream: the largest over the
+    /// handler's variants (VariantBounds::m_internal_latency), one entry per output tensor.
+    const std::vector<size_t> m_internal_latency;
+    const capi::Derived& m_derived;    ///< The form of the stream: what the validator derived
+                                       ///< for the handler's variants under the contract
+    const capi::HardContract& m_hard;  ///< The Hard half of the contract of the prepare
+    /// The instance count (Core::create_session: 1 for an exclusive session, else the fewest
+    /// any variant allows, ANIRA_INSTANCES_AUTO resolved and clamped to the pool): the count
+    /// the session is sized for (LatencyCalculator's n), and the pending dispatch queue of an
+    /// exclusive session is sized by it.
     const uint32_t m_num_instances;
     /// The inference time the next prepare() sizes the session for, in ms (LatencyCalculator's
     /// T): the contract's explicit budget from the construction on; a 3.x handler sets it before
@@ -745,7 +773,8 @@ private:
      */
     bool has_streamable_input() const;
 
-    /// The model's own latency of an output, in samples of its stream (the spec's latency).
+    /// The model's own latency of an output, in samples of its stream (the spec's latency, the
+    /// largest over the variants: m_internal_latency).
     size_t output_model_latency(size_t slot) const noexcept;
 
 #if DOXYGEN

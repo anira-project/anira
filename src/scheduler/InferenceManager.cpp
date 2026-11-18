@@ -27,14 +27,14 @@
 namespace anira {
 
 InferenceManager::InferenceManager(capi::ProcessorRunner& processor,
-                                   const anira_model_config& model,
+                                   const VariantBounds& bounds,
                                    const capi::Derived& derived,
                                    const capi::HardContract& hard,
                                    std::vector<engine::PlanRequest> requests,
                                    const anira_context_config& context_config,
                                    anira::RtLatch* rt_latch)
     : m_session(Core::create_session(processor,
-                                     model,
+                                     bounds,
                                      derived,
                                      hard,
                                      std::move(requests),

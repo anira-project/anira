@@ -2444,7 +2444,7 @@ public:
             return anira_processor_provider(m_ctx, provider, id);
         });
     }
-    /// The variant of that plan; 0 in this pre-release.
+    /// The variant of that plan: its index in the inference stage's list (anira_plan_info.variant).
     uint32_t variant() const noexcept { return m_ctx->variant; }
     /// The tensors of the model's input list, State tensors included: the input slots.
     uint32_t num_inputs() const noexcept { return m_ctx->num_inputs; }
@@ -3710,7 +3710,8 @@ public:
 
     /**
      * @brief Adds the inference stage (anira_pipeline_add_inference): one model configuration,
-     * which the pipeline copies, and its candidate backends. Empty candidates are the default
+     * which the pipeline copies, and its candidate backends (the form below takes several
+     * variants). Empty candidates are the default
      * set: every engine this build carries on ANIRA_PROVIDER_CPU, every custom engine an entry
      * names (ANIRA_ENGINE_CUSTOM with its id), and every provider a model entry is pinned to,
      * on that entry's engine, so that a pinned entry runs on its pin and a neutral one on its
@@ -3727,9 +3728,20 @@ public:
         add_inference_variants(std::span<const anira_model_config* const>(&variant, 1), candidates);
         return *this;
     }
-    /// The inference stage over several variants of one model; the C entry refuses more than
-    /// one with ANIRA_ERROR_NOT_SUPPORTED until plan sets land.
-    /// @throws Error as the single form does.
+    /**
+     * @brief The inference stage over several variants (anira_pipeline_add_inference): models
+     * of one form that differ in what they compute (other weights, another training of one
+     * architecture) and in nothing the stream can see. One handler loads and measures them
+     * together and runs them in one stream; the plan table spans them in this order
+     * (anira_plan_info.variant is the position here), and InferenceHandler::set_plan switches
+     * between them while audio runs. Free per variant: its model entries, layouts and binding
+     * names, extensions, default engine and provider, max_instances and the internal latency (the
+     * handler reports the largest per output; the stream is sized for the fewest instances).
+     * Empty candidates are the default set over the entries of every variant.
+     * @throws Error as the single form does. That every variant has the form of the first is
+     * the handler's question: ANIRA_ERROR_CONFIG from the InferenceHandler constructor and from
+     * prepare, naming the variant, the slot and the property.
+     */
     Pipeline& add_inference(
         std::initializer_list<std::reference_wrapper<const ModelConfig>> variants,
         std::initializer_list<BackendId> candidates) {

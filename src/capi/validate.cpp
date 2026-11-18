@@ -1026,6 +1026,191 @@ void validate(const anira_model_config& model,
                      consumers.empty() ? nullptr : &consumers);
 }
 
+namespace {
+
+// The extents of a tensor as a message names them: "[1, 1, 512]".
+std::string extents_text(const std::vector<int64_t>& dims) {
+    std::string text = "[";
+    for (size_t i = 0; i < dims.size(); ++i) {
+        text += (i == 0 ? "" : ", ") + std::to_string(dims[i]);
+    }
+    return text + "]";
+}
+
+// A slot as a message of the form rule names it: the side, the slot and the canonical name.
+std::string slot_text(bool is_input, size_t slot, const std::string& name) {
+    return std::string(is_input ? "input" : "output") + " slot " + std::to_string(slot) + " '" +
+           name + "'";
+}
+
+// The refusal of the form rule: the variant, where (a slot, or nothing for a property of the
+// whole model), the property and both values.
+[[noreturn]] void form_error(size_t variant,
+                             const std::string& where,
+                             const std::string& property,
+                             const std::string& value,
+                             const std::string& first_value) {
+    config_error("variants[" + std::to_string(variant) +
+                 "]: " + (where.empty() ? std::string() : where + ": ") + "the " + property +
+                 " is " + value + ", but " + first_value +
+                 " in variants[0]; every variant of an inference stage has the form of the " +
+                 "first one (a model of another form is another handler)");
+}
+
+// One side of the form rule, position by position.
+void check_same_side(const std::vector<anira_tensor_spec>& first_specs,
+                     const std::vector<DerivedSpec>& first,
+                     const std::vector<anira_tensor_spec>& other_specs,
+                     const std::vector<DerivedSpec>& other,
+                     bool is_input,
+                     size_t variant) {
+    if (other.size() != first.size()) {
+        form_error(variant,
+                   {},
+                   std::string("number of ") + (is_input ? "input" : "output") + " tensors",
+                   std::to_string(other.size()),
+                   std::to_string(first.size()));
+    }
+    const auto window_max_text = [](int64_t window_max) {
+        return window_max == ANIRA_UNBOUNDED ? std::string("unbounded")
+                                             : std::to_string(window_max);
+    };
+    const auto time_axis_text = [](const std::optional<size_t>& axis) {
+        return axis.has_value() ? "axis " + std::to_string(*axis) : std::string("none");
+    };
+    for (size_t slot = 0; slot < first.size(); ++slot) {
+        const anira_tensor_spec& spec = other_specs[slot];
+        const anira_tensor_spec& first_spec = first_specs[slot];
+        const DerivedSpec& derived = other[slot];
+        const DerivedSpec& first_derived = first[slot];
+        // The slot is named as the first variant names it: the name itself is a property.
+        const std::string where = slot_text(is_input, slot, first_spec.m_name);
+        const auto differs = [&](const std::string& property,
+                                 const std::string& value,
+                                 const std::string& first_value) {
+            form_error(variant, where, property, value, first_value);
+        };
+        if (spec.m_role != first_spec.m_role) {
+            differs("role", role_word(spec.m_role), role_word(first_spec.m_role));
+        }
+        if (spec.m_name != first_spec.m_name) {
+            differs("canonical name", "'" + spec.m_name + "'", "'" + first_spec.m_name + "'");
+        }
+        if (derived.m_dtype != first_derived.m_dtype) {
+            differs("dtype", dtype_label(derived.m_dtype), dtype_label(first_derived.m_dtype));
+        }
+        if (derived.m_dims != first_derived.m_dims) {
+            differs("shape", extents_text(derived.m_dims), extents_text(first_derived.m_dims));
+        }
+        if (derived.m_channels != first_derived.m_channels) {
+            differs("channel count",
+                    std::to_string(derived.m_channels),
+                    std::to_string(first_derived.m_channels));
+        }
+        if (derived.m_window_min != first_derived.m_window_min) {
+            differs("window minimum",
+                    std::to_string(derived.m_window_min),
+                    std::to_string(first_derived.m_window_min));
+        }
+        if (derived.m_window_max != first_derived.m_window_max) {
+            differs("window maximum",
+                    window_max_text(derived.m_window_max),
+                    window_max_text(first_derived.m_window_max));
+        }
+        if (derived.m_overlap != first_derived.m_overlap) {
+            differs("overlap",
+                    std::to_string(derived.m_overlap),
+                    std::to_string(first_derived.m_overlap));
+        }
+        // The hop ahead of the window a flexible one is pinned to: with equal overlaps the two
+        // differ together (the window is the hop plus the overlap), and the hop is what the
+        // stream advances by.
+        if (derived.m_hop != first_derived.m_hop) {
+            differs("hop", std::to_string(derived.m_hop), std::to_string(first_derived.m_hop));
+        }
+        if (derived.m_window_used != first_derived.m_window_used) {
+            differs("window",
+                    std::to_string(derived.m_window_used),
+                    std::to_string(first_derived.m_window_used));
+        }
+        if (derived.m_time_axis != first_derived.m_time_axis) {
+            differs("Time axis",
+                    time_axis_text(derived.m_time_axis),
+                    time_axis_text(first_derived.m_time_axis));
+        }
+    }
+}
+
+}  // namespace
+
+void check_same_form(const anira_model_config& first,
+                     const Derived& first_derived,
+                     const anira_model_config& other,
+                     const Derived& other_derived,
+                     size_t variant) {
+    check_same_side(first.m_inputs,
+                    first_derived.m_inputs,
+                    other.m_inputs,
+                    other_derived.m_inputs,
+                    /*is_input=*/true,
+                    variant);
+    check_same_side(first.m_outputs,
+                    first_derived.m_outputs,
+                    other.m_outputs,
+                    other_derived.m_outputs,
+                    /*is_input=*/false,
+                    variant);
+    // The names and the roles are equal at every position from here on: a slot is named once.
+    const auto anchor_text = [](const anira_model_config& model, const Derived& derived) {
+        const std::vector<anira_tensor_spec>& specs =
+            derived.m_anchor_is_input ? model.m_inputs : model.m_outputs;
+        return slot_text(derived.m_anchor_is_input,
+                         derived.m_anchor_index,
+                         specs[derived.m_anchor_index].m_name);
+    };
+    if (other_derived.m_anchor_is_input != first_derived.m_anchor_is_input ||
+        other_derived.m_anchor_index != first_derived.m_anchor_index) {
+        form_error(variant,
+                   {},
+                   "anchor",
+                   anchor_text(other, other_derived),
+                   anchor_text(first, first_derived));
+    }
+    // The State pairs, in the order of the State inputs, which the equal roles make the same
+    // slots on both sides: the output each one is fed from.
+    const std::vector<StateLink> links = state_links(other);
+    const std::vector<StateLink> first_links = state_links(first);
+    for (size_t i = 0; i < links.size() && i < first_links.size(); ++i) {
+        if (links[i].m_output == first_links[i].m_output) { continue; }
+        form_error(variant,
+                   slot_text(true, links[i].m_input, other.m_inputs[links[i].m_input].m_name),
+                   "state source",
+                   slot_text(false, links[i].m_output, other.m_outputs[links[i].m_output].m_name),
+                   slot_text(false,
+                             first_links[i].m_output,
+                             first.m_outputs[first_links[i].m_output].m_name));
+    }
+    if (other_derived.m_exclusive != first_derived.m_exclusive) {
+        // The roles are equal, so the State pairs are: what differs is the model's own state.
+        const auto exclusivity = [](bool exclusive) {
+            return exclusive ? std::string("stateful (an exclusive handler)")
+                             : std::string("stateless (a shared handler)");
+        };
+        form_error(variant,
+                   {},
+                   "model state",
+                   exclusivity(other_derived.m_exclusive),
+                   exclusivity(first_derived.m_exclusive));
+    }
+}
+
+Derived form_of(const Derived& derived) {
+    Derived form = derived;
+    form.m_rows.clear();
+    form.m_plans.clear();
+    return form;
+}
+
 anira::RingDtypes ring_dtypes_of(const anira_contract& contract, const anira_model_config& model) {
     // A tensor the contract names no ring dtype for streams its spec's dtype.
     anira::RingDtypes dtypes;

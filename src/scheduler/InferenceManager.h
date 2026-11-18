@@ -73,9 +73,10 @@ public:
      *
      * @param processor The handler's processor runner: the phases of every chunk, and the port
      * vectors that hold the session's rings (it outlives the manager)
-     * @param model The handler's model config (its variant)
-     * @param derived What the validator derived for it under the contract
-     * @param hard The Hard half of the contract the handler is prepared under (the three
+     * @param bounds What sizes the session over the handler's variants (VariantBounds), copied
+     * @param derived The form of the stream: what the validator derived for the handler's
+     * variants under the contract
+     * @param hard The Hard half of the contract the handler is prepared under (the two
      * outlive the manager: the session reads them by reference)
      * @param requests The plans, in dense-index order; never empty
      * @param context_config The context's configuration (anira_context_config_*)
@@ -84,7 +85,7 @@ public:
      * @throws std::invalid_argument for an empty request list
      */
     InferenceManager(capi::ProcessorRunner& processor,
-                     const anira_model_config& model,
+                     const VariantBounds& bounds,
                      const capi::Derived& derived,
                      const capi::HardContract& hard,
                      std::vector<engine::PlanRequest> requests,

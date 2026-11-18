@@ -40,9 +40,12 @@ struct Candidate {
 /// unique_ptr, which the copy does not carry; the bytes carriers are shared).
 anira_model_config clone_model_config(const anira_model_config& model);
 
-/// One plan of the table: the dense index is the position.
+/// One plan of the table: the dense index is the position. The table spans the variants of the
+/// inference stage, in variant order.
 struct Plan {
-    size_t m_row = 0;                               ///< the models[] index
+    size_t m_variant = 0;                           ///< the variant: its index in the pipeline's
+                                                    ///< list (m_info.variant)
+    size_t m_row = 0;                               ///< the index in that variant's models[]
     anira_plan_info m_info = ANIRA_PLAN_INFO_INIT;  ///< engine_id and provider_id point into
                                                     ///< the report's string store
 };
@@ -53,13 +56,16 @@ struct Plan {
 // NOLINTBEGIN(readability-identifier-naming)
 
 struct anira_pipeline {
-    std::vector<anira_model_config> m_variants;        ///< copied at add_inference; exactly one in
-                                                       ///< this pre-release
+    /// The variants of the inference stage, copied at add_inference, in the caller's order
+    /// (the index is the variant's, anira_plan_info.variant): models of one form
+    /// (anira::capi::check_same_form, checked at anira_handler_create and at prepare).
+    std::vector<anira_model_config> m_variants;
     std::vector<anira::capi::Candidate> m_candidates;  ///< never empty after add_inference: the
                                                        ///< caller's list, or the default set
     /// Whether m_candidates is the default set (a NULL list at add_inference: every engine of
-    /// the build on ANIRA_PROVIDER_CPU, the custom entries, every pin): under it an entry is
-    /// one plan, on its pin or on the CPU path (validate.h matching_plans).
+    /// the build on ANIRA_PROVIDER_CPU, the custom entries and every pin of every variant):
+    /// under it an entry is one plan, on its pin or on the CPU path (validate.h
+    /// matching_plans).
     bool m_default_set = false;
     bool m_has_inference = false;
     /// The one processor of the pipeline (anira_pipeline_add_processor; a second call is refused),
@@ -112,9 +118,15 @@ struct anira_handler {
     /// session reads its Hard half by reference. Read while the handler is runnable, and while
     /// prepared by the session; a failed prepare unprepares the handler.
     anira_contract m_contract;
-    /// What the validator derived for the variant under m_contract, installed with it: the
-    /// session reads it by reference (every tensor's extents, hop and channel count, the
-    /// anchor, the exclusivity, the plan table), and so do the handler's own getters.
+    /// What the validator derived for each variant under m_contract, in variant order,
+    /// installed with it: the variant's own rows and plans (its part of the plan table) and its
+    /// specs as it spells them (a window declared or derived). Every one has the form of the
+    /// first (anira::capi::check_same_form).
+    std::vector<anira::capi::Derived> m_variant_derived;
+    /// The form of the stream, installed with m_contract: every tensor's extents, hop and
+    /// channel count, the anchor and the exclusivity, which every variant derives alike
+    /// (anira::capi::form_of the first variant's derivation: no rows, no plans). The session
+    /// reads it by reference, and so do the handler's own getters.
     anira::capi::Derived m_derived;
     /// The ports: per side one entry per tensor of the model config's list, indexed by slot
     /// like everything else of the handler and the processor runner, and a variant of what the
@@ -142,8 +154,9 @@ struct anira_handler {
     std::chrono::steady_clock::duration m_contract_wait{0};  ///< ANIRA_WAIT_CONTRACT of the pop
                                                              ///< twins: wait_ratio x host_block_max
                                                              ///< / host_rate
-    /// dense index -> row/backend; rebuilt at prepare only, and handed to the session as its
-    /// plan table (the InferenceManager's constructor). The selected plan has no storage
+    /// dense index -> variant/row/backend, over every variant in variant order; rebuilt at
+    /// prepare only, in the order the session's plan table is built in from the same
+    /// derivations (plan_requests). The selected plan has no storage
     /// here: it is the session's one atomic, the dense index itself (SessionElement::
     /// m_current_plan), so set_plan has no pair to tear and two plans on one backend stay
     /// distinct.

@@ -105,8 +105,15 @@ export class Pipeline {
   }
 
   /**
-   * The inference stage over `models`, the variants (one in this pre-release), on the default
-   * candidates: every engine of the build and every registered engine, on the CPU.
+   * The inference stage over `models`, one model or several variants, on the default
+   * candidates: every engine of the build and every registered engine, on the CPU. Variants
+   * are models of one form that differ in what they compute (other weights, another training
+   * of one architecture) and in nothing the stream can see: one handler loads and measures
+   * them together and runs them in one stream, the plan table spans them in this order
+   * (`PlanInfo.variant` is the position here), and `setPlan` switches between them while audio
+   * runs. That every variant has the form of the first is checked when the handler is created
+   * and when it is prepared (an `AniraError` with `ANIRA_ERROR_CONFIG` naming the variant,
+   * the slot and the property).
    */
   addInference(models: ModelConfig | ModelConfig[]): this {
     const list = Array.isArray(models) ? models : [models]
@@ -123,7 +130,10 @@ export class Pipeline {
     return this
   }
 
-  /** @internal The input specs of the inference stage's variant: what a handler's Static inputs take. */
+  /**
+   * @internal The input specs of the inference stage (the first variant's, which every variant
+   * has): what a handler's Static inputs take.
+   */
   inputSpecs(): InputSpec[] {
     return this.specs
   }

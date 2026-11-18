@@ -21,7 +21,7 @@ import { staticInputBytes, type InputSpec } from './staticInput'
 export class InferenceHandler {
   readonly abi: AniraBindings
   private readonly handler: number
-  /** The model's input specs (the pipeline's variant), which `setStaticInput` writes in. */
+  /** The model's input specs (the same in every variant), which `setStaticInput` writes in. */
   private readonly inputs: readonly InputSpec[]
 
   private constructor(abi: AniraBindings, handler: number, inputs: readonly InputSpec[]) {

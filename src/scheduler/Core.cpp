@@ -896,7 +896,7 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
 }
 
 std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& processor,
-                                                     const anira_model_config& model,
+                                                     const VariantBounds& bounds,
                                                      const capi::Derived& derived,
                                                      const capi::HardContract& hard,
                                                      std::vector<engine::PlanRequest> requests,
@@ -927,8 +927,10 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
     const size_t pool_size = prospective_pool_size_locked(state, config);
     const auto resolved_auto = static_cast<uint32_t>(std::max<size_t>(pool_size, 1));
     // An exclusive session runs one inference at a time: one instance, whatever the model
-    // config says (its loaded model has no shared call slot either, the request's count of 0).
-    uint32_t num_instances = derived.m_exclusive ? 1U : model.m_max_instances;
+    // configs say (its loaded models have no shared call slot either, the requests' count of
+    // 0). A shared one is sized for the fewest instances any of its variants allows; each
+    // request keeps its own variant's count.
+    uint32_t num_instances = derived.m_exclusive ? 1U : bounds.m_max_instances;
     if (num_instances == ANIRA_INSTANCES_AUTO) { num_instances = resolved_auto; }
     for (engine::PlanRequest& request : requests) {
         if (request.m_model.m_instances == ANIRA_INSTANCES_AUTO) {
@@ -955,7 +957,7 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
     std::shared_ptr<SessionElement> const session =
         std::make_shared<SessionElement>(session_id,
                                          processor,
-                                         model,
+                                         bounds.m_internal_latency,
                                          derived,
                                          hard,
                                          num_instances,
@@ -978,6 +980,7 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
             SessionElement::PlanSlot slot;
             acquire_loaded_locked(state, request, pool_size, slot);
             slot.m_registered = request.m_source == engine::Source::Registered;
+            slot.m_variant = request.m_variant;
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
             slot.m_engine_id = request.m_model.m_engine_id;

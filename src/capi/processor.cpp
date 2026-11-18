@@ -654,7 +654,7 @@ anira_processor_ctx ProcessorRunner::make_ctx(anira_phase phase,
     ANIRA_NONBLOCKING {
     // The plan the chunk was stamped with (Core::pre_process), never the session's atomic: all
     // four phases of a chunk report one plan, and one entry. The session's table names the
-    // plan's engine and provider; a stamp is always in range.
+    // plan's variant, engine and provider; a stamp is always in range.
     const uint32_t plan = chunk.m_plan;
     const std::vector<anira::SessionElement::PlanSlot>& plans = m_session->m_plans;
     anira_processor_ctx ctx{};  // every slot NULL, the high halves of the pointer slots zero
@@ -671,7 +671,7 @@ anira_processor_ctx ProcessorRunner::make_ctx(anira_phase phase,
         ctx.engine_id = engine_id.empty() ? nullptr : engine_id.c_str();
         ctx.provider_id = provider_id.empty() ? nullptr : provider_id.c_str();
     }
-    ctx.variant = 0;
+    ctx.variant = plan < plans.size() ? plans[plan].m_variant : 0U;
     ctx.num_inputs = static_cast<uint32_t>(m_input_ports.size());
     ctx.num_outputs = static_cast<uint32_t>(m_output_ports.size());
     ctx.ticket = ANIRA_TICKET_INVALID;

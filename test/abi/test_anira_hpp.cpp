@@ -921,14 +921,26 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
     EXPECT_EQ(second.m_status, ANIRA_ERROR_CONFIG);
     EXPECT_NE(second.m_what.find("a second inference stage"), std::string::npos) << second.m_what;
 
-    const Thrown variants = thrown_by([&] {
+    // Several variants are one inference stage; that they have one form is the handler's
+    // question at create (ANIRA_ERROR_CONFIG naming the variant and the property).
+    {
+        anira::Context context(anira::ContextConfig{}.threads(2).log_level(ANIRA_LOG_ERROR));
         anira::Pipeline two;
+        anira_test::add_passthrough(two.native());
         two.add_inference({std::cref(model), std::cref(model)}, {});
-    });
-    EXPECT_TRUE(variants.m_thrown);
-    EXPECT_EQ(variants.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    EXPECT_NE(variants.m_what.find("one variant per inference stage"), std::string::npos)
-        << variants.m_what;
+        const anira::InferenceHandler alike(context, two);
+        EXPECT_NE(alike.native(), nullptr);
+        const anira::ModelConfig other = anira_test::mono_stream_model();
+        anira::Pipeline unlike;
+        anira_test::add_passthrough(unlike.native());
+        unlike.add_inference({std::cref(model), std::cref(other)}, {});
+        const Thrown form = thrown_by([&] { const anira::InferenceHandler h(context, unlike); });
+        EXPECT_TRUE(form.m_thrown);
+        EXPECT_EQ(form.m_status, ANIRA_ERROR_CONFIG);
+        EXPECT_NE(form.m_what.find("variants[1]: the number of input tensors is 1, but 2 in"),
+                  std::string::npos)
+            << form.m_what;
+    }
 
     // A candidate's provider is checked for its syntax here (the pair rule: a provider of the
     // enum and a provider_id at once); whether an engine serves it is the handler's question at

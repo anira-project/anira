@@ -49,7 +49,7 @@ SessionElement::PlanSlot& SessionElement::PlanSlot::operator=(PlanSlot&&) noexce
 
 SessionElement::SessionElement(int new_session_id,
                                capi::ProcessorRunner& processor,
-                               const anira_model_config& model,
+                               std::vector<size_t> internal_latency,
                                const capi::Derived& derived,
                                const capi::HardContract& hard,
                                uint32_t num_instances,
@@ -62,7 +62,7 @@ SessionElement::SessionElement(int new_session_id,
     , m_dispatch_pending(0)
     , m_dispatch_producer_token(m_dispatch_pending)
     , m_processor(processor)
-    , m_model(model)
+    , m_internal_latency(std::move(internal_latency))
     , m_derived(derived)
     , m_hard(hard)
     , m_num_instances(num_instances)
@@ -209,7 +209,7 @@ size_t SessionElement::queue_capacity() const noexcept {
 }
 
 size_t SessionElement::output_model_latency(size_t slot) const noexcept {
-    return static_cast<size_t>(m_model.m_outputs[slot].m_latency);
+    return slot < m_internal_latency.size() ? m_internal_latency[slot] : 0;
 }
 
 void SessionElement::clear() {

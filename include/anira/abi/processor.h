@@ -104,7 +104,8 @@
  * default bodies are ANIRA_NONBLOCKING, so a real-time processor body is composed of
  * nonblocking calls, and an author who wants the compiler's check declares the callback
  * [[clang::nonblocking]] (ANIRA_NONBLOCKING) themselves. In this pre-release the contract is
- * Hard, so ticket is ANIRA_TICKET_INVALID, and variant is 0.
+ * Hard, so ticket is ANIRA_TICKET_INVALID. variant is the variant of the chunk's plan: its
+ * index in the inference stage's list.
  */
 
 #include <stddef.h>
@@ -338,7 +339,12 @@ typedef struct anira_processor_ctx {
      * anira_processor_provider reads.
      */
     uint32_t provider;
-    uint32_t variant;  /**< The variant of that plan; 0 in this pre-release. */
+    /**
+     * The variant of that plan: its index in the inference stage's list
+     * (anira_plan_info.variant). The variants of a stage have one form, so every tensor and
+     * ring of the context is the same under each of them.
+     */
+    uint32_t variant;
     /**
      * The tensors of the model's input list, State tensors included: the slots the input
      * accessors answer for. A slot is the tensor's position in the model config's input list:

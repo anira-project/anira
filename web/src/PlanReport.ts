@@ -26,7 +26,7 @@ export type PlanQuery = {
 
 /** One plan of a report (`anira_plan_info`): the engine and provider it runs on, its budget. */
 export type PlanInfo = {
-  /** The variant of the inference stage; 0 in this pre-release. */
+  /** The variant the plan runs: its index in the list `Pipeline.addInference` took. */
   variant: number
   /** `anira_engine`; `ANIRA_ENGINE_CUSTOM` beside `engineId`. */
   engine: number

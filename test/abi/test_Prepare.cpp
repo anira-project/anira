@@ -964,9 +964,39 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         expect_contains(err.message, "no inference stage");
         EXPECT_EQ(handler, nullptr);
     }
-    EXPECT_EQ(anira_pipeline_add_inference(pipeline, two.data(), 2, nullptr, 0, &err),
-              ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(err.message, "one variant per inference stage");
+    // Several variants are one inference stage: the pipeline takes them as they are, and
+    // anira_handler_create compares their form (test_Variants.cpp has the rule property by
+    // property).
+    {
+        anira_pipeline* twice = nullptr;
+        ASSERT_EQ(anira_pipeline_create(&twice, &err), ANIRA_OK) << err.message;
+        anira_test::add_passthrough(twice);
+        EXPECT_EQ(anira_pipeline_add_inference(twice, two.data(), 2, nullptr, 0, &err), ANIRA_OK)
+            << err.message;
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(anira_handler_create(context.m_context, twice, &handler, &err), ANIRA_OK)
+            << err.message;
+        anira_handler_destroy(handler);
+        anira_pipeline_destroy(twice);
+    }
+    {
+        // A second variant of another form: the gain model beside a model of one mono stream.
+        const ModelConfig other = anira_test::mono_stream_model();
+        const std::array<const anira_model_config*, 2> mixed{model.native(), other.native()};
+        anira_pipeline* unlike = nullptr;
+        ASSERT_EQ(anira_pipeline_create(&unlike, &err), ANIRA_OK) << err.message;
+        anira_test::add_passthrough(unlike);
+        EXPECT_EQ(anira_pipeline_add_inference(unlike, mixed.data(), 2, nullptr, 0, &err), ANIRA_OK)
+            << err.message;
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(anira_handler_create(context.m_context, unlike, &handler, &err),
+                  ANIRA_ERROR_CONFIG);
+        expect_contains(err.message, "variants[1]: the number of input tensors is 1, but 2 in");
+        expect_contains(err.message,
+                        "every variant of an inference stage has the form of the first one");
+        EXPECT_EQ(handler, nullptr);
+        anira_pipeline_destroy(unlike);
+    }
     // A candidate's provider: its syntax here (a value of the enum, never both a provider of
     // the enum and a provider_id, never an empty provider_id), whether the engine serves it at
     // anira_handler_create, against the context's capabilities.

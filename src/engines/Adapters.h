@@ -42,6 +42,10 @@ enum class Source : uint8_t {
 /// loaded model, the record of it, and what the session's plan table reports for it.
 struct PlanRequest {
     Source m_source = Source::BuiltIn;
+    /// The variant the plan runs: its index in the handler's inference stage, what the
+    /// session's plan table reports for a chunk of the plan (SessionElement::PlanSlot::
+    /// m_variant).
+    uint32_t m_variant = 0;
     Model m_model;
     /// Registered only: the carrier of the engine's descriptor, part of the pool's key: the
     /// engine object (anira_custom_engine), whichever pipeline it was added to.

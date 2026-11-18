@@ -960,6 +960,102 @@ const anira_backend_id* candidates_of(const std::vector<anira_backend_id>& ids) 
     return ids.empty() ? &k_none : ids.data();
 }
 
+// How a message names the variant it is about: nothing for a stage of one variant, whose
+// messages read as they always did, "variants[i]: " for a stage of several.
+std::string variant_prefix(const anira_pipeline& pipeline, size_t variant) {
+    if (pipeline.m_variants.size() < 2) { return {}; }
+    return "variants[" + std::to_string(variant) + "]: ";
+}
+
+// Every variant of the pipeline through the validator under one contract (NULL: the structural
+// rules alone, anira_handler_create's pass), in variant order, each compared with the first
+// (anira::capi::check_same_form: the variants of a stage have one form). One derivation per
+// variant. A rule a variant of several breaks is the validator's refusal with the variant named
+// in front.
+std::vector<anira::capi::Derived> validate_variants(const anira_pipeline& pipeline,
+                                                    const anira_contract* contract,
+                                                    const anira::capi::ProcessorFacts& processors,
+                                                    const anira::capi::EngineFacts& engines) {
+    const std::vector<anira_backend_id> ids = pipeline.candidate_ids();
+    std::vector<anira::capi::Derived> derived(pipeline.m_variants.size());
+    for (size_t variant = 0; variant < pipeline.m_variants.size(); ++variant) {
+        try {
+            anira::capi::validate(pipeline.m_variants[variant],
+                                  contract,
+                                  candidates_of(ids),
+                                  static_cast<uint32_t>(ids.size()),
+                                  derived[variant],
+                                  &processors,
+                                  &engines,
+                                  pipeline.m_default_set);
+        } catch (const StatusError& refusal) {
+            if (pipeline.m_variants.size() < 2) { throw; }
+            throw StatusError(refusal.status(), variant_prefix(pipeline, variant) + refusal.what());
+        }
+        if (variant == 0) { continue; }
+        anira::capi::check_same_form(pipeline.m_variants[0],
+                                     derived[0],
+                                     pipeline.m_variants[variant],
+                                     derived[variant],
+                                     variant);
+    }
+    return derived;
+}
+
+// What sizes the session over the variants (anira::VariantBounds): per output the largest
+// internal latency any variant declares, and the fewest instances any variant allows. The
+// variants have one form, so every one has the first one's output count.
+anira::VariantBounds variant_bounds(const anira_pipeline& pipeline) {
+    anira::VariantBounds bounds;
+    bounds.m_internal_latency.assign(pipeline.m_variants.front().m_outputs.size(), 0);
+    for (const anira_model_config& variant : pipeline.m_variants) {
+        for (size_t slot = 0;
+             slot < variant.m_outputs.size() && slot < bounds.m_internal_latency.size();
+             ++slot) {
+            bounds.m_internal_latency[slot] =
+                std::max(bounds.m_internal_latency[slot],
+                         static_cast<size_t>(variant.m_outputs[slot].m_latency));
+        }
+        bounds.m_max_instances = std::min(bounds.m_max_instances, variant.m_max_instances);
+    }
+    return bounds;
+}
+
+// The one record of variants that differ in their internal latency: the outputs concerned, each
+// with every variant's figure, and what the handler reports. A difference is no refusal: the
+// handler reports the largest figure per output, and a variant with less plays that many
+// samples early.
+void warn_internal_latencies([[maybe_unused]] const anira_pipeline& pipeline,
+                             [[maybe_unused]] const anira::VariantBounds& bounds) {
+#ifdef ENABLE_LOGGING
+    std::string differing;
+    const anira_model_config& first = pipeline.m_variants.front();
+    for (size_t slot = 0; slot < bounds.m_internal_latency.size(); ++slot) {
+        const bool differs =
+            std::ranges::any_of(pipeline.m_variants, [slot, &first](const anira_model_config& v) {
+                return v.m_outputs[slot].m_latency != first.m_outputs[slot].m_latency;
+            });
+        if (!differs) { continue; }
+        differing += differing.empty() ? "" : "; ";
+        differing +=
+            "output slot " + std::to_string(slot) + " '" + first.m_outputs[slot].m_name + "': ";
+        for (size_t variant = 0; variant < pipeline.m_variants.size(); ++variant) {
+            differing += (variant == 0 ? "variants[" : ", variants[") + std::to_string(variant) +
+                         "] " +
+                         std::to_string(pipeline.m_variants[variant].m_outputs[slot].m_latency);
+        }
+        differing +=
+            " samples, reported " + std::to_string(bounds.m_internal_latency[slot]) + " samples";
+    }
+    if (differing.empty()) { return; }
+    ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                      "anira_handler_prepare: the variants differ in their internal latency (%s); "
+                      "the handler reports the largest, and a variant with less plays that many "
+                      "samples early",
+                      differing.c_str());
+#endif
+}
+
 bool has_default_engine(const anira_model_config& model) {
     return model.m_default_engine != ANIRA_ENGINE_NONE || !model.m_default_engine_id.empty();
 }
@@ -1131,14 +1227,16 @@ void keep_rows_with_plans(anira::capi::Derived& derived) {
 // declared provider the query cleared says so); a query that fails fails the create with its
 // status; the engine's load may still refuse a provider at run time (a device lost between create
 // and prepare). Under the default set a plan on a provider its engine declares but cannot use here
-// is dropped from the table instead (with its row when no plan of the row is left), and a table
-// left empty is ANIRA_ERROR_CONFIG.
+// is dropped from the table instead (with its row when no plan of the row is left), and a
+// variant left without a plan is ANIRA_ERROR_CONFIG. One variant per call, with its derivation;
+// a message of a stage of several variants names the variant.
 void check_providers(const anira_context& context,
                      const anira_pipeline& pipeline,
+                     size_t variant,
                      anira::capi::Derived& derived,
                      anira::capi::QueryAnswers& answers,
                      anira::capi::QueryUse use) {
-    const anira_model_config& model = pipeline.m_variants[0];
+    const anira_model_config& model = pipeline.m_variants[variant];
     std::vector<anira::capi::PlanKey> kept;
     kept.reserve(derived.m_plans.size());
     for (anira::capi::PlanKey& key : derived.m_plans) {
@@ -1168,7 +1266,8 @@ void check_providers(const anira_context& context,
         }
         throw StatusError(
             ANIRA_ERROR_NOT_SUPPORTED,
-            "handler: models[" + std::to_string(key.m_row) +
+            "handler: " + variant_prefix(pipeline, variant) + "models[" +
+                std::to_string(key.m_row) +
                 "]: " + anira::capi::unserved_message(served, key.m_provider, key.m_provider_id));
     }
     const bool dropped = kept.size() != derived.m_plans.size();
@@ -1177,7 +1276,8 @@ void check_providers(const anira_context& context,
     keep_rows_with_plans(derived);
     if (derived.m_plans.empty()) {
         throw StatusError(ANIRA_ERROR_CONFIG,
-                          "handler: none of the " + std::to_string(model.m_models.size()) +
+                          "handler: " + variant_prefix(pipeline, variant) + "none of the " +
+                              std::to_string(model.m_models.size()) +
                               " model entries runs on a candidate backend usable here (the "
                               "default candidate set drops a plan whose provider its engine "
                               "cannot use here)");
@@ -1255,21 +1355,24 @@ anira::engine::Model model_of_row(const anira_model_config& model,
 // (pooled by the record and the carrier, whether the handler is exclusive or not: exclusivity
 // is the prepared handle's, not the model's), with the handler's context for the engine's
 // init. Every custom row has a registered engine by then, anira.v2.custom included (validate
-// refused one without); the engine-free roundtrip is the 2.x class's alone.
-std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handler,
-                                                      const anira::capi::Derived& derived) {
-    const anira_model_config& model = handler.m_pipeline.m_variants[0];
-    // The variant a registered engine's load reads (the load record names it): anira's own
-    // copy, shared by the registered rows of this prepare and kept alive by their loaded
-    // models, which may outlive this handler in the pool.
+// refused one without); the engine-free roundtrip is the 2.x class's alone. The requests of one
+// variant (`variant_index`, its derivation `derived`), appended to `requests`: the table spans
+// the variants in variant order (plan_requests).
+void append_plan_requests(const anira_handler& handler,
+                          size_t variant_index,
+                          const anira::capi::Derived& derived,
+                          std::vector<anira::engine::PlanRequest>& requests) {
+    const anira_model_config& model = handler.m_pipeline.m_variants[variant_index];
+    // The variant a registered engine's load reads (the load record names it, the plan's own
+    // variant): anira's own copy, shared by the registered rows of this variant in this prepare
+    // and kept alive by their loaded models, which may outlive this handler in the pool.
     std::shared_ptr<const anira_model_config> variant;
     std::string variant_json;
-    std::vector<anira::engine::PlanRequest> requests;
-    requests.reserve(derived.m_plans.size());
     for (const anira::capi::PlanKey& key : derived.m_plans) {
         const size_t row_index = key.m_row;
         const anira::capi::ModelEntry& row = model.m_models[row_index];
         anira::engine::PlanRequest request;
+        request.m_variant = static_cast<uint32_t>(variant_index);
         request.m_model = model_of_row(model, row, derived);
         // The provider is the plan's, part of the pool key: two providers of one row are two
         // loaded models, and so are two option sets of the context for one backend (the
@@ -1324,6 +1427,19 @@ std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handl
         }
         requests.push_back(std::move(request));
     }
+}
+
+// The plan table of this handler as the core takes it: the requests of every variant, in
+// variant order and, within a variant, in the order of its derivation's plans. The dense plan
+// index is the position here, in the session's table and in the handler's (build_plans walks
+// the same derivations in the same order).
+std::vector<anira::engine::PlanRequest> plan_requests(
+    const anira_handler& handler,
+    const std::vector<anira::capi::Derived>& variants) {
+    std::vector<anira::engine::PlanRequest> requests;
+    for (size_t variant = 0; variant < variants.size(); ++variant) {
+        append_plan_requests(handler, variant, variants[variant], requests);
+    }
     return requests;
 }
 
@@ -1338,57 +1454,64 @@ anira_memory_kind memory_kind_of(const anira_handler& handler, size_t plan) noex
     return session.m_plans[plan].m_loaded->model().m_device_memory.m_kind;
 }
 
-// The plan table of the report: one plan per row and provider of the validator's table, in
-// entry order and candidate order, the same order the session's table was built in from
-// plan_requests (the dense index is the position on both sides); a custom row is
+// The plan table of the report: one plan per variant, row and provider of the validator's
+// tables, in variant order, entry order and candidate order, the same order the session's table
+// was built in from plan_requests (the dense index is the position on both sides); a plan
+// carries its variant; a custom row is
 // ANIRA_ENGINE_CUSTOM with its id, a custom provider is ANIRA_PROVIDER_CUSTOM with its name in
 // provider_id, and a registered engine's row reports the flags of its descriptor; the initial
-// plan is the first of the default engine's (of any engine without one) on the default
-// provider, else the first of the default engine's, else 0, selected on the fresh session
-// before it is prepared: no chunk exists that could be stamped with it.
-void build_plans(anira_handler& handler,
-                 const anira_model_config& model,
-                 const anira::capi::Derived& derived,
-                 const anira::capi::HardContract& hard) {
-    for (size_t index = 0; index < derived.m_plans.size(); ++index) {
-        const anira::capi::PlanKey& key = derived.m_plans[index];
-        const size_t row_index = key.m_row;
-        const anira::capi::ModelEntry& row = model.m_models[row_index];
-        anira::capi::Plan plan;
-        plan.m_row = row_index;
-        plan.m_info.variant = 0;
-        plan.m_info.engine = static_cast<uint32_t>(row.m_engine);
-        plan.m_info.provider = static_cast<uint32_t>(key.m_provider);
-        plan.m_info.engine_id = nullptr;
-        plan.m_info.provider_id = nullptr;
-        if (!key.m_provider_id.empty()) {
-            handler.m_report.m_strings.push_back(key.m_provider_id);
-            plan.m_info.provider_id = handler.m_report.m_strings.back().c_str();
-        }
-        plan.m_info.budget_ms = hard.m_budget_ms;
-        plan.m_info.memory_kind = static_cast<uint32_t>(memory_kind_of(handler, index));
-        // A built-in engine promises nothing through the flags; a registered engine's are its
-        // descriptor's.
-        plan.m_info.engine_flags = 0;
-        if (row.is_custom()) {
-            handler.m_report.m_strings.push_back(row.m_engine_id);
-            plan.m_info.engine_id = handler.m_report.m_strings.back().c_str();
-            if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
-                    registered_engine(handler.m_pipeline, row)) {
-                plan.m_info.engine_flags = engine->desc().flags;
+// plan is the first variant's: the first of its default engine's (of any engine without one) on
+// its default provider, else the first of its default engine's, else 0, selected on the fresh
+// session before it is prepared: no chunk exists that could be stamped with it.
+void build_plans(anira_handler& handler, const anira::capi::HardContract& hard) {
+    for (size_t variant = 0; variant < handler.m_variant_derived.size(); ++variant) {
+        const anira_model_config& model = handler.m_pipeline.m_variants[variant];
+        for (const anira::capi::PlanKey& key : handler.m_variant_derived[variant].m_plans) {
+            const size_t index = handler.m_plans.size();
+            const size_t row_index = key.m_row;
+            const anira::capi::ModelEntry& row = model.m_models[row_index];
+            anira::capi::Plan plan;
+            plan.m_variant = variant;
+            plan.m_row = row_index;
+            plan.m_info.variant = static_cast<uint32_t>(variant);
+            plan.m_info.engine = static_cast<uint32_t>(row.m_engine);
+            plan.m_info.provider = static_cast<uint32_t>(key.m_provider);
+            plan.m_info.engine_id = nullptr;
+            plan.m_info.provider_id = nullptr;
+            if (!key.m_provider_id.empty()) {
+                handler.m_report.m_strings.push_back(key.m_provider_id);
+                plan.m_info.provider_id = handler.m_report.m_strings.back().c_str();
             }
+            plan.m_info.budget_ms = hard.m_budget_ms;
+            plan.m_info.memory_kind = static_cast<uint32_t>(memory_kind_of(handler, index));
+            // A built-in engine promises nothing through the flags; a registered engine's are
+            // its descriptor's.
+            plan.m_info.engine_flags = 0;
+            if (row.is_custom()) {
+                handler.m_report.m_strings.push_back(row.m_engine_id);
+                plan.m_info.engine_id = handler.m_report.m_strings.back().c_str();
+                if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
+                        registered_engine(handler.m_pipeline, row)) {
+                    plan.m_info.engine_flags = engine->desc().flags;
+                }
+            }
+            handler.m_plans.push_back(plan);
         }
-        handler.m_plans.push_back(plan);
     }
+    // The first variant's plans are the table's first ones, in its derivation's order: the
+    // defaults that decide the start are that variant's own.
+    const anira_model_config& model = handler.m_pipeline.m_variants.front();
+    const std::vector<anira::capi::PlanKey>& first_plans =
+        handler.m_variant_derived.front().m_plans;
     std::optional<uint32_t> of_engine;
     std::optional<uint32_t> on_provider;
-    for (uint32_t i = 0; i < handler.m_plans.size(); ++i) {
+    for (uint32_t i = 0; i < first_plans.size(); ++i) {
         if (has_default_engine(model) &&
-            !names_default_engine(model, model.m_models[handler.m_plans[i].m_row])) {
+            !names_default_engine(model, model.m_models[first_plans[i].m_row])) {
             continue;
         }
         if (!of_engine.has_value()) { of_engine = i; }
-        if (names_default_provider(model, derived.m_plans[i])) {
+        if (names_default_provider(model, first_plans[i])) {
             on_provider = i;
             break;
         }
@@ -1396,7 +1519,7 @@ void build_plans(anira_handler& handler,
     const uint32_t initial = on_provider.value_or(of_engine.value_or(0));
     if ((has_default_engine(model) && !of_engine.has_value()) ||
         (has_default_provider(model) && !on_provider.has_value())) {
-        warn_default_fallback(model, derived.m_plans[initial], initial);
+        warn_default_fallback(model, first_plans[initial], initial);
     }
     if (!handler.m_manager->set_plan(initial)) {
         throw StatusError(
@@ -1491,77 +1614,87 @@ anira_binding binding_of(const anira::SessionElement& session,
 // anira::engine::Loaded::slot_edge) is above the worst class allowed is not eligible, an
 // ANIRA_EDGE_UNKNOWN edge above every limit, since it is above the scale. No limit
 // (ANIRA_EDGE_UNKNOWN, the default) checks nothing. Each such
-// plan leaves the validator's table, under the default candidate set and named candidates
+// plan leaves its variant's table, under the default candidate set and named candidates
 // alike, with an Info record of the group anira.capi naming its slots above the threshold,
-// their class, who moves their bytes and why; when none remains, ANIRA_ERROR_EDGE_UNREACHABLE
-// names every one. True when a plan was dropped: the session still holds the table before the
-// drop, so the caller makes it again over the plans that remain.
-bool drop_plans_over_edge_cost(anira_handler& handler,
-                               const anira_model_config& model,
-                               anira_edge_class worst_allowed) {
+// their class, who moves their bytes and why; when none of a variant remains,
+// ANIRA_ERROR_EDGE_UNREACHABLE names every one of that variant (every variant keeps a plan, as
+// under the candidate filter). True when a plan was dropped: the session still holds the table
+// before the drop, so the caller makes it again over the plans that remain.
+bool drop_plans_over_edge_cost(anira_handler& handler, anira_edge_class worst_allowed) {
     if (worst_allowed == ANIRA_EDGE_UNKNOWN) { return false; }  // no limit: every edge is within it
     const anira::SessionElement& session = handler.m_manager->session();
-    std::vector<anira::capi::PlanKey>& plans = handler.m_derived.m_plans;
-    std::vector<anira::capi::PlanKey> kept;
-    std::string dropped;
-    for (size_t index = 0; index < plans.size(); ++index) {
-        std::string slots;
-        for (const bool is_input : {true, false}) {
-            const std::vector<anira_tensor_spec>& specs =
-                is_input ? model.m_inputs : model.m_outputs;
-            for (uint32_t slot = 0; slot < specs.size(); ++slot) {
-                const anira::engine::Loaded::SlotEdge edge =
-                    edge_of(session, index, is_input, slot);
-                if (edge.m_class <= worst_allowed) { continue; }
-                slots += slots.empty() ? "" : "; ";
-                slots += std::string(is_input ? "input " : "output ") + std::to_string(slot) +
-                         " '" + specs[slot].m_name + "': edge " +
-                         anira::capi::edge_class_word(edge.m_class) + ", moved by " +
-                         anira::capi::movers_word(edge.m_moved_by);
-                if (edge.m_reason != nullptr) { slots += std::string(" (") + edge.m_reason + ")"; }
+    bool any_dropped = false;
+    size_t index = 0;  // the dense index, over the variants in order (the session's table)
+    for (size_t variant = 0; variant < handler.m_variant_derived.size(); ++variant) {
+        const anira_model_config& model = handler.m_pipeline.m_variants[variant];
+        const std::string prefix = variant_prefix(handler.m_pipeline, variant);
+        std::vector<anira::capi::PlanKey>& plans = handler.m_variant_derived[variant].m_plans;
+        std::vector<anira::capi::PlanKey> kept;
+        std::string dropped;
+        for (anira::capi::PlanKey& key : plans) {
+            const size_t plan_index = index++;
+            std::string slots;
+            for (const bool is_input : {true, false}) {
+                const std::vector<anira_tensor_spec>& specs =
+                    is_input ? model.m_inputs : model.m_outputs;
+                for (uint32_t slot = 0; slot < specs.size(); ++slot) {
+                    const anira::engine::Loaded::SlotEdge edge =
+                        edge_of(session, plan_index, is_input, slot);
+                    if (edge.m_class <= worst_allowed) { continue; }
+                    slots += slots.empty() ? "" : "; ";
+                    slots += std::string(is_input ? "input " : "output ") + std::to_string(slot) +
+                             " '" + specs[slot].m_name + "': edge " +
+                             anira::capi::edge_class_word(edge.m_class) + ", moved by " +
+                             anira::capi::movers_word(edge.m_moved_by);
+                    if (edge.m_reason != nullptr) {
+                        slots += std::string(" (") + edge.m_reason + ")";
+                    }
+                }
             }
+            if (slots.empty()) {
+                kept.push_back(std::move(key));
+                continue;
+            }
+            const anira::capi::ModelEntry& row = model.m_models[key.m_row];
+            const std::string plan = "models[" + std::to_string(key.m_row) + "] on " +
+                                     anira::capi::backend_label(row.m_engine,
+                                                                row.m_engine_id,
+                                                                key.m_provider,
+                                                                key.m_provider_id);
+            ANIRA_LOG_INFO(anira::log_group::k_capi,
+                           "anira_handler_prepare: %s%s is dropped, above the contract's edge "
+                           "cost (%s at most): %s",
+                           prefix.c_str(),
+                           plan.c_str(),
+                           anira::capi::edge_class_word(worst_allowed),
+                           slots.c_str());
+            dropped += dropped.empty() ? "" : "; ";
+            dropped += plan;
+            dropped += ": ";
+            dropped += slots;
         }
-        if (slots.empty()) {
-            kept.push_back(std::move(plans[index]));
-            continue;
+        if (dropped.empty()) { continue; }
+        if (kept.empty()) {
+            throw StatusError(
+                ANIRA_ERROR_EDGE_UNREACHABLE,
+                "handler: " + prefix + "no plan is within the contract's edge cost (" +
+                    anira::capi::edge_class_word(worst_allowed) + " at most): " + dropped);
         }
-        const anira::capi::PlanKey& key = plans[index];
-        const anira::capi::ModelEntry& row = model.m_models[key.m_row];
-        const std::string plan = "models[" + std::to_string(key.m_row) + "] on " +
-                                 anira::capi::backend_label(row.m_engine,
-                                                            row.m_engine_id,
-                                                            key.m_provider,
-                                                            key.m_provider_id);
-        ANIRA_LOG_INFO(anira::log_group::k_capi,
-                       "anira_handler_prepare: %s is dropped, above the contract's edge cost "
-                       "(%s at most): %s",
-                       plan.c_str(),
-                       anira::capi::edge_class_word(worst_allowed),
-                       slots.c_str());
-        dropped += dropped.empty() ? "" : "; ";
-        dropped += plan;
-        dropped += ": ";
-        dropped += slots;
+        plans = std::move(kept);
+        keep_rows_with_plans(handler.m_variant_derived[variant]);
+        any_dropped = true;
     }
-    if (dropped.empty()) { return false; }
-    if (kept.empty()) {
-        throw StatusError(ANIRA_ERROR_EDGE_UNREACHABLE,
-                          std::string("handler: no plan is within the contract's edge cost (") +
-                              anira::capi::edge_class_word(worst_allowed) +
-                              " at most): " + dropped);
-    }
-    plans = std::move(kept);
-    keep_rows_with_plans(handler.m_derived);
-    return true;
+    return any_dropped;
 }
 
 // The plan report: the plan rows, the slots of every plan (their binding read off the
 // session's loaded models, under the same dense index) and the extensions each plan's
 // candidate consumes (`consumers` are the pipeline's: its processor and its registered engines,
 // whose rows read the engine's id); every string the rows point at is copied into the
-// report's store.
+// report's store. A plan's rows are read off its own variant: the model config and the
+// derivation of that variant (the form is the same in every one; whether a window was derived
+// and the extensions are the variant's).
 void build_report(anira_handler& handler,
-                  const anira_model_config& model,
                   const anira_contract& snapshot,
                   const std::vector<anira::capi::ExtConsumer>& consumers,
                   const anira::capi::HostDomains& host_domains) {
@@ -1571,6 +1704,8 @@ void build_report(anira_handler& handler,
     const anira_wait_strategy wait = anira::Core::get_wait_strategy();
     for (size_t index = 0; index < handler.m_plans.size(); ++index) {
         const anira::capi::Plan& plan = handler.m_plans[index];
+        const anira_model_config& model = handler.m_pipeline.m_variants[plan.m_variant];
+        const anira::capi::Derived& derived = handler.m_variant_derived[plan.m_variant];
         report.m_plans.push_back(plan.m_info);
         std::vector<anira_plan_slot> inputs;
         inputs.reserve(handler.m_num_inputs);
@@ -1581,7 +1716,7 @@ void build_report(anira_handler& handler,
                                   .m_edge = edge_of(session, index, true, i),
                                   .m_dtype = model.m_inputs[i].m_dtype,
                                   .m_ring_dtype = ring_dtype_of(handler.m_input_ports, i),
-                                  .m_derived = &handler.m_derived.m_inputs[i]};
+                                  .m_derived = &derived.m_inputs[i]};
             inputs.push_back(host_slot(i, true, wait, facts));
         }
         std::vector<anira_plan_slot> outputs;
@@ -1593,7 +1728,7 @@ void build_report(anira_handler& handler,
                                   .m_edge = edge_of(session, index, false, i),
                                   .m_dtype = model.m_outputs[i].m_dtype,
                                   .m_ring_dtype = ring_dtype_of(handler.m_output_ports, i),
-                                  .m_derived = &handler.m_derived.m_outputs[i]};
+                                  .m_derived = &derived.m_outputs[i]};
             outputs.push_back(host_slot(i, false, wait, facts));
         }
         report.m_inputs.push_back(std::move(inputs));
@@ -1698,7 +1833,7 @@ void log_slots(uint32_t plan,
 // readable and well inside the synchronous logger's 1023 characters (these records do not go
 // through the real-time queue, whose records hold 255). Nothing is logged under a runtime level
 // above Info, and nothing is compiled under ANIRA_WITH_LOGGING=OFF.
-void log_report(const anira_handler& handler, const anira_model_config& model) {
+void log_report([[maybe_unused]] const anira_handler& handler) {
 #ifdef ENABLE_LOGGING
     const anira_plan_report& report = handler.m_report;
     const auto num_plans = static_cast<uint32_t>(report.m_plans.size());
@@ -1711,6 +1846,11 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
                    handler.m_manager->get_plan());
     for (uint32_t i = 0; i < num_plans; ++i) {
         const anira_plan_info& info = report.m_plans[i];
+        // The plan's own variant: its tensors' names and what the validator derived for it.
+        const anira_model_config& model =
+            handler.m_pipeline.m_variants[handler.m_plans[i].m_variant];
+        const anira::capi::Derived& derived =
+            handler.m_variant_derived[handler.m_plans[i].m_variant];
         const std::string engine =
             anira::capi::engine_label(static_cast<anira_engine>(info.engine),
                                       info.engine_id != nullptr ? info.engine_id : "");
@@ -1728,8 +1868,8 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
             info.budget_ms,
             handler.m_contract.hard()->m_budget == ANIRA_BUDGET_MEASURED ? "measured" : "explicit",
             anira::platform::memory_kind_word(static_cast<anira_memory_kind>(info.memory_kind)));
-        log_slots(i, report.m_inputs[i], model.m_inputs, handler.m_derived.m_inputs, "input");
-        log_slots(i, report.m_outputs[i], model.m_outputs, handler.m_derived.m_outputs, "output");
+        log_slots(i, report.m_inputs[i], model.m_inputs, derived.m_inputs, "input");
+        log_slots(i, report.m_outputs[i], model.m_outputs, derived.m_outputs, "output");
         for (const anira_plan_ext& ext : report.m_exts[i]) {
             ANIRA_LOG_INFO(anira::log_group::k_capi,
                            "anira_handler_prepare: plan %u: ext %u: %s, kind %s, consumer %s",
@@ -1740,9 +1880,6 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
                            ext.consumer);
         }
     }
-#else
-    static_cast<void>(handler);
-    static_cast<void>(model);
 #endif
 }
 
@@ -1789,6 +1926,18 @@ void set_real_time(anira_plan_info& info,
     info.median_ms = figure->m_median_ms;
     info.rt_factor = anira::LatencyCalculator::hop_periods(derived, hard, figure->m_measured_ms);
     info.rt_verdict = static_cast<uint32_t>(rt_verdict_of(info.rt_factor, info.rt_parallel));
+}
+
+// The inferences of one plan that run at once (anira_plan_info.rt_parallel): 1 for an exclusive
+// session, else the shared instances of the plan's loaded model, its own variant's
+// max_instances as the core resolved and clamped it. The session is sized for the fewest over
+// the variants (anira::VariantBounds), which is this figure in a stage of one variant.
+uint32_t parallel_of(const anira::SessionElement& session, uint32_t plan) noexcept {
+    if (session.exclusive() || plan >= session.m_plans.size() ||
+        session.m_plans[plan].m_loaded == nullptr) {
+        return std::max<uint32_t>(session.m_num_instances, 1);
+    }
+    return std::max<uint32_t>(session.m_plans[plan].m_loaded->model().m_instances, 1);
 }
 
 // What a prepare knows of one plan's inference time: nothing (no warm-up, or not yet), what its
@@ -1847,7 +1996,8 @@ anira::FigureKey figure_key(const anira_handler& handler,
     key.m_model.m_bytes = nullptr;
     key.m_model.m_bytes_owner.reset();
     const anira::capi::ModelEntry& row =
-        handler.m_pipeline.m_variants[0].m_models[handler.m_plans[plan].m_row];
+        handler.m_pipeline.m_variants[handler.m_plans[plan].m_variant]
+            .m_models[handler.m_plans[plan].m_row];
     if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
             registered_engine(handler.m_pipeline, row)) {
         // The engine's id: every registration of one id shares the figure (identical plugins
@@ -2129,12 +2279,13 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // The snapshot: the handle may be destroyed when the call returns; the handler keeps it
     // (moved into handler.m_contract below, once the previous session is released).
     anira_contract snapshot = contract;
-    const anira_model_config& model = handler.m_pipeline.m_variants[0];
-    const std::vector<anira_backend_id> ids = handler.m_pipeline.candidate_ids();
-    const auto num_ids = static_cast<uint32_t>(ids.size());
+    // The first variant stands for the form below: the tensors' names, roles and dtypes, the
+    // anchor and the extents are the same in every variant (check_same_form).
+    const anira_model_config& model = handler.m_pipeline.m_variants.front();
 
     // Every rule (the contract's, the structural ones again, the extension walk with the
-    // contract's bag), then the miss policy against the anchor. The
+    // contract's bag) for every variant, each compared with the first under the contract, then
+    // the miss policy against the anchor. The
     // processor relaxes the ring dtype rule for a side whose phase it fills, and its consumed
     // kinds join the walk; a registered engine's row is a plan, and its consumed kinds join
     // the walk too.
@@ -2142,30 +2293,31 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     const anira::capi::ProcessorFacts processors = anira::capi::processor_facts(processor);
     const anira::capi::EngineFacts engines =
         anira::capi::engine_facts(handler.m_pipeline.m_engines);
-    anira::capi::Derived derived;
-    anira::capi::validate(model,
-                          &snapshot,
-                          candidates_of(ids),
-                          num_ids,
-                          derived,
-                          &processors,
-                          &engines,
-                          handler.m_pipeline.m_default_set);
+    std::vector<anira::capi::Derived> variants =
+        validate_variants(handler.m_pipeline, &snapshot, processors, engines);
+    const anira::capi::Derived& derived = variants.front();
     const anira::capi::HardContract& hard = *snapshot.hard();  // validate refused Async
     check_buffer_specs(model);
     check_realtime_phases(processor);
     const anira::RingDtypes ring_dtypes = anira::capi::ring_dtypes_of(snapshot, model);
     check_host_blocks(hard);
     check_miss_policy(hard, model, derived, ring_dtypes);
-    // The plans' providers against what their engines serve, as at create: a built-in
-    // engine's runtime as the context reports it now (a context probed again since is seen
-    // here), a custom engine's query as it answered at create (the query runs on the main
+    // The plans' providers against what their engines serve, as at create, variant by variant:
+    // a built-in engine's runtime as the context reports it now (a context probed again since is
+    // seen here), a custom engine's query as it answered at create (the query runs on the main
     // thread only; a prepare may run on any control thread).
-    check_providers(*handler.m_context,
-                    handler.m_pipeline,
-                    derived,
-                    handler.m_query_answers,
-                    anira::capi::QueryUse::Reuse);
+    for (size_t variant = 0; variant < variants.size(); ++variant) {
+        check_providers(*handler.m_context,
+                        handler.m_pipeline,
+                        variant,
+                        variants[variant],
+                        handler.m_query_answers,
+                        anira::capi::QueryUse::Reuse);
+    }
+    // What sizes the session over the variants: the largest internal latency per output (a
+    // difference is one Warning, never a refusal) and the fewest instances.
+    const anira::VariantBounds bounds = variant_bounds(handler.m_pipeline);
+    warn_internal_latencies(handler.m_pipeline, bounds);
     // The processor's init, once per registration, at the first prepare of a handler of the
     // pipeline that survives validation, before any model loads (a refused init throws none of
     // that work away and is tried again by the next prepare), with the facts of the core in
@@ -2198,12 +2350,14 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // construction. The one processor the session runs every chunk on is the processor runner,
     // whether the pipeline has a processor or not: without one it runs the default bodies, which
     // are the 2.x default processor's. The plan table is the session's from its construction: one
-    // plan per surviving row, in entry order, what build_plans reports under the same indices.
-    // The session reads the configuration by reference: the snapshot's Hard half and the
-    // derivation are the handler's from here on, beside the variant.
+    // plan per variant, surviving row and provider, in variant order and entry order, what
+    // build_plans reports under the same indices.
+    // The session reads the configuration by reference: the snapshot's Hard half and the form of
+    // the stream are the handler's from here on, beside every variant's own derivation.
     check_stream_ports(derived, handler, "anira_handler_prepare");
     handler.m_contract = std::move(snapshot);
-    handler.m_derived = std::move(derived);
+    handler.m_derived = anira::capi::form_of(derived);
+    handler.m_variant_derived = std::move(variants);
     const anira_contract& prepared_contract = handler.m_contract;
     const anira::capi::HardContract& prepared_hard = *prepared_contract.hard();
     const anira::capi::Derived& prepared = handler.m_derived;
@@ -2211,21 +2365,22 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                                                                   handler.m_input_ports,
                                                                   handler.m_output_ports);
     anira::capi::ProcessorRunner* const processor_runner = handler.m_pp.get();
-    const auto make_session = [&handler, &model, &prepared, &prepared_hard] {
-        return std::make_unique<anira::InferenceManager>(*handler.m_pp,
-                                                         model,
-                                                         prepared,
-                                                         prepared_hard,
-                                                         plan_requests(handler, prepared),
-                                                         handler.m_context->m_config,
-                                                         &handler.m_rt);
+    const auto make_session = [&handler, &bounds, &prepared, &prepared_hard] {
+        return std::make_unique<anira::InferenceManager>(
+            *handler.m_pp,
+            bounds,
+            prepared,
+            prepared_hard,
+            plan_requests(handler, handler.m_variant_derived),
+            handler.m_context->m_config,
+            &handler.m_rt);
     };
     handler.m_manager = make_session();
     // The contract's edge cost, checked on the loaded plans (a plan's edges are its engine's):
     // a plan above it leaves the table, and the session is made again over the plans that
     // remain while the first one still holds their loaded models, so the pool hands the same
     // ones over and none loads twice; the first goes when the block ends.
-    if (drop_plans_over_edge_cost(handler, model, prepared_contract.m_edge_cost)) {
+    if (drop_plans_over_edge_cost(handler, prepared_contract.m_edge_cost)) {
         const std::unique_ptr<anira::InferenceManager> first = std::move(handler.m_manager);
         handler.m_manager = make_session();
     }
@@ -2239,7 +2394,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         prepared_hard.m_on_miss == ANIRA_MISS_CALLBACK ? &drop_hook : nullptr,
         &handler);
     // The report's plan rows and the initial selection, on the session before it is prepared.
-    build_plans(handler, model, prepared, prepared_hard);
+    build_plans(handler, prepared_hard);
 
     // The session sized for an inference time: the session's prepare (its structs, its rings in
     // their stream ports, the latency), the processor bound to it, and what the driver thread
@@ -2362,13 +2517,12 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         if (measurements[plan].m_source == PlanMeasurement::Source::Reused) {
             const anira::WarmupFigure& figure = measurements[plan].m_figure.m_figure;
             if (measured) { row.budget_ms = figure.m_measured_ms; }
-            set_real_time(row, &figure, true, prepared, prepared_hard, session.m_num_instances);
+            set_real_time(row, &figure, true, prepared, prepared_hard, parallel_of(session, plan));
         } else {
-            set_real_time(row, nullptr, false, prepared, prepared_hard, session.m_num_instances);
+            set_real_time(row, nullptr, false, prepared, prepared_hard, parallel_of(session, plan));
         }
     }
     build_report(handler,
-                 model,
                  prepared_contract,
                  anira::capi::pipeline_consumers(&processors, &engines),
                  host_domains);
@@ -2469,7 +2623,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                           measurement.m_source == PlanMeasurement::Source::Reused,
                           prepared,
                           prepared_hard,
-                          session.m_num_instances);
+                          parallel_of(session, plan));
             handler.m_report.m_plans[plan] = row;
         }
         // The session again, sized for what the pass measured (an explicit budget sizes it as
@@ -2497,7 +2651,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     }
 
     log_measurement(handler, measurements);
-    log_report(handler, model);
+    log_report(handler);
     const uint32_t suppressed = handler.m_rt.rearm();
     if (suppressed > 0) {
         ANIRA_LOG_WARNING(anira::log_group::k_capi,
@@ -2653,13 +2807,6 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
                            "pipeline: variants[%u] is NULL",
                            i);
     }
-    ANIRA_CAPI_REQUIRE(num_variants == 1,
-                       err,
-                       ANIRA_ERROR_NOT_SUPPORTED,
-                       "pipeline: %u variants; one variant per inference stage in this "
-                       "pre-release (plan sets over several variants arrive with a later "
-                       "pre-release)",
-                       num_variants);
     ANIRA_CAPI_REQUIRE(!pipeline->m_has_inference,
                        err,
                        ANIRA_ERROR_CONFIG,
@@ -2739,36 +2886,42 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
     if (candidates == nullptr || num_candidates == 0) {
         // The default set: every engine this build carries, on the CPU path, plus every
         // custom engine an entry names (ANIRA_ENGINE_CUSTOM with its id), plus the provider
-        // every pinned entry of the variant names, on that entry's engine, so that a pinned
-        // entry runs on its pin and a neutral one on the CPU path. Under it an entry for an
-        // engine this build lacks is skipped, not refused (with a NULL list check_rows would
-        // refuse it), its pin included.
+        // every pinned entry names, on that entry's engine, so that a pinned entry runs on its
+        // pin and a neutral one on the CPU path: the union over the entries of every variant,
+        // in variant order. Under it an entry for an engine this build lacks is skipped, not
+        // refused (with a NULL list check_rows would refuse it), its pin included.
+        std::vector<const anira::capi::ModelEntry*> rows;
+        for (uint32_t i = 0; i < num_variants; ++i) {
+            for (const anira::capi::ModelEntry& row : variants[i]->m_models) {
+                rows.push_back(&row);
+            }
+        }
         for (const anira_engine engine : anira::capi::enabled_engines()) {
             anira::capi::Candidate candidate;
             candidate.m_id.engine = static_cast<uint32_t>(engine);
             candidate.m_id.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
             list.push_back(std::move(candidate));
         }
-        for (const anira::capi::ModelEntry& row : variants[0]->m_models) {
-            if (!row.is_custom()) { continue; }
-            const bool listed = std::ranges::any_of(list, [&row](const anira::capi::Candidate& c) {
-                return c.m_engine_id == row.m_engine_id;
+        for (const anira::capi::ModelEntry* const row : rows) {
+            if (!row->is_custom()) { continue; }
+            const bool listed = std::ranges::any_of(list, [row](const anira::capi::Candidate& c) {
+                return c.m_engine_id == row->m_engine_id;
             });
             if (listed) { continue; }
             anira::capi::Candidate custom;
             custom.m_id.engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
             custom.m_id.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
-            custom.m_engine_id = row.m_engine_id;
+            custom.m_engine_id = row->m_engine_id;
             list.push_back(std::move(custom));
         }
-        for (const anira::capi::ModelEntry& row : variants[0]->m_models) {
-            if (!row.is_pinned()) { continue; }
-            if (!row.is_custom() && !anira::capi::engine_enabled(row.m_engine)) { continue; }
+        for (const anira::capi::ModelEntry* const row : rows) {
+            if (!row->is_pinned()) { continue; }
+            if (!row->is_custom() && !anira::capi::engine_enabled(row->m_engine)) { continue; }
             anira::capi::Candidate pinned;
-            pinned.m_id.engine = static_cast<uint32_t>(row.m_engine);
-            pinned.m_id.provider = static_cast<uint32_t>(row.m_provider);
-            pinned.m_engine_id = row.m_engine_id;
-            pinned.m_provider_id = row.m_provider_id;
+            pinned.m_id.engine = static_cast<uint32_t>(row->m_engine);
+            pinned.m_id.provider = static_cast<uint32_t>(row->m_provider);
+            pinned.m_engine_id = row->m_engine_id;
+            pinned.m_provider_id = row->m_provider_id;
             const bool listed =
                 std::ranges::any_of(list, [&pinned](const anira::capi::Candidate& c) {
                     return c.m_id.engine == pinned.m_id.engine &&
@@ -2801,7 +2954,10 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
             list.push_back(std::move(candidate));
         }
     }
-    pipeline->m_variants.push_back(anira::capi::clone_model_config(*variants[0]));
+    pipeline->m_variants.reserve(num_variants);
+    for (uint32_t i = 0; i < num_variants; ++i) {
+        pipeline->m_variants.push_back(anira::capi::clone_model_config(*variants[i]));
+    }
     pipeline->m_default_set = candidates == nullptr || num_candidates == 0;
     pipeline->m_candidates = std::move(list);
     pipeline->m_has_inference = true;
@@ -3083,31 +3239,34 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
                        ANIRA_ERROR_CONFIG,
                        "handler: the pipeline has no inference stage "
                        "(anira_pipeline_add_inference)");
-    // The structural check with no contract: the tensors, the axes, the layouts, the named
-    // candidates against this build and the pipeline's registrations, the extension walk
-    // over the model and its specs; a variant no candidate matches is CONFIG here. Nothing
-    // loads: the models load at prepare, where the session needs the contract.
-    const std::vector<anira_backend_id> ids = pipeline->candidate_ids();
+    // The structural check with no contract, variant by variant: the tensors, the axes, the
+    // layouts, the named candidates against this build and the pipeline's registrations, the
+    // extension walk over the model and its specs; a variant no candidate matches is CONFIG
+    // here, and so is a variant of another form than the first (the contract-less derivation;
+    // prepare compares again under the contract). Nothing loads: the models load at prepare,
+    // where the session needs the contract.
     const anira::capi::ProcessorFacts processors =
         anira::capi::processor_facts(pipeline->m_processor.get());
     const anira::capi::EngineFacts engines = anira::capi::engine_facts(pipeline->m_engines);
-    anira::capi::Derived derived;
-    anira::capi::validate(pipeline->m_variants[0],
-                          nullptr,
-                          candidates_of(ids),
-                          static_cast<uint32_t>(ids.size()),
-                          derived,
-                          &processors,
-                          &engines,
-                          pipeline->m_default_set);
+    std::vector<anira::capi::Derived> variants =
+        validate_variants(*pipeline, nullptr, processors, engines);
     // The custom engines' queries run here, on the main thread, and the handler keeps their
     // answers for its prepares.
     anira::capi::QueryAnswers answers;
-    check_providers(*context, *pipeline, derived, answers, anira::capi::QueryUse::Ask);
+    for (size_t variant = 0; variant < variants.size(); ++variant) {
+        check_providers(*context,
+                        *pipeline,
+                        variant,
+                        variants[variant],
+                        answers,
+                        anira::capi::QueryUse::Ask);
+    }
     check_option_sets(*context, *pipeline, answers);
+    // The form of the stream: the first variant's, which every other one has.
+    const anira::capi::Derived& derived = variants.front();
 
-    // The ports, one per tensor of either list of the variant (the copy below has the same
-    // lists), made with the handler.
+    // The ports, one per tensor of either list of the first variant (every variant has the same
+    // lists, and so has the copy below), made with the handler.
     auto handler = std::make_unique<anira_handler>(pipeline->m_variants[0].m_inputs.size(),
                                                    pipeline->m_variants[0].m_outputs.size());
     handler->m_pipeline = anira_pipeline(*pipeline);
