@@ -784,6 +784,7 @@ void zero_state_ports(anira_handler& handler) noexcept {
         if (state == nullptr || !state->m_value.has_value()) { continue; }
         state->m_value->zero_both();
         state->m_generation = anira::capi::StatePort::k_no_generation;
+        state->m_state_epoch = 0;
     }
 }
 

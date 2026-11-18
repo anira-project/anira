@@ -55,6 +55,9 @@ bool valid_warmup_mode(anira_warmup_mode mode) {
 bool valid_miss_policy(anira_miss_policy policy) {
     return policy >= ANIRA_MISS_BYPASS && policy <= ANIRA_MISS_CALLBACK;
 }
+bool valid_variant_state(anira_variant_state state) {
+    return state == ANIRA_VARIANT_STATE_FRESH || state == ANIRA_VARIANT_STATE_KEEP;
+}
 bool valid_late_policy(anira_late_policy policy) {
     return policy == ANIRA_LATE_FINISH || policy == ANIRA_LATE_DROP;
 }
@@ -391,6 +394,17 @@ anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract* contract
     if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
     if (!valid_miss_policy(policy)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     hard->m_on_miss = policy;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_contract_hard_set_variant_state(anira_contract* contract,
+                                                              anira_variant_state state)
+    ANIRA_NOEXCEPT try {
+    if (contract == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    if (!valid_variant_state(state)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    hard->m_variant_state = state;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
@@ -1411,6 +1425,16 @@ anira_status ANIRA_CALL anira_contract_hard_on_miss(const anira_contract* contra
     const anira::capi::HardContract* hard = contract->hard();
     if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
     *policy = hard->m_on_miss;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_contract_hard_variant_state(const anira_contract* contract,
+                                                          anira_variant_state* state) ANIRA_NOEXCEPT
+    try {
+    if (contract == nullptr || state == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    *state = hard->m_variant_state;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 

@@ -15,13 +15,21 @@
 //   the switch          a stream that switches variants equals, block by block, the model that
 //                       was selected when the block was formed; nothing fills, the latency stays,
 //                       and a chunk in flight finishes on its variant;
+//   the state           what the model's state is at a variant switch
+//                       (anira_contract_hard_set_variant_state): fresh by default (the declared
+//                       State pairs at zeros and the plan's engine reset ahead of the first
+//                       inference formed on the other variant), kept when the contract says so; a
+//                       plan switch inside one variant keeps it in both modes, and a chunk in
+//                       flight across a fresh switch keeps the state it ran with;
 //   the measurement     every plan of every variant is warmed up, and the session runs the
 //                       slowest figure;
 //   real models         a bundled model file twice, as two variants, on every engine of the build.
 //
 // The engine-free cases run on a registered engine whose loaded model is a gain: the factor is
 // the number its entry's path spells, read through the load record's variant, so every plan of a
-// table answers a stream of its own and a block says which plan ran it.
+// table answers a stream of its own and a block says which plan ran it. The state cases run on a
+// second one, which adds its entry's number to a declared State pair per inference and counts its
+// own inferences since its last reset.
 
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -168,7 +176,166 @@ anira_custom_engine* make_factor_engine(FactorEngine& engine,
     return object;
 }
 
+// ---- the engine of the state cases ------------------------------------------------------------
+
+/// The engine with state: a mono stream and one declared State pair.
+constexpr const char* k_step_engine = "org.example.variant_steps";
+
+/// A registered C engine with both kinds of state. The declared state is the model's State pair
+/// (input slot 1 fed from output slot 1): every inference adds the loaded model's step (the
+/// number its entry's path spells, times k_npu_factor on the provider k_npu) to the state it
+/// reads, writes the sum as the new state and fills its output hop with it, so a block of the
+/// stream says what the state was. The state the engine keeps inside itself is per prepared
+/// handle, one per plan of an exclusive handler: the count of its inferences since its last
+/// reset. Every call and every reset is recorded in order. A closed gate holds a call inside
+/// process.
+struct StepEngine {
+    struct Loaded {
+        float m_step = 0.0F;
+    };
+    struct Prepared {
+        float m_step = 0.0F;
+        int m_since_reset = 0;
+    };
+    static constexpr size_t k_capacity = 64;
+
+    std::atomic<bool> m_open{true};
+    std::atomic<int> m_held{0};
+    std::atomic<int> m_calls{0};
+    std::atomic<int> m_resets{0};
+    /// Per call: the step of the loaded model that ran, the declared state as it found it and
+    /// its own count before the call.
+    std::array<std::atomic<float>, k_capacity> m_step{};
+    std::array<std::atomic<float>, k_capacity> m_state_read{};
+    std::array<std::atomic<int>, k_capacity> m_since_reset{};
+    /// Per reset: the step of the plan whose engine was reset.
+    std::array<std::atomic<float>, k_capacity> m_reset_step{};
+
+    template <class Value>
+    static std::vector<Value> first_of(const std::array<std::atomic<Value>, k_capacity>& values,
+                                       int count) {
+        std::vector<Value> out;
+        for (int i = 0; i < count && static_cast<size_t>(i) < k_capacity; ++i) {
+            out.push_back(values.at(static_cast<size_t>(i)).load());
+        }
+        return out;
+    }
+    std::vector<float> steps() const { return first_of(m_step, m_calls.load()); }
+    std::vector<float> states_read() const { return first_of(m_state_read, m_calls.load()); }
+    std::vector<int> counts() const { return first_of(m_since_reset, m_calls.load()); }
+    std::vector<float> resets() const { return first_of(m_reset_step, m_resets.load()); }
+};
+
+anira_status ANIRA_CALL step_load(const anira_engine_load_info* info,
+                                  void* /*user_data*/,
+                                  void** out_loaded) {
+    const char* path = anira_model_config_model_path(info->model, info->row);
+    if (path == nullptr) { return ANIRA_ERROR_CONFIG; }
+    auto loaded = std::make_unique<StepEngine::Loaded>();
+    loaded->m_step = static_cast<float>(std::atof(path));
+    if (info->provider_id != nullptr && std::string_view(info->provider_id) == k_npu) {
+        loaded->m_step *= k_npu_factor;
+    }
+    *out_loaded = loaded.release();
+    return ANIRA_OK;
+}
+
+void ANIRA_CALL step_unload(void* loaded, void* /*user_data*/) {
+    delete static_cast<StepEngine::Loaded*>(loaded);
+}
+
+anira_status ANIRA_CALL step_prepare(const anira_prepare_info* /*info*/,
+                                     void* loaded,
+                                     void* /*user_data*/,
+                                     void** out_prepared) {
+    if (loaded == nullptr) { return ANIRA_ERROR_INTERNAL; }
+    auto prepared = std::make_unique<StepEngine::Prepared>();
+    prepared->m_step = static_cast<const StepEngine::Loaded*>(loaded)->m_step;
+    *out_prepared = prepared.release();
+    return ANIRA_OK;
+}
+
+void ANIRA_CALL step_unprepare(void* prepared, void* /*user_data*/) {
+    delete static_cast<StepEngine::Prepared*>(prepared);
+}
+
+void ANIRA_CALL step_reset(const anira_engine_ctx* /*ctx*/, void* prepared, void* user_data) {
+    auto* engine = static_cast<StepEngine*>(user_data);
+    auto* own = static_cast<StepEngine::Prepared*>(prepared);
+    if (own == nullptr) { return; }
+    own->m_since_reset = 0;
+    const auto reset = static_cast<size_t>(engine->m_resets.fetch_add(1));
+    if (reset < StepEngine::k_capacity) { engine->m_reset_step.at(reset).store(own->m_step); }
+}
+
+anira_status ANIRA_CALL step_process(const anira_engine_ctx* ctx, void* prepared, void* user_data) {
+    auto* engine = static_cast<StepEngine*>(user_data);
+    auto* own = static_cast<StepEngine::Prepared*>(prepared);
+    if (own == nullptr || ctx->num_inputs < 2 || ctx->num_outputs < 2) {
+        return ANIRA_ERROR_INTERNAL;
+    }
+    engine->m_held.fetch_add(1);
+    while (!engine->m_open.load()) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
+    engine->m_held.fetch_sub(1);
+    const float* state_in = anira_tensor_data_f32(&ctx->inputs[1]);
+    float* state_out = anira_tensor_data_f32(&ctx->outputs[1]);
+    float* out = anira_tensor_data_f32(&ctx->outputs[0]);
+    if (state_in == nullptr || state_out == nullptr || out == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const auto call = static_cast<size_t>(engine->m_calls.load());
+    if (call < StepEngine::k_capacity) {
+        engine->m_step.at(call).store(own->m_step);
+        engine->m_state_read.at(call).store(state_in[0]);
+        engine->m_since_reset.at(call).store(own->m_since_reset);
+    }
+    const float next = state_in[0] + own->m_step;
+    state_out[0] = next;
+    for (size_t i = 0; i < anira_test::elements_of(ctx->outputs[0]); ++i) { out[i] = next; }
+    ++own->m_since_reset;
+    engine->m_calls.fetch_add(1);
+    return ANIRA_OK;
+}
+
+anira_custom_engine* make_step_engine(StepEngine& engine) {
+    anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+    desc.user_data = &engine;
+    desc.load = step_load;
+    desc.unload = step_unload;
+    desc.prepare = step_prepare;
+    desc.unprepare = step_unprepare;
+    desc.reset = step_reset;
+    desc.process = step_process;
+    desc.providers = k_served.data();
+    desc.num_providers = static_cast<uint32_t>(k_served.size());
+    anira_custom_engine* object = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(anira_custom_engine_create(k_step_engine, &desc, &object, &err), ANIRA_OK)
+        << err.message;
+    return object;
+}
+
 // ---- the models ------------------------------------------------------------------------------
+
+/// A State tensor of four elements.
+anira::TensorSpec state_tensor(std::string_view name) {
+    anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    spec.axis(0, ANIRA_AXIS_ANY, 4);
+    return spec;
+}
+
+/// The model of the state cases: a mono stream of k_block samples per inference on either side
+/// and one declared State pair ("state_in" fed from "state_out"), over one entry of the step
+/// engine whose path spells the model's step. A declared pair makes the handler exclusive.
+anira::ModelConfig step_model(const char* step) {
+    anira::ModelConfig model;
+    model.add_model_path(k_step_engine, step);
+    model.input(anira_test::stream_tensor("in", 1, k_block, k_block));
+    model.input(state_tensor("state_in").state_source("state_out"));
+    model.output(anira_test::stream_tensor("out", 1, k_block, k_block));
+    model.output(state_tensor("state_out"));
+    return model;
+}
 
 /// A mono stream of k_block samples per inference on either side ("in", "out") over one entry
 /// of `engine` whose path spells the model's factor.
@@ -205,7 +372,7 @@ anira::ContractHandle plain_contract(anira_miss_policy on_miss = ANIRA_MISS_ZERO
 
 // ---- the rig ---------------------------------------------------------------------------------
 
-/// A context, a pipeline with the two engines and an inference stage over `variants` under
+/// A context, a pipeline with the three engines and an inference stage over `variants` under
 /// `candidates` (none: the default set), an optional processor, and the handler over it. The
 /// status of the stage's add and of the create are m_status (the first that failed), with its
 /// message; a test prepares the handler itself.
@@ -221,10 +388,13 @@ public:
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &err), ANIRA_OK) << err.message;
         anira_custom_engine* const first = make_factor_engine(m_engine, k_engine, k_served);
         anira_custom_engine* const second = make_factor_engine(m_other, k_other_engine);
+        anira_custom_engine* const third = make_step_engine(m_steps);
         anira_test::add_engine(m_pipeline, first);
         anira_test::add_engine(m_pipeline, second);
+        anira_test::add_engine(m_pipeline, third);
         anira_custom_engine_destroy(first);
         anira_custom_engine_destroy(second);
+        anira_custom_engine_destroy(third);
         std::vector<const anira_model_config*> natives;
         natives.reserve(variants.size());
         for (const anira::ModelConfig* variant : variants) { natives.push_back(variant->native()); }
@@ -245,6 +415,7 @@ public:
     ~Rig() {
         m_engine.m_open.store(true);
         m_other.m_open.store(true);
+        m_steps.m_open.store(true);
         anira_handler_destroy(m_handler);
         anira_pipeline_destroy(m_pipeline);
     }
@@ -295,8 +466,28 @@ public:
         return block;
     }
 
+    /// One block into the input ring alone (anira_handler_push_data): its chunk is formed and
+    /// submitted, nothing is popped.
+    anira_status push(std::span<const float> in) const {
+        const std::array<const float*, 1> planes{in.data()};
+        const anira_tensor block = anira_test::planar_f32(planes.data(), 1, in.size());
+        return anira_handler_push_data(m_handler, &block, 0);
+    }
+
+    /// One block of `samples` out of the output ring alone (anira_handler_pop_data).
+    std::vector<float> pop(size_t samples) const {
+        std::vector<float> block(samples, -1.0F);
+        const std::array<float*, 1> planes{block.data()};
+        const anira_tensor out = anira_test::planar_f32(planes.data(), 1, samples);
+        size_t delivered = 0;
+        EXPECT_EQ(anira_handler_pop_data(m_handler, &out, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(delivered, samples);
+        return block;
+    }
+
     FactorEngine m_engine;  ///< before the handler, which dies first
     FactorEngine m_other;
+    StepEngine m_steps;
     anira_status m_status = ANIRA_OK;
     std::string m_message;
 
@@ -549,13 +740,6 @@ anira::TensorSpec windowed(std::string_view name,
     anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
     spec.axis(0, ANIRA_AXIS_CHANNEL, 1).axis(1, ANIRA_AXIS_TIME, time);
     spec.window(window_min, window_max, overlap);
-    return spec;
-}
-
-/// A State tensor of four elements.
-anira::TensorSpec state_tensor(std::string_view name) {
-    anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
-    spec.axis(0, ANIRA_AXIS_ANY, 4);
     return spec;
 }
 
@@ -1190,4 +1374,212 @@ TEST(Variants, ABundledModelTwiceRunsOnEveryEngine) {
         *std::max_element(expected.begin() + static_cast<std::ptrdiff_t>(priming), expected.end()),
         0.0F)
         << "the oracle's output is not silence";
+}
+
+// ============================================================================================
+// The state of a variant switch
+// ============================================================================================
+
+namespace {
+
+/// The plans of the state rigs: the step engine on the CPU path and on k_npu.
+std::vector<anira_backend_id> steps_on_cpu_and_npu() {
+    return {candidate(k_step_engine), candidate(k_step_engine, k_npu)};
+}
+
+/// One waited block per entry of `plans`, each after selecting its plan: the delivered stream.
+std::vector<float> run_plans(const Rig& rig, const std::vector<uint32_t>& plans) {
+    std::vector<float> stream;
+    const std::vector<float> in = anira_test::ramp(1);
+    for (const uint32_t plan : plans) {
+        EXPECT_EQ(anira_handler_set_plan(rig.h(), plan), ANIRA_OK);
+        const std::vector<float> delivered = rig.run_block(in);
+        stream.insert(stream.end(), delivered.begin(), delivered.end());
+    }
+    return stream;
+}
+
+/// The stream of a step model whose chunks left the state at `states`, one hop each: the
+/// latency's silence, then every state for one hop, cut to as many hops as there are states.
+std::vector<float> stream_of(const std::vector<float>& states, size_t latency) {
+    std::vector<float> stream(latency, 0.0F);
+    for (const float state : states) { stream.insert(stream.end(), k_block, state); }
+    stream.resize(states.size() * k_block);
+    return stream;
+}
+
+}  // namespace
+
+// The default, ANIRA_VARIANT_STATE_FRESH: the first chunk formed on another variant starts that
+// variant from its initial state. The declared State pair reads zeros and the engine of the
+// chunk's plan is reset, ahead of that chunk's inference; a switch back is a switch (A, B, A
+// starts A fresh again). The stream goes on: no chunk is discarded, the generation and the
+// latency stay.
+TEST(Variants, AVariantSwitchStartsTheStateFreshByDefault) {
+    const anira::ModelConfig first = step_model("1");
+    const anira::ModelConfig second = step_model("100");
+    Rig rig({&first, &second});
+    ASSERT_EQ(rig.m_status, ANIRA_OK) << rig.m_message;
+    ASSERT_EQ(rig.prepare(plain_contract()), ANIRA_OK) << rig.m_message;
+    ASSERT_EQ(rig.plans().size(), 2U);
+    EXPECT_EQ(rig.h()->m_contract.hard()->m_variant_state, ANIRA_VARIANT_STATE_FRESH);
+    const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(rig.h());
+    ASSERT_NE(session, nullptr);
+    EXPECT_TRUE(session->exclusive()) << "a declared State pair";
+    const uint64_t generation = session->m_generation.load();
+    const uint32_t latency = anira_handler_get_latency(rig.h(), 0);
+
+    const std::vector<float> stream = run_plans(rig, {0, 0, 1, 1, 0, 0, 1});
+    EXPECT_EQ(rig.m_steps.steps(), (std::vector<float>{1, 1, 100, 100, 1, 1, 100}));
+    EXPECT_EQ(rig.m_steps.states_read(), (std::vector<float>{0, 1, 0, 100, 0, 1, 0}))
+        << "every first inference on another variant reads the initial state";
+    EXPECT_EQ(rig.m_steps.counts(), (std::vector<int>{0, 1, 0, 1, 0, 1, 0}))
+        << "and runs on an engine that was reset";
+    EXPECT_EQ(rig.m_steps.resets(), (std::vector<float>{1, 100, 1, 100}))
+        << "one reset at the stream's start, then one per variant switch, of the new plan's engine";
+    EXPECT_EQ(stream, stream_of({1, 2, 100, 200, 1, 2, 100}, latency));
+    EXPECT_EQ(session->m_state_epoch, 3U) << "three variant switches";
+    EXPECT_EQ(session->m_generation.load(), generation) << "no chunk was made stale";
+    EXPECT_EQ(anira_handler_get_latency(rig.h(), 0), latency);
+    EXPECT_EQ(anira_handler_rt_error(rig.h()), ANIRA_OK);
+
+    // A reset starts the stream over as it always did, and the next variant switch is one again.
+    anira_handler_reset(rig.h());
+    static_cast<void>(run_plans(rig, {1, 0}));
+    EXPECT_EQ(rig.m_steps.states_read(), (std::vector<float>{0, 1, 0, 100, 0, 1, 0, 0, 0}));
+    EXPECT_EQ(rig.m_steps.resets(), (std::vector<float>{1, 100, 1, 100, 100, 1}));
+}
+
+// ANIRA_VARIANT_STATE_KEEP: nothing happens at a variant switch. The declared state carries
+// over from one variant to the next, and each plan's engine continues from where it stopped
+// (it is reset once, at its own first inference of the stream).
+TEST(Variants, TheStateIsKeptWhenTheContractSaysSo) {
+    const anira::ModelConfig first = step_model("1");
+    const anira::ModelConfig second = step_model("100");
+    Rig rig({&first, &second});
+    ASSERT_EQ(rig.m_status, ANIRA_OK) << rig.m_message;
+    anira::ContractHandle keep = plain_contract();
+    keep.hard_variant_state(ANIRA_VARIANT_STATE_KEEP);
+    ASSERT_EQ(rig.prepare(keep), ANIRA_OK) << rig.m_message;
+    EXPECT_EQ(rig.h()->m_contract.hard()->m_variant_state, ANIRA_VARIANT_STATE_KEEP);
+    const uint32_t latency = anira_handler_get_latency(rig.h(), 0);
+
+    const std::vector<float> stream = run_plans(rig, {0, 0, 1, 1, 0, 0, 1});
+    EXPECT_EQ(rig.m_steps.steps(), (std::vector<float>{1, 1, 100, 100, 1, 1, 100}));
+    EXPECT_EQ(rig.m_steps.states_read(), (std::vector<float>{0, 1, 2, 102, 202, 203, 204}))
+        << "the state carries over";
+    EXPECT_EQ(rig.m_steps.counts(), (std::vector<int>{0, 1, 0, 1, 2, 3, 2}))
+        << "each engine continues from where it stopped";
+    EXPECT_EQ(rig.m_steps.resets(), (std::vector<float>{1, 100}))
+        << "each plan's engine once, at its first inference of the stream";
+    EXPECT_EQ(stream, stream_of({1, 2, 102, 202, 203, 204, 304}, latency));
+    EXPECT_EQ(anira_test::session_of(rig.h())->m_state_epoch, 0U);
+    EXPECT_EQ(anira_handler_rt_error(rig.h()), ANIRA_OK);
+
+    // The same handler prepared again under the default starts a variant fresh.
+    ASSERT_EQ(rig.prepare(plain_contract()), ANIRA_OK) << rig.m_message;
+    static_cast<void>(run_plans(rig, {0, 1}));
+    EXPECT_EQ(rig.m_steps.states_read(), (std::vector<float>{0, 1, 2, 102, 202, 203, 204, 0, 0}));
+}
+
+// A plan switch inside one variant (another backend of the same model) re-initialises nothing,
+// in both modes: the declared state carries over. Behind a fresh variant switch each plan of the
+// new variant is reset at its own first inference, so a backend switch inside it later resets
+// that backend's engine once and keeps the declared state; under keep an engine is reset once,
+// at its own first inference of the stream.
+TEST(Variants, ABackendSwitchInsideAVariantKeepsTheState) {
+    for (const anira_variant_state mode : {ANIRA_VARIANT_STATE_FRESH, ANIRA_VARIANT_STATE_KEEP}) {
+        SCOPED_TRACE(mode == ANIRA_VARIANT_STATE_FRESH ? "fresh" : "keep");
+        anira::ContractHandle contract = plain_contract();
+        contract.hard_variant_state(mode);
+        const bool fresh = mode == ANIRA_VARIANT_STATE_FRESH;
+        {
+            // One variant, two backends: the state epoch never moves.
+            const anira::ModelConfig only = step_model("1");
+            Rig rig({&only}, steps_on_cpu_and_npu());
+            ASSERT_EQ(rig.m_status, ANIRA_OK) << rig.m_message;
+            ASSERT_EQ(rig.prepare(contract), ANIRA_OK) << rig.m_message;
+            ASSERT_EQ(rig.plans().size(), 2U);
+            static_cast<void>(run_plans(rig, {0, 0, 1, 1, 0}));
+            EXPECT_EQ(rig.m_steps.steps(), (std::vector<float>{1, 1, 16, 16, 1}));
+            EXPECT_EQ(rig.m_steps.states_read(), (std::vector<float>{0, 1, 2, 18, 34}));
+            EXPECT_EQ(rig.m_steps.counts(), (std::vector<int>{0, 1, 0, 1, 2}));
+            EXPECT_EQ(rig.m_steps.resets(), (std::vector<float>{1, 16}));
+            EXPECT_EQ(anira_test::session_of(rig.h())->m_state_epoch, 0U);
+        }
+        {
+            // Two variants, two backends each: plans 0 and 1 run variant 0 (steps 1 and 16),
+            // plans 2 and 3 variant 1 (steps 100 and 1600).
+            const anira::ModelConfig first = step_model("1");
+            const anira::ModelConfig second = step_model("100");
+            Rig rig({&first, &second}, steps_on_cpu_and_npu());
+            ASSERT_EQ(rig.m_status, ANIRA_OK) << rig.m_message;
+            ASSERT_EQ(rig.prepare(contract), ANIRA_OK) << rig.m_message;
+            ASSERT_EQ(rig.plans().size(), 4U);
+            static_cast<void>(run_plans(rig, {0, 1, 2, 1, 0}));
+            EXPECT_EQ(rig.m_steps.steps(), (std::vector<float>{1, 16, 100, 16, 1}));
+            // 0 to 1 and 1 to 0 stay inside variant 0; 1 to 2 and 2 to 1 switch the variant.
+            // Fresh: plan 1 starts over at the switch back, and plan 0, which last ran before
+            // the stream left its variant, is reset at its own first inference behind it while
+            // the declared state plan 1 left carries over to it.
+            EXPECT_EQ(rig.m_steps.states_read(),
+                      fresh ? (std::vector<float>{0, 1, 0, 0, 16})
+                            : (std::vector<float>{0, 1, 17, 117, 133}));
+            EXPECT_EQ(
+                rig.m_steps.counts(),
+                fresh ? (std::vector<int>{0, 0, 0, 0, 0}) : (std::vector<int>{0, 0, 0, 1, 1}));
+            EXPECT_EQ(
+                rig.m_steps.resets(),
+                fresh ? (std::vector<float>{1, 16, 100, 16, 1}) : (std::vector<float>{1, 16, 100}));
+            EXPECT_EQ(anira_test::session_of(rig.h())->m_state_epoch, fresh ? 2U : 0U);
+        }
+    }
+}
+
+// A chunk in flight across a fresh variant switch is delivered, with the state it ran on: the
+// switch re-initialises ahead of the first chunk formed on the other variant, never under a chunk
+// formed before it. Chunk 1 is held inside variant 0's engine while the selection moves and chunk
+// 2 is formed on variant 1; chunk 1 then completes on the state it read, and chunk 2 starts fresh.
+TEST(Variants, AChunkInFlightKeepsItsStateAcrossAFreshSwitch) {
+    const anira::ModelConfig first = step_model("1");
+    const anira::ModelConfig second = step_model("100");
+    Rig rig({&first, &second});
+    ASSERT_EQ(rig.m_status, ANIRA_OK) << rig.m_message;
+    ASSERT_EQ(rig.prepare(plain_contract()), ANIRA_OK) << rig.m_message;
+    const size_t primed = anira_test::available(rig.h());
+    const std::vector<float> in = anira_test::ramp(1);
+
+    // Two chunks on variant 0 first, so that the held one reads a state other than zero.
+    static_cast<void>(run_plans(rig, {0}));
+    rig.m_steps.m_open.store(false);
+    ASSERT_EQ(rig.push(in), ANIRA_OK);
+    const auto deadline = std::chrono::steady_clock::now() + k_wait;
+    while (rig.m_steps.m_held.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    ASSERT_EQ(rig.m_steps.m_held.load(), 1) << "the chunk never reached its engine";
+    ASSERT_EQ(anira_handler_set_plan(rig.h(), 1), ANIRA_OK);
+    ASSERT_EQ(rig.push(in), ANIRA_OK) << "the chunk of the other variant, behind the held one";
+    rig.m_steps.m_open.store(true);
+    anira_test::wait_for_available(rig.h(), primed + 2 * k_block);
+
+    EXPECT_EQ(rig.m_steps.steps(), (std::vector<float>{1, 1, 100}));
+    EXPECT_EQ(rig.m_steps.states_read(), (std::vector<float>{0, 1, 0}))
+        << "the held chunk read variant 0's state, the next one the initial state";
+    EXPECT_EQ(rig.m_steps.resets(), (std::vector<float>{1, 100}));
+    // Both chunks are in the output ring, in order, behind what the first block left of the
+    // priming and its own chunk: nothing was discarded at the switch.
+    ASSERT_GE(primed, k_block);
+    std::vector<float> ring(primed - k_block, 0.0F);
+    for (const float state : {1.0F, 2.0F, 100.0F}) { ring.insert(ring.end(), k_block, state); }
+    std::vector<float> delivered;
+    while (delivered.size() + k_block <= ring.size()) {
+        const std::vector<float> block = rig.pop(k_block);
+        delivered.insert(delivered.end(), block.begin(), block.end());
+    }
+    ASSERT_GE(delivered.size(), 2 * k_block);
+    for (size_t n = 0; n < delivered.size(); ++n) {
+        ASSERT_EQ(delivered[n], ring[n]) << "sample " << n;
+    }
+    EXPECT_EQ(anira_handler_rt_error(rig.h()), ANIRA_OK);
 }

@@ -889,13 +889,18 @@ void ProcessorRunner::bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING {
         auto* state = std::get_if<StatePort>(&m_input_ports[slot]);
         if (state == nullptr || !state->m_value.has_value()) { continue; }
         StateSlot& value = *state->m_value;
-        if (state->m_generation != chunk.m_dispatch_generation) {
-            // The first inference of a new stream (a reset, a prepare): the state starts over.
-            // The chunk's stamp, never the session's atomic: a reset that lands between a
-            // chunk's stale check and its bind must not zero the read buffer for a chunk of
-            // the old stream, whose promotion would then seed the new one.
+        if (state->m_generation != chunk.m_dispatch_generation ||
+            state->m_state_epoch != chunk.m_state_epoch) {
+            // The first inference of a new stream (a reset, a prepare), or the first one
+            // behind a switch to another variant under ANIRA_VARIANT_STATE_FRESH (a new state
+            // epoch): the state starts over. The chunk's stamps, never the session's fields:
+            // a reset that lands between a chunk's stale check and its bind must not zero the
+            // read buffer for a chunk of the old stream, whose promotion would then seed the
+            // new one, and a chunk formed ahead of a variant switch finishes on the state it
+            // ran with.
             value.zero_read();
             state->m_generation = chunk.m_dispatch_generation;
+            state->m_state_epoch = chunk.m_state_epoch;
         }
         anira_tensor_init_host(&chunk.m_input_tensors[slot],
                                value.read(),

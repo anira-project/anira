@@ -410,6 +410,15 @@ public:
         // stomping a newer era's in-flight dispatch. Plain field: stable for the
         // dispatch's lifetime, synced by the gate/queue handoffs.
         uint64_t m_dispatch_epoch{0};
+        // The state epoch this chunk was formed under (stamped in Core::pre_process beside
+        // the dispatch generation, from SessionElement::m_state_epoch): the driving thread
+        // opens a new one when it forms the first chunk on another variant than the chunk
+        // before it under ANIRA_VARIANT_STATE_FRESH. The declared state's binding and the
+        // plan's engine reset compare it as they compare the generation: a chunk of a new
+        // epoch starts its plan's state over ahead of its inference. Unlike the generation
+        // it makes no chunk stale: what is in flight across a variant switch is delivered.
+        // Plain field, synced by the queue handoffs like the stamps above.
+        uint64_t m_state_epoch{0};
         // The plan this chunk runs on: the dense index into SessionElement::m_plans,
         // stamped in Core::pre_process from SessionElement::m_current_plan with one load.
         // The hooks, the engine call and post_process all resolve this stamp and never read
@@ -539,6 +548,12 @@ public:
          * is never reset: only an exclusive session gets here.
          */
         uint64_t m_engine_generation = k_no_generation;
+        /// The state epoch this plan's engine last ran under, beside m_engine_generation and
+        /// compared with it (ThreadSafeStruct::m_state_epoch): the plan's first inference of a
+        /// new state epoch, behind a switch to another variant under
+        /// ANIRA_VARIANT_STATE_FRESH, resets its engine too. Read and written like the
+        /// generation; 0 after prepare.
+        uint64_t m_engine_state_epoch = 0;
     };
 
     /**
@@ -563,6 +578,29 @@ public:
 
     /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
     bool select_plan(uint32_t plan) noexcept;
+
+    /// No chunk has been formed since prepare: what m_last_variant holds then, so that the
+    /// stream's first chunk is no variant switch.
+    static constexpr uint32_t k_no_variant = UINT32_MAX;
+
+    /**
+     * @brief The state epoch of the stream: the variant switches that start the state over.
+     *
+     * Core::pre_process stamps every chunk with it (ThreadSafeStruct::m_state_epoch) and
+     * opens a new one (stamp_state_epoch) when the chunk's plan runs another variant than the
+     * chunk formed before it, under ANIRA_VARIANT_STATE_FRESH (the Hard contract's
+     * m_variant_state); under ANIRA_VARIANT_STATE_KEEP, and for a plan switch inside one
+     * variant, it stays. The state binding of the processor runner and the engine reset of
+     * the inference thread compare the chunk's stamp with the one they last ran under.
+     * Driving thread only, like m_last_variant; both start over at prepare.
+     */
+    uint64_t m_state_epoch = 0;
+    uint32_t m_last_variant = k_no_variant;  ///< The variant of the chunk formed last
+
+    /// The state epoch of a chunk formed on `plan`, which becomes the chunk formed last: the
+    /// current epoch, or a new one when the plan's variant differs from the last chunk's under
+    /// ANIRA_VARIANT_STATE_FRESH. Driving thread only; no allocation, no lock.
+    uint64_t stamp_state_epoch(uint32_t plan) noexcept ANIRA_NONBLOCKING;
 
     unsigned long m_current_queue = 0;         ///< The time stamp of the next submitted chunk
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring

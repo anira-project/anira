@@ -747,10 +747,14 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     // adopted. Per plan: after a reset every plan is reset at its own first inference, so a
     // plan switched to later starts its stream clean too. The chunk's stamp, never the
     // session's atomic: a reset that lands between the stale check and this read belongs to
-    // the next chunk.
+    // the next chunk. The chunk's state epoch is compared beside it: a new one is the plan's
+    // first inference behind a switch to another variant under ANIRA_VARIANT_STATE_FRESH, and
+    // its engine starts over as the declared state does (capi::ProcessorRunner::bind_state).
     bool reset_first = false;
-    if (session->exclusive() && chunk.m_dispatch_generation != slot.m_engine_generation) {
+    if (session->exclusive() && (chunk.m_dispatch_generation != slot.m_engine_generation ||
+                                 chunk.m_state_epoch != slot.m_engine_state_epoch)) {
         slot.m_engine_generation = chunk.m_dispatch_generation;
+        slot.m_engine_state_epoch = chunk.m_state_epoch;
         reset_first = true;
     }
 

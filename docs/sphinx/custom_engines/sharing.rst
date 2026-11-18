@@ -27,8 +27,10 @@ copies the pair as it copies every other slot.
   flips the pair, so the addresses stay put across the chunks of aliasing plans alone (re-capture
   after such a switch).
 - The pair is the model's, not a plan's: every plan of the variant runs it, in host memory in this
-  pre-release (a ``host_domain`` on the State input overrides it), so a plan switch keeps the state
-  whether the plans flip or alias, and the first inference of a new stream reads zeros either way.
+  pre-release (a ``host_domain`` on the State input overrides it), so a plan switch inside one
+  variant keeps the state whether the plans flip or alias, and the first inference of a new stream
+  reads zeros either way; so does the first one behind a switch to another variant, unless the
+  contract keeps the state (``anira_contract_hard_set_variant_state``).
 - A model with a State pair is stateful: it is loaded once with no shared slot, and every handler of
   it is exclusive, so an engine with state of its own beside the pair builds it at ``prepare`` and
   re-initialises it at ``reset``.

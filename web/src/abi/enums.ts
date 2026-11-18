@@ -219,6 +219,13 @@ export const anira_miss_policy = {
 /** @internal */
 export type anira_miss_policy = (typeof anira_miss_policy)[keyof typeof anira_miss_policy]
 
+export const anira_variant_state = {
+  ANIRA_VARIANT_STATE_FRESH: 0,
+  ANIRA_VARIANT_STATE_KEEP: 1,
+} as const
+/** @internal */
+export type anira_variant_state = (typeof anira_variant_state)[keyof typeof anira_variant_state]
+
 export const anira_late_policy = {
   ANIRA_LATE_FINISH: 0,
   ANIRA_LATE_DROP: 1,

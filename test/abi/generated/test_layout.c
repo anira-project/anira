@@ -59,6 +59,8 @@ _Static_assert(sizeof(anira_rt_verdict) == 4, "anira_rt_verdict is a 32-bit enum
 _Static_assert(ANIRA_RT_VERDICT_FORCE32 == 0x7fffffff, "anira_rt_verdict terminator");
 _Static_assert(sizeof(anira_miss_policy) == 4, "anira_miss_policy is a 32-bit enum");
 _Static_assert(ANIRA_MISS_POLICY_FORCE32 == 0x7fffffff, "anira_miss_policy terminator");
+_Static_assert(sizeof(anira_variant_state) == 4, "anira_variant_state is a 32-bit enum");
+_Static_assert(ANIRA_VARIANT_STATE_FORCE32 == 0x7fffffff, "anira_variant_state terminator");
 _Static_assert(sizeof(anira_late_policy) == 4, "anira_late_policy is a 32-bit enum");
 _Static_assert(ANIRA_LATE_POLICY_FORCE32 == 0x7fffffff, "anira_late_policy terminator");
 _Static_assert(sizeof(anira_priority) == 4, "anira_priority is a 32-bit enum");

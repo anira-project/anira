@@ -970,6 +970,13 @@ struct Hard {
     /// output (anira_contract_hard_set_latency): it replaces the computed figure and primes the
     /// receive ring; every output not named keeps the computed one.
     std::map<std::string, uint32_t> latencies{};
+    /// The state of a variant switch (anira_contract_hard_set_variant_state, the contract file's
+    /// "variant_state"): what the model's state is when set_plan moves the stream to a plan of
+    /// another variant of the inference stage. ANIRA_VARIANT_STATE_FRESH, the default: the new
+    /// variant starts from its initial state (the declared State pairs at zeros, its engine
+    /// reset, ahead of the first inference formed on it). ANIRA_VARIANT_STATE_KEEP: it continues
+    /// from the state the stream holds. A plan switch inside one variant always keeps the state.
+    anira_variant_state variant_state = ANIRA_VARIANT_STATE_FRESH;
     /// The worst edge class a plan may take for any slot (anira_contract_set_edge_cost, the
     /// contract file's "edge_cost"): prepare drops a plan above it. A class of the cost scale is
     /// a limit: ANIRA_EDGE_DEDICATED_TRANSFER admits every known edge,
@@ -1042,6 +1049,8 @@ inline anira_contract* mint(const Hard& hard) {
             check(anira_contract_hard_set_latency(contract, name.c_str(), samples),
                   "anira_contract_hard_set_latency");
         }
+        check(anira_contract_hard_set_variant_state(contract, hard.variant_state),
+              "anira_contract_hard_set_variant_state");
         check(anira_contract_set_edge_cost(contract, hard.edge_cost.value_or(ANIRA_EDGE_UNKNOWN)),
               "anira_contract_set_edge_cost");
     } catch (...) {
@@ -1214,6 +1223,13 @@ public:
                       "anira_contract_hard_set_wait_ratio");
         return *this;
     }
+    /// The state of a variant switch (anira_contract_hard_set_variant_state); see
+    /// Hard::variant_state.
+    ContractHandle& hard_variant_state(anira_variant_state state) {
+        detail::check(anira_contract_hard_set_variant_state(m_contract, state),
+                      "anira_contract_hard_set_variant_state");
+        return *this;
+    }
     /// The per-job deadline of an Async contract; nullopt = none.
     ContractHandle& async_deadline(std::optional<std::chrono::nanoseconds> deadline) {
         detail::check(
@@ -1326,6 +1342,8 @@ public:
                           "anira_contract_hard_latency");
             out.latencies.emplace(name, samples);
         }
+        detail::check(anira_contract_hard_variant_state(m_contract, &out.variant_state),
+                      "anira_contract_hard_variant_state");
         if (const anira_edge_class limit = anira_contract_edge_cost(m_contract);
             limit != ANIRA_EDGE_UNKNOWN) {
             out.edge_cost = limit;

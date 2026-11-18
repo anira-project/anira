@@ -394,15 +394,18 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
  * buffer and nothing flips. A failed inference (an engine failure, a non-OK processor)
  * does not flip, so the state keeps its last good value. anira_handler_reset
  * re-initialises the state at the first inference of the new stream; the state survives
- * anira_handler_set_plan. A model with a pair runs as ANIRA_MODEL_STATEFUL whatever its
- * state says. Validation (ANIRA_ERROR_CONFIG naming the tensor, at create and at
- * prepare): every state input names exactly one state output and every state output is
- * named by exactly one state input; the two halves have equal dtype and shape; a state
- * spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the
- * anchor may name it. Its buffers take the spec's dtype, as every model tensor does: a
- * custom engine binds what its load accepts, and a built-in engine refuses at load
- * (ANIRA_ERROR_NOT_SUPPORTED) what its runtime cannot carry. ANIRA_ERROR_NOT_SUPPORTED:
- * a state tensor with a transposed layout. A second call replaces the name.
+ * a plan switch inside one variant, and a switch to another variant re-initialises it
+ * unless the contract keeps it (anira_contract_hard_set_variant_state;
+ * ANIRA_VARIANT_STATE_FRESH is the default). A model with a pair runs as
+ * ANIRA_MODEL_STATEFUL whatever its state says. Validation (ANIRA_ERROR_CONFIG naming
+ * the tensor, at create and at prepare): every state input names exactly one state
+ * output and every state output is named by exactly one state input; the two halves have
+ * equal dtype and shape; a state spec has no Time axis, window, time ratio or latency,
+ * and neither a ring dtype nor the anchor may name it. Its buffers take the spec's
+ * dtype, as every model tensor does: a custom engine binds what its load accepts, and a
+ * built-in engine refuses at load (ANIRA_ERROR_NOT_SUPPORTED) what its runtime cannot
+ * carry. ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a transposed layout. A second
+ * call replaces the name.
  * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
  * @param output_canonical The canonical name of the state output this input is fed from, UTF-8,
  *        copied; resolved when the model is validated (anira_handler_create,
@@ -729,6 +732,36 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_ring_dtype(anira_contr
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_latency(anira_contract* contract,
                                                                   const char* canonical,
                                                                   uint32_t samples) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The state of a variant switch (anira_variant_state; the JSON key "variant_state":
+ * "fresh" or "keep" of the hard object): what the model's state is when
+ * anira_handler_set_plan moves the stream to a plan of another variant of the inference
+ * stage. FRESH, the default: the new variant starts from its initial state. The driver
+ * thread notes the switch when it forms the first chunk on the other variant, and ahead
+ * of that chunk's inference, on the inference thread, every declared State pair
+ * (ANIRA_ROLE_STATE) is re-initialised to zeros and the engine of the chunk's plan is
+ * reset (anira_engine_desc.reset, an exclusive handler's), each plan at its own first
+ * inference behind the switch; chunks formed before it finish on the state they ran with
+ * and are delivered, the processor's reset is not called (the stream continues) and the
+ * latency does not change. A switch back is a switch: A, B, A starts A fresh again.
+ * KEEP: nothing happens at the switch, and the declared state carries over from one
+ * variant to the next. Under either value a plan switch inside one variant
+ * re-initialises nothing, and state an engine keeps inside itself is never carried from
+ * one plan's engine to another's: under KEEP each engine continues from where it
+ * stopped, under FRESH it starts over. Read at anira_handler_prepare with the rest of
+ * the contract; a handler over one variant never switches.
+ * @param contract A Hard contract.
+ * @param state ANIRA_VARIANT_STATE_FRESH (default) or ANIRA_VARIANT_STATE_KEEP.
+ * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value anira_variant_state does
+ *         not name.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.4
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_variant_state(anira_contract* contract,
+                                                                        anira_variant_state state) ANIRA_NOEXCEPT;
 
 /**
  * @brief The per-job deadline of an Async contract; an absolute per-job override is the
@@ -1832,7 +1865,8 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_to_json(const anira_conte
 
 /**
  * @brief Loads a contract from JSON text (section 8.3): budget is "measured" or {"ms": x},
- * warmup is "until_stable", "none" or {"fixed": n}; a file with both roots or neither is
+ * warmup is "until_stable", "none" or {"fixed": n}, variant_state is "fresh" or "keep"
+ * (anira_contract_hard_set_variant_state); a file with both roots or neither is
  * ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly
  * (ANIRA_SUCCESS_UPGRADED).
  * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional top-level
@@ -2306,6 +2340,19 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contra
                                                               uint32_t index,
                                                               const char** canonical,
                                                               uint32_t* samples) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The state of a variant switch as anira_contract_hard_set_variant_state or the JSON key
+ * "variant_state" stored it; ANIRA_VARIANT_STATE_FRESH when never set.
+ * @param contract A Hard contract.
+ * @param state Receives the state of a variant switch.
+ * @return As anira_contract_hard_host_blocks.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.4
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_variant_state(const anira_contract* contract,
+                                                                    anira_variant_state* state) ANIRA_NOEXCEPT;
 
 /**
  * @brief The edge cost anira_contract_set_edge_cost stored: the worst edge class a plan may

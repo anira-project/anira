@@ -386,12 +386,14 @@ typedef anira_status (ANIRA_CALL* anira_engine_process_fn)(const anira_engine_ct
 /**
  * @brief Re-initialises the state the engine keeps per handler: for an exclusive handler
  * (ANIRA_PREPARE_EXCLUSIVE at its prepare), at the first inference of a new stream
- * (after prepare, after anira_handler_reset), on the inference thread, with that
- * inference's context, right before its process. The boundary is the plan's: after
- * prepare or a reset every plan of the handler is reset at its own first inference of
- * the new stream, whichever plan ran first, and a plan switch alone is none. Never for a
- * handler whose model is stateless, whose calls run on the shared slots and keep nothing
- * between them. NULL: nothing to reset.
+ * (after prepare, after anira_handler_reset) and at the first inference behind a switch
+ * to another variant under ANIRA_VARIANT_STATE_FRESH
+ * (anira_contract_hard_set_variant_state), on the inference thread, with that
+ * inference's context, right before its process. The boundary is the plan's: behind each
+ * of them every plan of the handler is reset at its own first inference, whichever plan
+ * ran first, and a plan switch inside one variant, or any switch under
+ * ANIRA_VARIANT_STATE_KEEP, is none. Never for a handler whose model is stateless, whose
+ * calls run on the shared slots and keep nothing between them. NULL: nothing to reset.
  * @param ctx The context of the first inference of the new stream, the one whose process
  *        follows; ANIRA_ENGINE_CALL_EXCLUSIVE is set.
  * @param prepared What this handler's prepare on this loaded model handed back.

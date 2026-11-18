@@ -429,6 +429,28 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_TRUE(zero.ring_dtypes.empty());
     EXPECT_TRUE(zero.latencies.empty());
     EXPECT_FALSE(zero.edge_cost.has_value()) << "no limit, the C ANIRA_EDGE_UNKNOWN";
+
+    // The state of a variant switch: fresh by default, kept by the aggregate's field or the
+    // handle's setter, read back by hard().
+    EXPECT_EQ(plain.variant_state, ANIRA_VARIANT_STATE_FRESH);
+    EXPECT_EQ(zero.variant_state, ANIRA_VARIANT_STATE_FRESH);
+    EXPECT_EQ(minted.variant_state, ANIRA_VARIANT_STATE_FRESH);
+    anira::Hard keeping{};
+    keeping.variant_state = ANIRA_VARIANT_STATE_KEEP;
+    ContractHandle kept(keeping);
+    EXPECT_EQ(kept.hard().variant_state, ANIRA_VARIANT_STATE_KEEP);
+    EXPECT_EQ(kept.native()->hard()->m_variant_state, ANIRA_VARIANT_STATE_KEEP);
+    EXPECT_EQ(&kept.hard_variant_state(ANIRA_VARIANT_STATE_FRESH), &kept) << "the setter chains";
+    EXPECT_EQ(kept.hard().variant_state, ANIRA_VARIANT_STATE_FRESH);
+    const Thrown out_of_range = thrown_by([&] {
+        // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange): the value past the last
+        kept.hard_variant_state(static_cast<anira_variant_state>(2));
+    });
+    EXPECT_TRUE(out_of_range.m_thrown);
+    EXPECT_EQ(out_of_range.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    const ContractHandle from_file =
+        ContractHandle::from_json(R"({"hard": {"budget": {"ms": 5}, "variant_state": "keep"}})");
+    EXPECT_EQ(from_file.hard().variant_state, ANIRA_VARIANT_STATE_KEEP);
 }
 
 // The edge cost of anira.hpp is an optional: std::nullopt, the aggregates' default, is no limit

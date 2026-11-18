@@ -479,6 +479,32 @@ typedef enum anira_miss_policy {
 } anira_miss_policy;
 
 /**
+ * @brief What a Hard handler's state is when the stream moves to another variant of its
+ * inference stage (anira_contract_hard_set_variant_state): whether the new variant
+ * starts from its initial state or continues from the state the stream holds. It applies
+ * to the first chunk formed on a plan of another variant than the chunk before it; a
+ * plan switch inside one variant (another backend of the same model) always keeps the
+ * state.
+ */
+typedef enum anira_variant_state {
+    /**
+     * The new variant starts from its initial state (default): ahead of the inference of the
+     * first chunk formed on it, every declared State pair is re-initialised to zeros and the
+     * engine of that chunk's plan is reset (anira_engine_desc.reset, for an exclusive handler),
+     * as at the first inference after anira_handler_reset. Chunks in flight are delivered: the
+     * stream does not restart.
+     */
+    ANIRA_VARIANT_STATE_FRESH = 0,
+    /**
+     * Nothing is re-initialised: the new variant's first inference reads the declared State
+     * pairs as the previous variant's last one left them, which the variants' one form makes
+     * the same tensors.
+     */
+    ANIRA_VARIANT_STATE_KEEP = 1,
+    ANIRA_VARIANT_STATE_FORCE32 = 0x7fffffff
+} anira_variant_state;
+
+/**
  * @brief What an Async contract does with a job past its deadline.
  */
 typedef enum anira_late_policy {
@@ -976,14 +1002,16 @@ typedef enum anira_phase {
  * Without the bit the two buffers alternate behind every successful inference
  * (anira/abi/handler.h). The pair is the stream's, shared by every plan of the handler
  * (the variants of a stage have one form): a plan switch between an aliasing engine and
- * one without the bit keeps the state (the one buffer an aliasing plan updates is the
- * buffer a flipping plan reads next); the flipping plan's chunk moves the pair, so the
- * addresses stay put only across the chunks of aliasing plans, and a captured graph is
- * re-captured after such a switch. A failed call of an aliasing engine leaves the buffer
- * as the engine left it, since it writes in place: the last-good rule of a flipping pair
- * (a failed inference does not flip) is the engine's to keep there. The generation rule
- * is the same under both: the first inference of a new stream reads zeros. Reported in
- * anira_plan_info.engine_flags; no built-in engine sets it.
+ * one without the bit keeps the state where the switch keeps it at all (inside one
+ * variant, and across variants under ANIRA_VARIANT_STATE_KEEP; the one buffer an
+ * aliasing plan updates is the buffer a flipping plan reads next); the flipping plan's
+ * chunk moves the pair, so the addresses stay put only across the chunks of aliasing
+ * plans, and a captured graph is re-captured after such a switch. A failed call of an
+ * aliasing engine leaves the buffer as the engine left it, since it writes in place: the
+ * last-good rule of a flipping pair (a failed inference does not flip) is the engine's
+ * to keep there. The generation rule is the same under both: the first inference of a
+ * new stream, and the first one behind a variant switch under ANIRA_VARIANT_STATE_FRESH,
+ * reads zeros. Reported in anira_plan_info.engine_flags; no built-in engine sets it.
  */
 #define ANIRA_ENGINE_FLAG_STATE_ALIAS 8u
 

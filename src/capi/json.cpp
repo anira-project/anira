@@ -182,6 +182,10 @@ const std::array<std::pair<const char*, anira_miss_policy>, 4> k_miss{{
     {"zeros", ANIRA_MISS_ZEROS},
     {"callback", ANIRA_MISS_CALLBACK},
 }};
+const std::array<std::pair<const char*, anira_variant_state>, 2> k_variant_states{{
+    {"fresh", ANIRA_VARIANT_STATE_FRESH},
+    {"keep", ANIRA_VARIANT_STATE_KEEP},
+}};
 const std::array<std::pair<const char*, anira_late_policy>, 2> k_late{{
     {"finish", ANIRA_LATE_FINISH},
     {"drop", ANIRA_LATE_DROP},
@@ -792,6 +796,8 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
             }
         } else if (key == "on_miss") {
             hard.m_on_miss = vocabulary(value, key_path, k_miss);
+        } else if (key == "variant_state") {
+            hard.m_variant_state = vocabulary(value, key_path, k_variant_states);
         } else if (key == "wait_ratio") {
             hard.m_wait_ratio = require_number(value, key_path);
             if (hard.m_wait_ratio < 0.0) { fail_json(key_path, "must not be negative"); }

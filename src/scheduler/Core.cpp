@@ -1575,6 +1575,11 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // the first chunk of a new stream, its reset boundary (capi/processor.h).
             session->m_struct_pool[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
+            // The state epoch beside it: a new one when this chunk runs another variant than
+            // the chunk formed before it and the contract starts a variant fresh (its State
+            // pairs and its engine start over ahead of this chunk's inference). No chunk
+            // becomes stale by it: what is in flight is delivered.
+            session->m_struct_pool[i]->m_state_epoch = session->stamp_state_epoch(plan);
             const anira_status formed =
                 session->m_processor.pre_process(*session->m_struct_pool[i]);
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
@@ -1720,6 +1725,9 @@ int64_t Core::warm_up_inference(const std::shared_ptr<SessionElement>& session, 
     chunk->m_fills_after = 0;
     chunk->m_inference_ns = 0;
     chunk->m_dispatch_generation = session->m_generation.load(std::memory_order::relaxed);
+    // The pass is no stream: its chunks carry the epoch as it stands and open none, whatever
+    // variants its plans run (the prepare that runs it starts the state over behind it).
+    chunk->m_state_epoch = session->m_state_epoch;
     if (session->exclusive()) {
         session->enqueue_pending_dispatch(chunk);
         try_dispatch_stateful(session);

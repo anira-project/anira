@@ -1303,6 +1303,28 @@
         },
         {
           "kind": "enum",
+          "name": "anira_variant_state",
+          "terminator": "ANIRA_VARIANT_STATE_FORCE32",
+          "doc": "What a Hard handler's state is when the stream moves to another variant of its inference stage (anira_contract_hard_set_variant_state): whether the new variant starts from its initial state or continues from the state the stream holds. It applies to the first chunk formed on a plan of another variant than the chunk before it; a plan switch inside one variant (another backend of the same model) always keeps the state.",
+          "values": [
+            {
+              "name": "ANIRA_VARIANT_STATE_FRESH",
+              "value": 0,
+              "doc": "The new variant starts from its initial state (default): ahead of the inference of the first chunk formed on it, every declared State pair is re-initialised to zeros and the engine of that chunk's plan is reset (anira_engine_desc.reset, for an exclusive handler), as at the first inference after anira_handler_reset. Chunks in flight are delivered: the stream does not restart."
+            },
+            {
+              "name": "ANIRA_VARIANT_STATE_KEEP",
+              "value": 1,
+              "doc": "Nothing is re-initialised: the new variant's first inference reads the declared State pairs as the previous variant's last one left them, which the variants' one form makes the same tensors."
+            },
+            {
+              "name": "ANIRA_VARIANT_STATE_FORCE32",
+              "value": "0x7fffffff"
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "anira_late_policy",
           "terminator": "ANIRA_LATE_POLICY_FORCE32",
           "doc": "What an Async contract does with a job past its deadline.",
@@ -1996,7 +2018,7 @@
           "kind": "define",
           "name": "ANIRA_ENGINE_FLAG_STATE_ALIAS",
           "value": "8u",
-          "doc": "anira_engine_desc.flags bit: the engine keeps its own aliasing of a declared State pair. anira then binds one stable buffer per pair as both the State input and the State output of every call of a plan of the engine and never flips the two: the engine reads the state before it writes it (in place) or copies for itself, and every address stays put across calls, which a captured graph (CUDA graphs, WebGPU replay) needs. Without the bit the two buffers alternate behind every successful inference (anira/abi/handler.h). The pair is the stream's, shared by every plan of the handler (the variants of a stage have one form): a plan switch between an aliasing engine and one without the bit keeps the state (the one buffer an aliasing plan updates is the buffer a flipping plan reads next); the flipping plan's chunk moves the pair, so the addresses stay put only across the chunks of aliasing plans, and a captured graph is re-captured after such a switch. A failed call of an aliasing engine leaves the buffer as the engine left it, since it writes in place: the last-good rule of a flipping pair (a failed inference does not flip) is the engine's to keep there. The generation rule is the same under both: the first inference of a new stream reads zeros. Reported in anira_plan_info.engine_flags; no built-in engine sets it."
+          "doc": "anira_engine_desc.flags bit: the engine keeps its own aliasing of a declared State pair. anira then binds one stable buffer per pair as both the State input and the State output of every call of a plan of the engine and never flips the two: the engine reads the state before it writes it (in place) or copies for itself, and every address stays put across calls, which a captured graph (CUDA graphs, WebGPU replay) needs. Without the bit the two buffers alternate behind every successful inference (anira/abi/handler.h). The pair is the stream's, shared by every plan of the handler (the variants of a stage have one form): a plan switch between an aliasing engine and one without the bit keeps the state where the switch keeps it at all (inside one variant, and across variants under ANIRA_VARIANT_STATE_KEEP; the one buffer an aliasing plan updates is the buffer a flipping plan reads next); the flipping plan's chunk moves the pair, so the addresses stay put only across the chunks of aliasing plans, and a captured graph is re-captured after such a switch. A failed call of an aliasing engine leaves the buffer as the engine left it, since it writes in place: the last-good rule of a flipping pair (a failed inference does not flip) is the engine's to keep there. The generation rule is the same under both: the first inference of a new stream, and the first one behind a variant switch under ANIRA_VARIANT_STATE_FRESH, reads zeros. Reported in anira_plan_info.engine_flags; no built-in engine sets it."
         },
         {
           "kind": "define",
@@ -3887,7 +3909,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Declared state passing: pairs a state input with the state output it is fed from on the next inference. Both halves carry ANIRA_ROLE_STATE; the pairing is stated once, on the input (JSON: \"state_source\" on the input spec). anira holds the pair in the handler, two buffers on the port of the state input in the spec's shape and dtype (zeroed at create and at prepare), and copies nothing: as the first step of every inference, ahead of the processor's before_inference, the model's state input is bound to the read buffer (the last state) and the state output to the write buffer, and as the last step, behind the processor's after_inference, the two flip; under a plan whose engine sets ANIRA_ENGINE_FLAG_STATE_ALIAS both halves are bound to the read buffer and nothing flips. A failed inference (an engine failure, a non-OK processor) does not flip, so the state keeps its last good value. anira_handler_reset re-initialises the state at the first inference of the new stream; the state survives anira_handler_set_plan. A model with a pair runs as ANIRA_MODEL_STATEFUL whatever its state says. Validation (ANIRA_ERROR_CONFIG naming the tensor, at create and at prepare): every state input names exactly one state output and every state output is named by exactly one state input; the two halves have equal dtype and shape; a state spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the anchor may name it. Its buffers take the spec's dtype, as every model tensor does: a custom engine binds what its load accepts, and a built-in engine refuses at load (ANIRA_ERROR_NOT_SUPPORTED) what its runtime cannot carry. ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a transposed layout. A second call replaces the name.",
+          "doc": "Declared state passing: pairs a state input with the state output it is fed from on the next inference. Both halves carry ANIRA_ROLE_STATE; the pairing is stated once, on the input (JSON: \"state_source\" on the input spec). anira holds the pair in the handler, two buffers on the port of the state input in the spec's shape and dtype (zeroed at create and at prepare), and copies nothing: as the first step of every inference, ahead of the processor's before_inference, the model's state input is bound to the read buffer (the last state) and the state output to the write buffer, and as the last step, behind the processor's after_inference, the two flip; under a plan whose engine sets ANIRA_ENGINE_FLAG_STATE_ALIAS both halves are bound to the read buffer and nothing flips. A failed inference (an engine failure, a non-OK processor) does not flip, so the state keeps its last good value. anira_handler_reset re-initialises the state at the first inference of the new stream; the state survives a plan switch inside one variant, and a switch to another variant re-initialises it unless the contract keeps it (anira_contract_hard_set_variant_state; ANIRA_VARIANT_STATE_FRESH is the default). A model with a pair runs as ANIRA_MODEL_STATEFUL whatever its state says. Validation (ANIRA_ERROR_CONFIG naming the tensor, at create and at prepare): every state input names exactly one state output and every state output is named by exactly one state input; the two halves have equal dtype and shape; a state spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the anchor may name it. Its buffers take the spec's dtype, as every model tensor does: a custom engine binds what its load accepts, and a built-in engine refuses at load (ANIRA_ERROR_NOT_SUPPORTED) what its runtime cannot carry. ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a transposed layout. A second call replaces the name.",
           "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec, a NULL or empty name, or a spec whose role is not ANIRA_ROLE_STATE."
         },
         {
@@ -4279,6 +4301,28 @@
           "since": "0.2",
           "doc": "The declared stream latency of one output under a Hard contract, in samples of that output: what anira_handler_get_latency reports for the slot and what its receive ring is primed with, REPLACING the figure anira computes (the buffer-adaptation delay, the queue term, the wait credit and the model's internal latency; docs/sphinx/latency.rst). A host that needs one figure across block sizes, or one that aligns this stream with another, sets it; every output never named keeps the computed figure. Never below the model's internal latency (anira_tensor_spec_set_latency: a stream cannot deliver before the model does). Checked at anira_handler_prepare, not here: a figure below that floor, and a name that matches no Streamed output (an input has no stream latency), are ANIRA_ERROR_CONFIG there. Set per output by canonical name, a second set of a name replacing the first. In a contract file the key is \"latencies\": {\"<name>\": samples} in the hard object.",
           "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or samples above INT32_MAX (the scheduler's per-output figure is a long: one bound on every platform)."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_hard_set_variant_state",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "A Hard contract."
+            },
+            {
+              "type": "anira_variant_state",
+              "name": "state",
+              "doc": "ANIRA_VARIANT_STATE_FRESH (default) or ANIRA_VARIANT_STATE_KEEP."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.4",
+          "doc": "The state of a variant switch (anira_variant_state; the JSON key \"variant_state\": \"fresh\" or \"keep\" of the hard object): what the model's state is when anira_handler_set_plan moves the stream to a plan of another variant of the inference stage. FRESH, the default: the new variant starts from its initial state. The driver thread notes the switch when it forms the first chunk on the other variant, and ahead of that chunk's inference, on the inference thread, every declared State pair (ANIRA_ROLE_STATE) is re-initialised to zeros and the engine of the chunk's plan is reset (anira_engine_desc.reset, an exclusive handler's), each plan at its own first inference behind the switch; chunks formed before it finish on the state they ran with and are delivered, the processor's reset is not called (the stream continues) and the latency does not change. A switch back is a switch: A, B, A starts A fresh again. KEEP: nothing happens at the switch, and the declared state carries over from one variant to the next. Under either value a plan switch inside one variant re-initialises nothing, and state an engine keeps inside itself is never carried from one plan's engine to another's: under KEEP each engine continues from where it stopped, under FRESH it starts over. Read at anira_handler_prepare with the rest of the contract; a handler over one variant never switches.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value anira_variant_state does not name."
         },
         {
           "kind": "function",
@@ -6028,7 +6072,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.1",
-          "doc": "Loads a contract from JSON text (section 8.3): budget is \"measured\" or {\"ms\": x}, warmup is \"until_stable\", \"none\" or {\"fixed\": n}; a file with both roots or neither is ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly (ANIRA_SUCCESS_UPGRADED).",
+          "doc": "Loads a contract from JSON text (section 8.3): budget is \"measured\" or {\"ms\": x}, warmup is \"until_stable\", \"none\" or {\"fixed\": n}, variant_state is \"fresh\" or \"keep\" (anira_contract_hard_set_variant_state); a file with both roots or neither is ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly (ANIRA_SUCCESS_UPGRADED).",
           "return_doc": "ANIRA_OK or ANIRA_SUCCESS_UPGRADED, or ANIRA_ERROR_JSON with the key path."
         },
         {
@@ -6752,6 +6796,28 @@
           "since": "0.2",
           "doc": "One declared stream latency the contract names, enumerated by index in bytewise order of the canonical names, the shape of anira_contract_hard_ring_dtype.",
           "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL out-parameter or an index out of range."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_hard_variant_state",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_contract*",
+              "name": "contract",
+              "doc": "A Hard contract."
+            },
+            {
+              "type": "anira_variant_state*",
+              "name": "state",
+              "doc": "Receives the state of a variant switch."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.4",
+          "doc": "The state of a variant switch as anira_contract_hard_set_variant_state or the JSON key \"variant_state\" stored it; ANIRA_VARIANT_STATE_FRESH when never set.",
+          "return_doc": "As anira_contract_hard_host_blocks."
         },
         {
           "kind": "function",
@@ -8884,7 +8950,7 @@
             }
           ],
           "thread": "inference-thread",
-          "doc": "Re-initialises the state the engine keeps per handler: for an exclusive handler (ANIRA_PREPARE_EXCLUSIVE at its prepare), at the first inference of a new stream (after prepare, after anira_handler_reset), on the inference thread, with that inference's context, right before its process. The boundary is the plan's: after prepare or a reset every plan of the handler is reset at its own first inference of the new stream, whichever plan ran first, and a plan switch alone is none. Never for a handler whose model is stateless, whose calls run on the shared slots and keep nothing between them. NULL: nothing to reset."
+          "doc": "Re-initialises the state the engine keeps per handler: for an exclusive handler (ANIRA_PREPARE_EXCLUSIVE at its prepare), at the first inference of a new stream (after prepare, after anira_handler_reset) and at the first inference behind a switch to another variant under ANIRA_VARIANT_STATE_FRESH (anira_contract_hard_set_variant_state), on the inference thread, with that inference's context, right before its process. The boundary is the plan's: behind each of them every plan of the handler is reset at its own first inference, whichever plan ran first, and a plan switch inside one variant, or any switch under ANIRA_VARIANT_STATE_KEEP, is none. Never for a handler whose model is stateless, whose calls run on the shared slots and keep nothing between them. NULL: nothing to reset."
         },
         {
           "kind": "callback",
@@ -9945,7 +10011,7 @@
           "nonblocking": true,
           "status": "promised",
           "since": "0.2",
-          "doc": "Selects the plan the next submitted chunk runs on: one relaxed store, never planning. The selection is a single atomic value, the dense index itself, so callers on several threads cannot leave anira_handler_get_plan and the running engine in disagreement, and two plans on one engine (two variants, two providers) stay distinct. A chunk keeps the plan it was submitted under from its pre-processing to its post-processing: one that is queued or in flight when the call lands finishes on the old plan, and exactly one engine runs for it. A plan switch keeps the model's state: every plan runs the same declared State pairs (the variants of a stage have one form), and the next chunk's inference reads the state the last one produced, whichever plan produced it and whether or not that plan's engine keeps its own aliasing (ANIRA_ENGINE_FLAG_STATE_ALIAS). An index out of range is a no-op recorded as ANIRA_ERROR_CONFIG in anira_handler_rt_error; a call on an unprepared handler is a no-op recorded as ANIRA_ERROR_NOT_PREPARED. Not while anira_handler_prepare runs (prepare is the quiescence point).",
+          "doc": "Selects the plan the next submitted chunk runs on: one relaxed store, never planning. The selection is a single atomic value, the dense index itself, so callers on several threads cannot leave anira_handler_get_plan and the running engine in disagreement, and two plans on one engine (two variants, two providers) stay distinct. A chunk keeps the plan it was submitted under from its pre-processing to its post-processing: one that is queued or in flight when the call lands finishes on the old plan, and exactly one engine runs for it. A plan switch inside one variant keeps the model's state: every plan runs the same declared State pairs, and the next chunk's inference reads the state the last one produced, whichever plan produced it and whether or not that plan's engine keeps its own aliasing (ANIRA_ENGINE_FLAG_STATE_ALIAS). A switch to a plan of another variant follows the contract's variant state (anira_contract_hard_set_variant_state): by default the new variant starts from its initial state (the State pairs at zeros, its engine reset, ahead of the first inference formed on it), under ANIRA_VARIANT_STATE_KEEP it continues from the state the stream holds; either way nothing restarts, and what is in flight is delivered. An index out of range is a no-op recorded as ANIRA_ERROR_CONFIG in anira_handler_rt_error; a call on an unprepared handler is a no-op recorded as ANIRA_ERROR_NOT_PREPARED. Not while anira_handler_prepare runs (prepare is the quiescence point).",
           "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler; ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_CONFIG for an index out of range."
         },
         {

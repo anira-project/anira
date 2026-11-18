@@ -1029,14 +1029,19 @@ ANIRA_API anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report
  * and two plans on one engine (two variants, two providers) stay distinct. A chunk keeps
  * the plan it was submitted under from its pre-processing to its post-processing: one
  * that is queued or in flight when the call lands finishes on the old plan, and exactly
- * one engine runs for it. A plan switch keeps the model's state: every plan runs the
- * same declared State pairs (the variants of a stage have one form), and the next
- * chunk's inference reads the state the last one produced, whichever plan produced it
- * and whether or not that plan's engine keeps its own aliasing
- * (ANIRA_ENGINE_FLAG_STATE_ALIAS). An index out of range is a no-op recorded as
- * ANIRA_ERROR_CONFIG in anira_handler_rt_error; a call on an unprepared handler is a
- * no-op recorded as ANIRA_ERROR_NOT_PREPARED. Not while anira_handler_prepare runs
- * (prepare is the quiescence point).
+ * one engine runs for it. A plan switch inside one variant keeps the model's state:
+ * every plan runs the same declared State pairs, and the next chunk's inference reads
+ * the state the last one produced, whichever plan produced it and whether or not that
+ * plan's engine keeps its own aliasing (ANIRA_ENGINE_FLAG_STATE_ALIAS). A switch to a
+ * plan of another variant follows the contract's variant state
+ * (anira_contract_hard_set_variant_state): by default the new variant starts from its
+ * initial state (the State pairs at zeros, its engine reset, ahead of the first
+ * inference formed on it), under ANIRA_VARIANT_STATE_KEEP it continues from the state
+ * the stream holds; either way nothing restarts, and what is in flight is delivered. An
+ * index out of range is a no-op recorded as ANIRA_ERROR_CONFIG in
+ * anira_handler_rt_error; a call on an unprepared handler is a no-op recorded as
+ * ANIRA_ERROR_NOT_PREPARED. Not while anira_handler_prepare runs (prepare is the
+ * quiescence point).
  * @param handler The handler.
  * @param plan A dense plan index the report handed out.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler; ANIRA_ERROR_NOT_PREPARED

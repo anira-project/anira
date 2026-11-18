@@ -77,6 +77,18 @@ bool SessionElement::select_plan(uint32_t plan) noexcept {
     return true;
 }
 
+uint64_t SessionElement::stamp_state_epoch(uint32_t plan) noexcept ANIRA_NONBLOCKING {
+    const uint32_t variant = plan < m_plans.size() ? m_plans[plan].m_variant : 0U;
+    if (variant != m_last_variant) {
+        // The stream's first chunk is no switch, and under KEEP a switch starts nothing over.
+        if (m_last_variant != k_no_variant && m_hard.m_variant_state == ANIRA_VARIANT_STATE_FRESH) {
+            ++m_state_epoch;
+        }
+        m_last_variant = variant;
+    }
+    return m_state_epoch;
+}
+
 SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<capi::DerivedSpec>& inputs,
                                                    const std::vector<capi::DerivedSpec>& outputs,
                                                    const std::vector<bool>& input_state,
@@ -587,8 +599,14 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     }
 
     // The first inference of the new session is the first of a new stream: the engine of each
-    // session-exclusive plan resets before its own first one.
-    for (PlanSlot& plan : m_plans) { plan.m_engine_generation = k_no_generation; }
+    // session-exclusive plan resets before its own first one. The state epoch starts over with
+    // it: no chunk has been formed, so the stream's first one is no variant switch.
+    for (PlanSlot& plan : m_plans) {
+        plan.m_engine_generation = k_no_generation;
+        plan.m_engine_state_epoch = 0;
+    }
+    m_state_epoch = 0;
+    m_last_variant = k_no_variant;
 
     m_time_stamps.clear();
     m_time_stamps.reserve(m_num_structs);

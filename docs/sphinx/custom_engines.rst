@@ -226,9 +226,11 @@ naming the engine (``the engine 'com.example.myengine' refused load: it returned
    * - ``reset(ctx, prepared, user_data)``
      - Re-initialises what an **exclusive** handler keeps per stream (a hidden state the model does
        not declare, a variable tensor, a filter's history): at the first inference of a new stream
-       (after ``prepare``, after ``anira_handler_reset``), on the inference thread, right before its
+       (after ``prepare``, after ``anira_handler_reset``) and at the first one behind a switch to
+       another variant under ``ANIRA_VARIANT_STATE_FRESH``, the default
+       (``anira_contract_hard_set_variant_state``), on the inference thread, right before its
        ``process``, with that inference's context. The boundary is the plan's: every plan is reset at
-       its own first inference of the new stream, and a plan switch alone is none. Never for a
+       its own first inference behind it, and a plan switch inside one variant is none. Never for a
        stateless handler. Of the built-in engines only TensorFlow Lite has a body
        (``TfLiteInterpreterResetVariableTensors``).
    * - ``unprepare(prepared, user_data)``

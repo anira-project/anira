@@ -49,7 +49,9 @@ What anira does
   that the engine updates in place; addresses stay put across such plans (a chunk of a flipping plan
   in between moves the pair, so a captured graph is captured again after a switch).
 - The pair is the model's: every plan of the variant runs it, in host memory in this pre-release
-  (a ``host_domain`` on the State input overrides it), so **a plan switch keeps the state**.
+  (a ``host_domain`` on the State input overrides it), so **a plan switch inside one variant keeps
+  the state**. A switch to a plan of another variant starts the state over at zeros unless the
+  contract keeps it (``anira_contract_hard_set_variant_state``, ``"variant_state": "keep"``).
 - A failed inference does not flip, so the read side keeps the last good state (an aliasing
   engine's buffer holds what the failed call left); a dropped chunk never runs and does not advance
   it; a missed block does not affect it.

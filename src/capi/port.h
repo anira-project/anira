@@ -431,8 +431,10 @@ private:
 /// spec's shape and dtype, whose read buffer the processor runner binds to the model's State
 /// input ahead of before_inference and whose write buffer it binds to the model's State output
 /// of the pair, flipping the two behind a successful after_inference, and the generation the
-/// value was last bound under (a chunk stamped with another one is the first of a new stream:
-/// the read buffer starts over at zeros). The OUTPUT half holds no value: its `m_partner`
+/// value was last bound under and the state epoch beside it (a chunk stamped with another
+/// generation is the first of a new stream, one stamped with another state epoch the first
+/// behind a switch to another variant under ANIRA_VARIANT_STATE_FRESH: the read buffer starts
+/// over at zeros). The OUTPUT half holds no value: its `m_partner`
 /// names the input slot whose write buffer it is bound to. On both halves `m_partner` is the
 /// slot of the other half, on the other side. Constructed in place (the ports name the
 /// buffers). The value and the generation are the inference thread's, under the session's
@@ -453,6 +455,9 @@ struct StatePort {
     /// The generation the value was last bound under; k_no_generation after prepare. Plain
     /// field: the inference thread's, under the dispatch gate, like the value.
     uint64_t m_generation = k_no_generation;
+    /// The state epoch the value was last bound under (SessionElement::m_state_epoch as the
+    /// chunk carried it), adopted with the generation. The inference thread's, like it.
+    uint64_t m_state_epoch = 0;
 };
 
 /// A Buffer tensor holds nothing: prepare refuses the spec under a Hard contract, so no
