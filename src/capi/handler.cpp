@@ -233,6 +233,22 @@ bool has_arguments(anira_handler& handler, bool ok, const char* entry) noexcept 
     return false;
 }
 
+// ==== the read leases =========================================================================
+//
+// What a control thread replaces while the stream runs is read through a lease (RcuReaders.h),
+// claimed by the entry behind its checks and before anything moves, and held until the entry
+// returns: the session's plan table by every entry of the driving thread (the Hard entries,
+// their _wait twins, the ring state, reset: handler->m_manager->claim_plans(); every chunk of
+// the call is stamped from the one version the lease holds), the handler's plan rows by a
+// selection entry (handler->m_plan_row_readers.claim()). The control thread waits for the
+// leases that are out, never the other way round.
+//
+// No lease means every reader slot of the pool is busy: more calls of the handler's entries
+// overlap than the pool has slots (RcuReaders::k_num_slots), which one driving thread never
+// does to its own entries. The entry then does nothing and returns ANIRA_ERROR_CAPACITY. That
+// is back-pressure: the caller calls again, and by the latch's rule an entry's
+// ANIRA_ERROR_CAPACITY is neither recorded in anira_handler_rt_error nor logged.
+
 // ==== the slots ===============================================================================
 
 // The invariant of create and prepare (anira::capi::stream_port_refusal): asserted in a debug
@@ -684,16 +700,18 @@ std::chrono::steady_clock::duration wait_budget(const anira_handler& handler,
 // stem delivered; a NoThread outcome of the wait is the same refusal after process_output has
 // completed the block as a miss. A Deadline is a miss, ANIRA_MISSED, not a refusal. `counts`
 // receives the stem's delivered counts on every path: on the INVALID_STATE refusals they are
-// what the stem delivered.
+// what the stem delivered. `plans` is the plan table of the twin's read lease, held for the
+// whole call, the wait included.
 
 anira_status process_tensors_wait_body(anira_handler& handler,
                                        const anira_tensor* inputs,
                                        const anira_tensor* outputs,
                                        double timeout_ms,
                                        const char* entry,
+                                       const anira::SessionElement::PlanTable& plans,
                                        const size_t*& counts) noexcept {
     if (!anira::scheduler::InferenceThread::any_loop_active()) {
-        counts = handler.m_manager->process_nowait(inputs, outputs);
+        counts = handler.m_manager->process_nowait(inputs, outputs, &plans);
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
     }
@@ -701,7 +719,8 @@ anira_status process_tensors_wait_body(anira_handler& handler,
     counts = handler.m_manager->process_wait(inputs,
                                              outputs,
                                              wait_budget(handler, timeout_ms, inputs, outputs),
-                                             outcome);
+                                             outcome,
+                                             &plans);
     if (outcome == anira::Core::WaitOutcome::NoThread) {
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
@@ -713,16 +732,18 @@ anira_status pop_tensors_wait_body(anira_handler& handler,
                                    const anira_tensor* outputs,
                                    double timeout_ms,
                                    const char* entry,
+                                   const anira::SessionElement::PlanTable& plans,
                                    const size_t*& counts) noexcept {
     if (!anira::scheduler::InferenceThread::any_loop_active()) {
-        counts = handler.m_manager->pop_data(outputs);
+        counts = handler.m_manager->pop_data(outputs, &plans);
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
     }
     anira::Core::WaitOutcome outcome = anira::Core::WaitOutcome::Done;
     counts = handler.m_manager->pop_data_wait(outputs,
                                               wait_budget(handler, timeout_ms, nullptr, outputs),
-                                              outcome);
+                                              outcome,
+                                              &plans);
     if (outcome == anira::Core::WaitOutcome::NoThread) {
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
@@ -808,6 +829,28 @@ void zero_state_ports(anira_handler& handler) noexcept {
     }
 }
 
+// Publishes the handler's plan rows as the selection entries read them (anira::capi::PlanRows):
+// one row per plan of m_plans, by value, with the two id strings copied into the published
+// version itself. Control thread; a selection entry that holds a lease keeps the version it
+// claimed.
+void publish_plan_rows(anira_handler& handler) {
+    handler.m_plan_rows.replace([&handler](anira::capi::PlanRows& published) {
+        published.m_rows.reserve(handler.m_plans.size());
+        for (const anira::capi::Plan& plan : handler.m_plans) {
+            anira_plan_info row = plan.m_info;
+            if (row.engine_id != nullptr) {
+                published.m_strings.emplace_back(row.engine_id);
+                row.engine_id = published.m_strings.back().c_str();
+            }
+            if (row.provider_id != nullptr) {
+                published.m_strings.emplace_back(row.provider_id);
+                row.provider_id = published.m_strings.back().c_str();
+            }
+            published.m_rows.push_back(row);
+        }
+    });
+}
+
 // Releases the session and everything prepare built; the handler is unprepared afterwards.
 // The session goes first (Core::release_session drains the in-flight work and joins the pool
 // with the last session), then the processor, the processor's unprepare, the report and the plan
@@ -828,6 +871,8 @@ void unprepare(anira_handler& handler) noexcept {
     unprepare_processor(handler);
     clear_report(handler.m_report);
     handler.m_plans.clear();
+    // No rows for a selection entry either: the published version is the empty table.
+    publish_plan_rows(handler);
 }
 
 // What the latency getters answer from, after a sizing of the session: one figure per output
@@ -1482,15 +1527,21 @@ std::vector<anira::engine::PlanRequest> plan_requests(
     return requests;
 }
 
+// The loaded model of a plan, off the session's own plan list (SessionElement::m_plans, the
+// control side: the caller is inside a control entry of the handler), under the plan's dense
+// index; NULL for an index the list does not have, for an entry whose plan was taken out and
+// for a plan without a loaded model.
+const anira::engine::Loaded* loaded_of(const anira::SessionElement& session, size_t plan) noexcept {
+    if (plan >= session.m_plans.size() || session.m_plans[plan] == nullptr) { return nullptr; }
+    return session.m_plans[plan]->m_loaded.get();
+}
+
 // The memory kind of a plan's provider's device as its loaded model's record carries it (the
 // context's answer at the prepare that loaded it), under the plan's dense index; unknown for a
 // plan without a loaded model.
 anira_memory_kind memory_kind_of(const anira_handler& handler, size_t plan) noexcept {
-    const anira::SessionElement& session = handler.m_manager->session();
-    if (plan >= session.m_plans.size() || session.m_plans[plan]->m_loaded == nullptr) {
-        return ANIRA_MEMORY_UNKNOWN;
-    }
-    return session.m_plans[plan]->m_loaded->model().m_device_memory.m_kind;
+    const anira::engine::Loaded* const loaded = loaded_of(handler.m_manager->session(), plan);
+    return loaded != nullptr ? loaded->model().m_device_memory.m_kind : ANIRA_MEMORY_UNKNOWN;
 }
 
 // The plan table of the report: one plan per variant, row and provider of the validator's
@@ -1621,8 +1672,9 @@ anira::engine::Loaded::SlotEdge edge_of(const anira::SessionElement& session,
                                         size_t plan,
                                         bool is_input,
                                         uint32_t slot) noexcept {
-    if (plan >= session.m_plans.size() || session.m_plans[plan]->m_loaded == nullptr) { return {}; }
-    return session.m_plans[plan]->m_loaded->slot_edge(is_input, slot);
+    const anira::engine::Loaded* const loaded = loaded_of(session, plan);
+    if (loaded == nullptr) { return {}; }
+    return loaded->slot_edge(is_input, slot);
 }
 
 // The dtype a slot's ring holds (its stream port's), 0 for a slot without a ring.
@@ -1640,10 +1692,9 @@ anira_binding binding_of(const anira::SessionElement& session,
                          size_t plan,
                          bool is_input,
                          uint32_t slot) noexcept {
-    if (plan >= session.m_plans.size() || session.m_plans[plan]->m_loaded == nullptr) {
-        return ANIRA_BINDING_POSITION;
-    }
-    const anira::engine::Bindings& bindings = session.m_plans[plan]->m_loaded->bindings();
+    const anira::engine::Loaded* const loaded = loaded_of(session, plan);
+    if (loaded == nullptr) { return ANIRA_BINDING_POSITION; }
+    const anira::engine::Bindings& bindings = loaded->bindings();
     const std::vector<anira_binding>& side = is_input ? bindings.m_inputs : bindings.m_outputs;
     return slot < side.size() ? side[slot] : ANIRA_BINDING_POSITION;
 }
@@ -1975,11 +2026,11 @@ void set_real_time(anira_plan_info& info,
 // max_instances as the core resolved and clamped it. The session is sized for the fewest over
 // the variants (anira::VariantBounds), which is this figure in a stage of one variant.
 uint32_t parallel_of(const anira::SessionElement& session, uint32_t plan) noexcept {
-    if (session.exclusive() || plan >= session.m_plans.size() ||
-        session.m_plans[plan]->m_loaded == nullptr) {
+    const anira::engine::Loaded* const loaded = loaded_of(session, plan);
+    if (session.exclusive() || loaded == nullptr) {
         return std::max<uint32_t>(session.m_num_instances, 1);
     }
-    return std::max<uint32_t>(session.m_plans[plan]->m_loaded->model().m_instances, 1);
+    return std::max<uint32_t>(loaded->model().m_instances, 1);
 }
 
 // What a prepare knows of one plan's inference time: nothing (no warm-up, or not yet), what its
@@ -2713,6 +2764,9 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                           "the last prepare or reset",
                           suppressed);
     }
+    // The rows the selection entries resolve in, final now (the pass wrote its figures into
+    // them): published before the entries run.
+    publish_plan_rows(handler);
     // Every callback of this prepare returned and every plan has its prepared handle: the
     // Hard entries and reset run from here on (the getters answered since m_prepared above,
     // for the callbacks).
@@ -3544,16 +3598,16 @@ anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report* report,
 
 namespace {
 
-// The one resolver of a selection by its axes: the first plan of the handler's table, in
-// dense-index order, that runs the variant on the backend `query` names (matches(): a variant,
-// an engine and a provider each exact or left open, as anira_plan_report_find reads them).
-// False when the table has none. What anira_handler_set_model and anira_handler_set_backend
-// resolve with; a read of the table prepare built: no allocation, no lock.
-bool resolve_plan(const anira_handler& handler,
+// The one resolver of a selection by its axes: the first plan of `rows`, in dense-index order,
+// that runs the variant on the backend `query` names (matches(): a variant, an engine and a
+// provider each exact or left open, as anira_plan_report_find reads them). False when the rows
+// have none. What anira_handler_set_model and anira_handler_set_backend resolve with, over the
+// version of the plan rows their lease holds: no allocation, no lock.
+bool resolve_plan(const std::vector<anira_plan_info>& rows,
                   const anira_plan_query& query,
                   uint32_t& plan) noexcept ANIRA_NONBLOCKING {
-    for (size_t i = 0; i < handler.m_plans.size(); ++i) {
-        if (matches(handler.m_plans[i].m_info, query)) {
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (matches(rows[i], query)) {
             plan = static_cast<uint32_t>(i);
             return true;
         }
@@ -3561,38 +3615,55 @@ bool resolve_plan(const anira_handler& handler,
     return false;
 }
 
+// How often a selection by axis reads the plan rows before it gives up. It reads them again
+// only when the selected plan is none of the version it holds, a plan of a table published
+// behind its claim, which the next claim sees: every further attempt takes another table
+// published and selected in between.
+constexpr int k_selection_attempts = 3;
+
 // The selection moved along one axis and kept on the other: to the plan of `variant` (NULL:
 // the selected plan's variant) on `backend` (NULL: the selected plan's engine and provider,
-// exactly). A compare-and-swap loop on the session's selection: the pair is resolved against
-// the plan selected now and stored only while that plan is still the selection, so a set_model
-// and a set_backend from two threads both land (the one that lost the race resolves again,
-// from the other's plan) and neither undoes the other's axis. A pair without a plan leaves the
-// selection as it is: ANIRA_ERROR_NOT_FOUND, recorded like every real-time refusal.
+// exactly), resolved in the plan rows through a read lease. A compare-and-swap loop on the
+// session's selection: the pair is resolved against the plan selected now and stored only
+// while that plan is still the selection, so a set_model and a set_backend from two threads
+// both land (the one that lost the race resolves again, from the other's plan) and neither
+// undoes the other's axis. A pair without a plan leaves the selection as it is:
+// ANIRA_ERROR_NOT_FOUND, recorded like every real-time refusal. No free reader slot, or rows
+// that were replaced under every attempt, is ANIRA_ERROR_CAPACITY: the selection as it is, not
+// recorded, and the caller calls again.
 anira_status select_along_axis(anira_handler& handler,
                                const uint32_t* variant,
                                const anira_backend_id* backend,
                                const char* entry) noexcept ANIRA_NONBLOCKING {
-    uint32_t selected = handler.m_manager->get_plan();
-    while (true) {
-        // The selection is always a row of the table (set_plan and prepare store nothing else).
-        const anira_plan_info& current = handler.m_plans[selected].m_info;
-        anira_plan_query query = ANIRA_PLAN_QUERY_INIT;
-        query.variant = variant != nullptr ? *variant : current.variant;
-        if (backend != nullptr) {
-            query.backend = *backend;
-        } else {
-            query.backend.engine = current.engine;
-            query.backend.provider = current.provider;
-            query.backend.engine_id = current.engine_id;
-            query.backend.provider_id = current.provider_id;
+    for (int attempt = 0; attempt < k_selection_attempts; ++attempt) {
+        const auto lease = handler.m_plan_row_readers.claim();
+        if (!lease.has_value()) { return ANIRA_ERROR_CAPACITY; }
+        const std::vector<anira_plan_info>& rows = lease->data().m_rows;
+        uint32_t selected = handler.m_manager->get_plan();
+        while (selected < rows.size()) {
+            const anira_plan_info& current = rows[selected];
+            anira_plan_query query = ANIRA_PLAN_QUERY_INIT;
+            query.variant = variant != nullptr ? *variant : current.variant;
+            if (backend != nullptr) {
+                query.backend = *backend;
+            } else {
+                query.backend.engine = current.engine;
+                query.backend.provider = current.provider;
+                query.backend.engine_id = current.engine_id;
+                query.backend.provider_id = current.provider_id;
+            }
+            uint32_t plan = 0;
+            if (!resolve_plan(rows, query, plan)) {
+                rt_refuse(handler, ANIRA_ERROR_NOT_FOUND, entry);
+                return ANIRA_ERROR_NOT_FOUND;
+            }
+            if (handler.m_manager->set_plan_if(selected, plan)) { return ANIRA_OK; }
         }
-        uint32_t plan = 0;
-        if (!resolve_plan(handler, query, plan)) {
-            rt_refuse(handler, ANIRA_ERROR_NOT_FOUND, entry);
-            return ANIRA_ERROR_NOT_FOUND;
-        }
-        if (handler.m_manager->set_plan_if(selected, plan)) { return ANIRA_OK; }
+        // The selected plan is none of these rows: the lease goes back, and the next one holds
+        // the table that has it.
     }
+    // The plan rows were replaced under every read: back-pressure, like no free reader slot.
+    return ANIRA_ERROR_CAPACITY;
 }
 
 }  // namespace
@@ -3601,14 +3672,18 @@ anira_status ANIRA_CALL anira_handler_set_plan(anira_handler* handler,
                                                uint32_t plan) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (plan >= handler->m_plans.size()) {
+    // The range check reads the published plan rows through a lease, never the control
+    // side's table, which a control thread may be replacing.
+    const auto rows = handler->m_plan_row_readers.claim();
+    if (!rows.has_value()) { return ANIRA_ERROR_CAPACITY; }
+    if (plan >= rows->data().m_rows.size()) {
         rt_refuse(*handler, ANIRA_ERROR_CONFIG, __func__);
         return ANIRA_ERROR_CONFIG;
     }
     // One relaxed store of the dense index, so concurrent callers cannot tear a pair:
-    // get_plan loads the same atomic back. The session's table is m_plans, so the range check
-    // above is the session's too. The chunk that is already submitted keeps the plan it was
-    // stamped with.
+    // get_plan loads the same atomic back. The session's table has the rows' indices, so the
+    // range check above is the session's too. The chunk that is already submitted keeps the
+    // plan it was stamped with.
     static_cast<void>(handler->m_manager->set_plan(plan));
     return ANIRA_OK;
 }
@@ -3654,8 +3729,9 @@ anira_status ANIRA_CALL anira_handler_set_backend(anira_handler* handler,
 
 // ==== the Hard entries over host tensors ======================================================
 // The order of every entry: the caller's counts zeroed, the NULL handler (not recorded), the
-// prepared check, the arguments, every tensor validated before anything is pushed, the stem,
-// the counts the stem returns, the status.
+// prepared check, the arguments, every tensor validated before anything is pushed, the read
+// lease on the session's plan table (see "the read leases": held until the entry returns, its
+// table handed to the stem), the stem, the counts the stem returns, the status.
 
 anira_status ANIRA_CALL anira_handler_process(anira_handler* handler,
                                               const anira_tensor* in,
@@ -3674,9 +3750,12 @@ anira_status ANIRA_CALL anira_handler_process(anira_handler* handler,
         status = slot_tensor_status(*handler, *out, false, out_slot, __func__);
     }
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     const StagedSlotArray inputs(*handler, true, *in, in_slot);
     const StagedSlotArray outputs(*handler, false, *out, out_slot);
-    const size_t* counts = handler->m_manager->process_nowait(inputs.array(), outputs.array());
+    const size_t* counts =
+        handler->m_manager->process_nowait(inputs.array(), outputs.array(), &plans->data());
     set_delivered(delivered, counts[out_slot]);
     return block_status(*handler);
 }
@@ -3700,10 +3779,12 @@ anira_status ANIRA_CALL anira_handler_process_multi(anira_handler* handler,
     anira_status status = side_tensors_status(*handler, inputs, true, __func__);
     if (status == ANIRA_OK) { status = side_tensors_status(*handler, outputs, false, __func__); }
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     // The sequence: the Static inputs, the streamed call, the Static outputs.
     set_static_inputs(*handler, inputs);
     handler->m_miss_fn_ran = false;
-    const size_t* counts = handler->m_manager->process_nowait(inputs, outputs);
+    const size_t* counts = handler->m_manager->process_nowait(inputs, outputs, &plans->data());
     finish_multi(*handler, outputs, counts, delivered);
     return block_status(*handler);
 }
@@ -3718,8 +3799,10 @@ anira_status ANIRA_CALL anira_handler_push_data(anira_handler* handler,
     }
     const anira_status status = slot_tensor_status(*handler, *in, true, slot, __func__);
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     const StagedSlotArray inputs(*handler, true, *in, slot);
-    handler->m_manager->push_data(inputs.array());
+    handler->m_manager->push_data(inputs.array(), &plans->data());
     return ANIRA_OK;
 }
 
@@ -3734,8 +3817,10 @@ anira_status ANIRA_CALL anira_handler_push_data_multi(anira_handler* handler,
     }
     const anira_status status = side_tensors_status(*handler, inputs, true, __func__);
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     set_static_inputs(*handler, inputs);
-    handler->m_manager->push_data(inputs);
+    handler->m_manager->push_data(inputs, &plans->data());
     return ANIRA_OK;
 }
 
@@ -3751,8 +3836,10 @@ anira_status ANIRA_CALL anira_handler_pop_data(anira_handler* handler,
     }
     const anira_status status = slot_tensor_status(*handler, *out, false, slot, __func__);
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     const StagedSlotArray outputs(*handler, false, *out, slot);
-    const size_t* counts = handler->m_manager->pop_data(outputs.array());
+    const size_t* counts = handler->m_manager->pop_data(outputs.array(), &plans->data());
     set_delivered(delivered, counts[slot]);
     return block_status(*handler);
 }
@@ -3772,8 +3859,10 @@ anira_status ANIRA_CALL anira_handler_pop_data_multi(anira_handler* handler,
     }
     const anira_status status = side_tensors_status(*handler, outputs, false, __func__);
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     handler->m_miss_fn_ran = false;
-    const size_t* counts = handler->m_manager->pop_data(outputs);
+    const size_t* counts = handler->m_manager->pop_data(outputs, &plans->data());
     finish_multi(*handler, outputs, counts, delivered);
     return block_status(*handler);
 }
@@ -3862,6 +3951,15 @@ anira_status ANIRA_CALL anira_handler_get_available_samples(anira_handler* handl
     // count is prepare's): no read of a variant's derivation.
     const anira::capi::StreamPort* const stream =
         anira::capi::stream_port(handler->m_output_ports, slot);
+    // The ring's own accessor is unbounded on the channel (an output without a ring has no
+    // channel to check).
+    if (stream != nullptr && !has_arguments(*handler, channel < stream->m_channels, __func__)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    // The call collects the completed inferences, on the driving thread: under the read lease
+    // of that thread's entries.
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     // An output without a ring (Static, State): 0, nothing recorded, and the completed
     // inferences collected all the same (the manager's call collects before it answers 0), so a
     // Static output's stored value is the latest collected one after this call too.
@@ -3869,17 +3967,20 @@ anira_status ANIRA_CALL anira_handler_get_available_samples(anira_handler* handl
         static_cast<void>(handler->m_manager->get_available_samples(slot, 0));
         return ANIRA_OK;
     }
-    // The ring's own accessor is unbounded on the channel.
-    if (!has_arguments(*handler, channel < stream->m_channels, __func__)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
     *out = handler->m_manager->get_available_samples(slot, channel);
     return ANIRA_OK;
 }
 
 void ANIRA_CALL anira_handler_reset(anira_handler* handler) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return; }
-    if (handler->m_runnable.load(std::memory_order_acquire)) { handler->m_manager->reset(); }
+    if (handler->m_runnable.load(std::memory_order_acquire)) {
+        // The stream's reset, on the driving thread: under the read lease of that thread's
+        // entries, so that a control thread which waits for the leases waits for a reset in
+        // progress too. The reset reads no table and has no status to refuse with: when every
+        // reader slot is busy it resets all the same.
+        const auto plans = handler->m_manager->claim_plans();
+        handler->m_manager->reset();
+    }
     const uint32_t suppressed = handler->m_rt.rearm();
     if (suppressed > 0) {
         ANIRA_LOG_RT_INFO(anira::log_group::k_capi,
@@ -3917,6 +4018,8 @@ anira_status ANIRA_CALL anira_handler_process_wait(anira_handler* handler,
         status = slot_tensor_status(*handler, *out, false, out_slot, __func__);
     }
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     const StagedSlotArray inputs(*handler, true, *in, in_slot);
     const StagedSlotArray outputs(*handler, false, *out, out_slot);
     const size_t* counts = nullptr;
@@ -3925,6 +4028,7 @@ anira_status ANIRA_CALL anira_handler_process_wait(anira_handler* handler,
                                        outputs.array(),
                                        timeout_ms,
                                        __func__,
+                                       plans->data(),
                                        counts);
     set_delivered(delivered, counts[out_slot]);
     return status;
@@ -3949,10 +4053,18 @@ anira_status ANIRA_CALL anira_handler_process_multi_wait(anira_handler* handler,
     anira_status status = side_tensors_status(*handler, inputs, true, __func__);
     if (status == ANIRA_OK) { status = side_tensors_status(*handler, outputs, false, __func__); }
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     set_static_inputs(*handler, inputs);
     handler->m_miss_fn_ran = false;
     const size_t* counts = nullptr;
-    status = process_tensors_wait_body(*handler, inputs, outputs, timeout_ms, __func__, counts);
+    status = process_tensors_wait_body(*handler,
+                                       inputs,
+                                       outputs,
+                                       timeout_ms,
+                                       __func__,
+                                       plans->data(),
+                                       counts);
     finish_multi(*handler, outputs, counts, delivered);
     return status;
 }
@@ -3970,9 +4082,16 @@ anira_status ANIRA_CALL anira_handler_pop_data_wait(anira_handler* handler,
     }
     anira_status status = slot_tensor_status(*handler, *out, false, slot, __func__);
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     const StagedSlotArray outputs(*handler, false, *out, slot);
     const size_t* counts = nullptr;
-    status = pop_tensors_wait_body(*handler, outputs.array(), timeout_ms, __func__, counts);
+    status = pop_tensors_wait_body(*handler,
+                                   outputs.array(),
+                                   timeout_ms,
+                                   __func__,
+                                   plans->data(),
+                                   counts);
     set_delivered(delivered, counts[slot]);
     return status;
 }
@@ -3992,9 +4111,11 @@ anira_status ANIRA_CALL anira_handler_pop_data_multi_wait(anira_handler* handler
     }
     anira_status status = side_tensors_status(*handler, outputs, false, __func__);
     if (status != ANIRA_OK) { return status; }
+    const auto plans = handler->m_manager->claim_plans();
+    if (!plans.has_value()) { return ANIRA_ERROR_CAPACITY; }
     handler->m_miss_fn_ran = false;
     const size_t* counts = nullptr;
-    status = pop_tensors_wait_body(*handler, outputs, timeout_ms, __func__, counts);
+    status = pop_tensors_wait_body(*handler, outputs, timeout_ms, __func__, plans->data(), counts);
     finish_multi(*handler, outputs, counts, delivered);
     return status;
 }

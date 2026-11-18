@@ -190,6 +190,73 @@ public:
     static void release_session(const std::shared_ptr<SessionElement>& session);
 
     /**
+     * @name A registered session's plan list, changed while its stream runs
+     *
+     * The control side of a plan that joins or leaves a session behind its create: the list
+     * that owns the plan slots (SessionElement::m_plans) changes under the lifecycle lock,
+     * because the release of another session walks the lists of all registered sessions under
+     * it. None of the four publishes anything: the driving thread stamps from the table the
+     * session's handler publishes (SessionElement::publish_plans), and a slot that left the
+     * list is freed by its remover once SessionElement::synchronize_plans() and
+     * wait_until_unused() returned. Control threads only; the caller is the session's handler
+     * (its control lock serialises its own calls).
+     * @{
+     */
+
+    /**
+     * @brief Appends a plan slot to the session's list
+     *
+     * The slot arrives complete: its loaded model, this session's prepared handle over it, its
+     * wait list, and the id strings interned in THIS session (SessionElement::intern_id).
+     * Nothing stamps it before the next SessionElement::publish_plans().
+     *
+     * @return The plan's index, its position in the list
+     */
+    static uint32_t add_plan_slot(const std::shared_ptr<SessionElement>& session,
+                                  std::shared_ptr<SessionElement::PlanSlot> slot);
+
+    /**
+     * @brief Takes a plan's slot out of the session's list; its entry stays, empty
+     *
+     * The published table still names the slot, and chunks may count on it: the caller holds
+     * the slot it gets until it has published the list again, waited for the read leases
+     * (SessionElement::synchronize_plans) and for the chunks (wait_until_unused). Then it gives
+     * the prepared handle back, lets the pool forget the model (release_loaded_if_unheld) and
+     * drops the slot, on its own thread.
+     *
+     * @return The slot, or null for an index the list does not have or an empty entry
+     */
+    static std::shared_ptr<SessionElement::PlanSlot> take_plan_slot(
+        const std::shared_ptr<SessionElement>& session,
+        uint32_t plan);
+
+    /**
+     * @brief Lets the pool's entry of a loaded model go when no registered session's plan list
+     * holds the model any more
+     *
+     * What Core::release_session does for every plan of a session, for one model: the step
+     * behind take_plan_slot() once the taken slot's prepared handle is given back. The model
+     * itself unloads with its last holder (the slot the caller still has).
+     */
+    static void release_loaded_if_unheld(const std::shared_ptr<engine::Loaded>& loaded);
+
+    /**
+     * @brief Waits until no chunk counts on a plan slot any more
+     *
+     * The slot left the published table and SessionElement::synchronize_plans() returned, so
+     * no chunk is stamped with it any more: its count (PlanSlot::active_chunks) only falls. It
+     * reaches 0 without the driving thread: an inference thread ends every chunk that is
+     * queued, waiting for an instance or running. For an exclusive session a pending chunk
+     * whose dispatch passed the gate's release is otherwise kicked by the driving thread's next
+     * call alone, so this call kicks the dispatch chain itself while it waits, and a stopped
+     * transport does not pin it. Blocks for as long as an inference of the plan runs (an engine
+     * call that never returns never lets it return).
+     */
+    static void wait_until_unused(const std::shared_ptr<SessionElement>& session,
+                                  const SessionElement::PlanSlot& slot) ANIRA_BLOCKING;
+    /** @} */
+
+    /**
      * @brief Stops and joins the inference thread pool, regardless of registered sessions
      *
      * Idempotent and cheap when there is nothing to do (in particular it never creates the
@@ -502,8 +569,11 @@ public:
      * reference-output samples (SessionElement::m_pending_pull_samples).
      *
      * @param session Shared pointer to the session that has new data available
+     * @param plans The published plan table every chunk of this call is stamped from: the
+     * version of the read lease the caller holds (SessionElement::claim_plans)
      */
-    static void new_data_submitted(const std::shared_ptr<SessionElement>& session);
+    static void new_data_submitted(const std::shared_ptr<SessionElement>& session,
+                                   const SessionElement::PlanTable& plans);
 
     /**
      * @brief Collects completed inferences on the push side, as far as they fit
@@ -865,9 +935,11 @@ private:
      * input data for inference execution.
      *
      * @param session Shared pointer to the session to preprocess
+     * @param plans The published plan table the chunk is stamped from (new_data_submitted's)
      * @return True if preprocessing was successful, false otherwise
      */
-    static bool pre_process(const std::shared_ptr<SessionElement>& session);
+    static bool pre_process(const std::shared_ptr<SessionElement>& session,
+                            const SessionElement::PlanTable& plans);
 
     /**
      * @brief One inference of warm_up_plan(): a free struct stamped with the plan, submitted as

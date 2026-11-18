@@ -221,6 +221,7 @@ anira_add_test_binary(test_abi WHITE_BOX
 	abi/test_HandlerTensor.cpp
 	abi/test_HandlerWait.cpp
 	abi/test_InstanceDispatch.cpp
+	abi/test_PlanTable.cpp
 	abi/test_Prepare.cpp
 	abi/test_RtError.cpp
 	abi/test_Processor.cpp

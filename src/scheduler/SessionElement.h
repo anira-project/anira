@@ -10,16 +10,19 @@
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
+#include <tanh/core/threading/RCU.h>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "../utils/RcuReaders.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
@@ -638,32 +641,95 @@ public:
     };
 
     /**
-     * @brief The plan table: dense plan index -> the plan.
+     * @brief The plans of the session, the control side: dense plan index -> the plan's slot.
      *
-     * Built by Core::create_session from the requests the C handler gives it
-     * (engine::PlanRequest): exactly its plans, each an object of its own that the table holds
-     * by pointer. Never empty in a registered session, and never changed afterwards. Read by
-     * the stamp of a chunk (stamp_plan: the driving thread, and the control thread for a
-     * warm-up chunk) and by control-thread code; an inference thread and every later step of a
-     * chunk use the slot and the copies the chunk carries, never the table.
+     * The list that OWNS the slots. Built by Core::create_session from the requests the C
+     * handler gives it (engine::PlanRequest): exactly its plans, each an object of its own.
+     * An index is a plan's for the session's life: a plan that is taken out leaves its entry
+     * in place, empty (Core::take_plan_slot), and a plan that is added gets the next index
+     * (Core::add_plan_slot). Never empty in a registered session.
+     *
+     * Read and changed on control threads only, never on a real-time path: by the control
+     * thread of the session's handler (prepare, the warm-up's stamp, the report), and by the
+     * core under its lifecycle lock, where the release of ANOTHER session walks the lists of
+     * all registered sessions (which loaded model is still held). So the list changes under
+     * the lifecycle lock alone (Core::create_session, add_plan_slot, take_plan_slot), and the
+     * handler's control thread, the only one that changes it, reads it without the lock. The
+     * driving thread never reads it: it stamps from the published table (m_plan_table).
      */
     std::vector<std::shared_ptr<PlanSlot>> m_plans;
+
+    /**
+     * @brief The plan table as the driving thread reads it: one published version
+     *
+     * Dense plan index -> the plan's slot, NULL at an index whose plan was taken out. The
+     * pointers do not own: the slots are m_plans' (or, for a slot just taken out, its
+     * remover's). A version is immutable once published, and it is destroyed later than it is
+     * retired (by a later publication), so its destructor must not, and does not, look at a
+     * slot.
+     */
+    struct PlanTable {
+        std::vector<PlanSlot*> m_slots;
+    };
+
+    /// A read lease on the published plan table: the version of the claim, for the lease's
+    /// life (RcuReaders::Lease).
+    using PlanLease = RcuReaders<PlanTable>::Lease;
+
+    /**
+     * @brief Claims a read lease on the published plan table
+     *
+     * What every entry of the driving thread holds for the whole call (the six Hard entries,
+     * their _wait twins, the ring state, reset) and stamps its chunks from: the first free
+     * reader slot by compare-and-swap, the others in turn, so the driving thread need not be
+     * one thread, and two calls that overlap each read through a slot of their own. No
+     * allocation, no lock.
+     *
+     * @return The lease, or nothing when every slot is busy (ANIRA_ERROR_CAPACITY; with one
+     * driving thread it does not happen)
+     */
+    std::optional<PlanLease> claim_plans() const noexcept ANIRA_NONBLOCKING {
+        return m_plan_readers.claim();
+    }
+
+    /**
+     * @brief Publishes m_plans as the table the driving thread stamps from
+     *
+     * One raw pointer per entry of the list, NULL for an empty one. Control thread (the
+     * handler's, which alone changes the list); allocates and takes the table's writer lock.
+     * A lease claimed from now on sees this version; one that is out keeps its own.
+     */
+    void publish_plans();
+
+    /**
+     * @brief Waits until no read lease claimed before the last publish_plans() is still out
+     *
+     * When it returns, every entry of the driving thread that could stamp a chunk from an
+     * older version has returned: a slot the newest version no longer names is never stamped
+     * again. It frees nothing. The slot is its remover's to free, once nothing counts on it
+     * any more (PlanSlot::active_chunks, Core::wait_until_unused). Control thread; blocks for
+     * as long as such an entry runs (a _wait twin for its timeout).
+     */
+    void synchronize_plans() ANIRA_BLOCKING;
 
     /**
      * @brief The selected plan: the one the next submitted chunk is stamped with.
      *
      * The whole runtime selection is this one atomic (select_plan stores it, a chunk takes
      * it with one load in Core::pre_process), so concurrent callers have no pair to tear.
-     * Always below m_plans.size(). 0 when Core::create_session returns; the C handler
-     * selects its initial plan before the first prepare. The atomic itself is the C handler's
-     * (anira_handler::m_selected_plan, which outlives the session as its latch does), so the
-     * handler's getter reads the selection without reaching into the session; a 2.x session
-     * refers to its own, m_current_plan_own.
+     * 0 when Core::create_session returns; the C handler selects its initial plan before the
+     * first prepare. The atomic itself is the C handler's (anira_handler::m_selected_plan,
+     * which outlives the session as its latch does), so the handler's getter reads the
+     * selection without reaching into the session; a 2.x session refers to its own,
+     * m_current_plan_own. A value may name an index the table a chunk is stamped from does not
+     * have, or one whose plan was taken out: stamp_selected_plan says what the chunk runs then.
      */
     std::atomic<uint32_t> m_current_plan_own{0};
     std::atomic<uint32_t>& m_current_plan;
 
-    /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
+    /// Selects a plan: one relaxed store. False, and nothing stored, for an index the
+    /// published table does not have (its count is an atomic the publication stores: the
+    /// check reads no container, from whatever thread it runs).
     bool select_plan(uint32_t plan) noexcept;
 
     /// Selects `plan` if `expected` is still the selected plan: one compare-and-swap of the
@@ -698,18 +764,52 @@ public:
     uint64_t stamp_state_epoch(uint32_t variant) noexcept ANIRA_NONBLOCKING;
 
     /**
-     * @brief Stamps a chunk with a plan: the index, the plan's slot and what the slot reports
+     * @brief Stamps a chunk of the stream with the selected plan, out of a published table
      *
-     * The one place a chunk gets its plan (Core::pre_process on the driving thread,
-     * Core::warm_up_inference on the control thread), and the one read of the table on a
-     * real-time path: the chunk counts on the slot from here (PlanSlot::active_chunks) and
-     * carries the slot's backend and aliasing as copies (ThreadSafeStruct::m_engine and the
-     * fields beside it). An index the table does not have, which a selection never is, leaves
-     * the chunk without a slot and without a backend: its inference fails
-     * (ANIRA_ERROR_INTERNAL). Wait-free, no allocation. The caller holds the chunk (it took
-     * it from the free pool).
+     * Where a chunk of the stream gets its plan (Core::pre_process, on the driving thread),
+     * and the one read of the plan table on a real-time path: `table` is the version of the
+     * read lease the running entry holds, one for the whole call, so every chunk the call
+     * forms is stamped from the same table. The chunk gets the index, the plan's slot, on which
+     * it counts from here (PlanSlot::active_chunks), and the slot's variant, backend and
+     * aliasing as copies (ThreadSafeStruct::m_variant and the fields beside it).
+     *
+     * The selection is loaded once. When `table` has no plan under it, the chunk runs the plan
+     * of the chunk formed before it (m_applied_plan; the first plan the table has when that one
+     * is gone too):
+     * - an index beyond the table (a plan selected in a table published after the lease was
+     *   claimed) changes nothing else: the selection stands, and the next call stamps it;
+     * - an index whose plan was taken out moves the selection back to the plan the chunk runs
+     *   (a compare-and-swap, so a selection made meanwhile stands) and records
+     *   ANIRA_ERROR_NOT_FOUND in the session's latch, logged once.
+     * A table without any plan, which a registered session never has, leaves the chunk
+     * without a slot: its inference fails (ANIRA_ERROR_INTERNAL).
+     *
+     * Wait-free, no allocation, no lock. The caller holds the chunk (it took it from the free
+     * pool).
      */
-    void stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept ANIRA_NONBLOCKING;
+    void stamp_selected_plan(ThreadSafeStruct& chunk,
+                             const PlanTable& table) noexcept ANIRA_NONBLOCKING;
+
+    /**
+     * @brief Stamps a chunk with one plan of the session's own list (m_plans)
+     *
+     * The stamp of a chunk that is no part of the stream: a warm-up inference of plan `plan`,
+     * on the control thread of the session's handler (Core::warm_up_inference), which reads
+     * the list and not the published table. The selection and m_applied_plan are not touched.
+     * An index the list does not have, or an empty entry, leaves the chunk without a slot.
+     */
+    void stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept;
+
+    /// The plan of the chunk of the stream formed last: what a chunk runs when the published
+    /// table has no plan under the selection (stamp_selected_plan). The selected plan at
+    /// prepare. Driving thread only, like the state epoch above.
+    uint32_t m_applied_plan = 0;
+
+    /// The boundary every chunk's buffers start on, in bytes: what prepare built the struct
+    /// pool with, the largest any plan of m_plans asked for then
+    /// (engine::Loaded::buffer_alignment). A plan added behind the prepare whose engine asks
+    /// for more cannot bind the chunks in place. 0 before the first prepare.
+    size_t m_chunk_alignment = 0;
 
     /**
      * @brief The session's own copy of an id string a plan names, for the session's life
@@ -933,6 +1033,22 @@ public:
 private:
     /// The id strings of intern_id(): node-based, so a stored string never moves.
     std::set<std::string> m_interned_ids;
+
+    /// The published plan table: what publish_plans() replaces and a read lease holds a
+    /// version of. Empty until Core::create_session publishes the list it built.
+    thl::RCU<PlanTable> m_plan_table;
+    /// The reader slots of m_plan_table, added once, here, on the control thread that makes
+    /// the session; claim_plans() hands out the leases. Declared behind the table it reads.
+    RcuReaders<PlanTable> m_plan_readers{m_plan_table};
+    /// The entries of the table published last (its indices, the empty ones included): what
+    /// select_plan checks an index against, from any thread. Stored by publish_plans().
+    std::atomic<uint32_t> m_num_published_plans{0};
+
+    /// The stamp itself: the index and, for a slot, the count and the copies of what the slot
+    /// reports; no slot, variant 0 and no backend for NULL. The caller holds the chunk.
+    static void stamp_slot(ThreadSafeStruct& chunk,
+                           uint32_t plan,
+                           PlanSlot* slot) noexcept ANIRA_NONBLOCKING;
 
     /**
      * @brief Whether any input tensor is streamable

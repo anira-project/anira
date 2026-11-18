@@ -2,6 +2,7 @@
 
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
+#include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <concurrentqueue.h>
 
@@ -76,9 +77,24 @@ SessionElement::SessionElement(int new_session_id,
 }
 
 bool SessionElement::select_plan(uint32_t plan) noexcept {
-    if (plan >= m_plans.size()) { return false; }
+    if (plan >= m_num_published_plans.load(std::memory_order_acquire)) { return false; }
     m_current_plan.store(plan, std::memory_order_relaxed);
     return true;
+}
+
+void SessionElement::publish_plans() {
+    m_plan_table.replace([this](PlanTable& table) {
+        table.m_slots.reserve(m_plans.size());
+        for (const std::shared_ptr<PlanSlot>& slot : m_plans) {
+            table.m_slots.push_back(slot.get());
+        }
+    });
+    // Behind the table: an index select_plan lets through is one the newest table has.
+    m_num_published_plans.store(static_cast<uint32_t>(m_plans.size()), std::memory_order_release);
+}
+
+void SessionElement::synchronize_plans() {
+    m_plan_table.synchronize();
 }
 
 bool SessionElement::select_plan_if(uint32_t& expected, uint32_t plan) noexcept ANIRA_NONBLOCKING {
@@ -99,11 +115,11 @@ uint64_t SessionElement::stamp_state_epoch(uint32_t variant) noexcept ANIRA_NONB
     return m_state_epoch;
 }
 
-void SessionElement::stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept ANIRA_NONBLOCKING {
+void SessionElement::stamp_slot(ThreadSafeStruct& chunk,
+                                uint32_t plan,
+                                PlanSlot* slot) noexcept ANIRA_NONBLOCKING {
     chunk.m_plan = plan;
-    if (plan >= m_plans.size()) {
-        // A selection is always in range (select_plan); the check keeps a defect from reading
-        // past the table.
+    if (slot == nullptr) {
         chunk.m_slot = nullptr;
         chunk.m_variant = 0;
         chunk.m_engine = ANIRA_ENGINE_NONE;
@@ -113,17 +129,69 @@ void SessionElement::stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept
         chunk.m_state_alias = false;
         return;
     }
-    PlanSlot& slot = *m_plans[plan];
     // Counted before anything else can see the chunk: the slot is needed from here until the
-    // chunk's worker side is finished, whatever path the chunk takes.
-    slot.retain_chunk();
-    chunk.m_slot = &slot;
-    chunk.m_variant = slot.m_variant;
-    chunk.m_engine = slot.m_engine;
-    chunk.m_provider = slot.m_provider;
-    chunk.m_engine_id = slot.m_engine_id;
-    chunk.m_provider_id = slot.m_provider_id;
-    chunk.m_state_alias = slot.m_state_alias;
+    // chunk's worker side is finished, whatever path the chunk takes. On the driving thread
+    // this is inside the entry's read lease, so whoever takes the slot out of the table and
+    // waits for the leases (synchronize_plans) reads a count that has this chunk in it.
+    slot->retain_chunk();
+    chunk.m_slot = slot;
+    chunk.m_variant = slot->m_variant;
+    chunk.m_engine = slot->m_engine;
+    chunk.m_provider = slot->m_provider;
+    chunk.m_engine_id = slot->m_engine_id;
+    chunk.m_provider_id = slot->m_provider_id;
+    chunk.m_state_alias = slot->m_state_alias;
+}
+
+void SessionElement::stamp_selected_plan(ThreadSafeStruct& chunk,
+                                         const PlanTable& table) noexcept ANIRA_NONBLOCKING {
+    const std::vector<PlanSlot*>& slots = table.m_slots;
+    const auto slot_of = [&slots](uint32_t plan) noexcept -> PlanSlot* {
+        return plan < slots.size() ? slots[plan] : nullptr;
+    };
+    // The one load of the selection for this chunk.
+    const uint32_t selected = m_current_plan.load(std::memory_order_relaxed);
+    uint32_t plan = selected;
+    PlanSlot* slot = slot_of(plan);
+    if (slot == nullptr) {
+        // This table has no plan under the selection: the chunk runs the plan of the chunk
+        // before it, or the first plan the table has when that one was taken out as well.
+        plan = m_applied_plan;
+        slot = slot_of(plan);
+        for (uint32_t first = 0; slot == nullptr && first < slots.size(); ++first) {
+            plan = first;
+            slot = slots[first];
+        }
+        if (slot == nullptr) {
+            // A table without a plan: anira's own bug, and the chunk fails.
+            stamp_slot(chunk, selected, nullptr);
+            return;
+        }
+        if (selected < slots.size()) {
+            // The index is the table's and its plan was taken out: the selection goes back to
+            // the plan the stream runs, unless a caller selected another one meanwhile. An
+            // index beyond the table is a plan of a newer table: it stands, silently.
+            uint32_t expected = selected;
+            static_cast<void>(m_current_plan.compare_exchange_strong(expected,
+                                                                     plan,
+                                                                     std::memory_order_relaxed,
+                                                                     std::memory_order_relaxed));
+            if (m_rt->record(ANIRA_ERROR_NOT_FOUND)) {
+                ANIRA_LOG_RT_VIOLATION(log_group::k_scheduler,
+                                       "session %d: the selected plan %u was removed; the stream "
+                                       "stays on plan %u",
+                                       m_session_id,
+                                       static_cast<unsigned int>(selected),
+                                       static_cast<unsigned int>(plan));
+            }
+        }
+    }
+    m_applied_plan = plan;
+    stamp_slot(chunk, plan, slot);
+}
+
+void SessionElement::stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept {
+    stamp_slot(chunk, plan, plan < m_plans.size() ? m_plans[plan].get() : nullptr);
 }
 
 const char* SessionElement::intern_id(const std::string& id) {
@@ -647,10 +715,11 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     // place: the largest any plan's engine asks for (engine::Loaded::buffer_alignment).
     size_t alignment = engine::Loaded::k_default_buffer_alignment;
     for (const std::shared_ptr<PlanSlot>& plan : m_plans) {
-        if (plan->m_loaded != nullptr) {
+        if (plan != nullptr && plan->m_loaded != nullptr) {
             alignment = std::max(alignment, plan->m_loaded->buffer_alignment());
         }
     }
+    m_chunk_alignment = alignment;
     for (size_t i = 0; i < m_num_structs; ++i) {
         m_struct_pool.emplace_back(std::make_shared<ThreadSafeStruct>(m_derived.m_inputs,
                                                                       m_derived.m_outputs,
@@ -665,11 +734,15 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     // session-exclusive plan resets before its own first one. The state epoch starts over with
     // it: no chunk has been formed, so the stream's first one is no variant switch.
     for (const std::shared_ptr<PlanSlot>& plan : m_plans) {
+        if (plan == nullptr) { continue; }  // an index whose plan was taken out
         plan->m_engine_generation = k_no_generation;
         plan->m_engine_state_epoch = 0;
     }
     m_state_epoch = 0;
     m_last_variant = k_no_variant;
+    // The plan the stream starts on: the selection as it stands (the C handler selected its
+    // initial plan before this prepare).
+    m_applied_plan = m_current_plan.load(std::memory_order_relaxed);
 
     m_time_stamps.clear();
     m_time_stamps.reserve(m_num_structs);

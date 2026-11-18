@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Custom engines:** `anira_handler_create` calls the `query` of every engine of the pipeline that declares providers, also one no plan of the handler runs on (before: only an engine a plan or a `provider_options` set reached), and keeps the answer with the handler; a query that fails fails the create, as it did for a reached engine. An engine without a providers list is still not asked.
+- **C ABI, handler:** the plan table is read through reader slots, so that a control thread can replace it while the stream runs: `anira_handler_set_plan`, `anira_handler_set_model` and `anira_handler_set_backend` return `ANIRA_ERROR_CAPACITY` when more than four calls of them overlap on one handler, and the driver-thread entries (the Hard entries, their `_wait` twins, `anira_handler_get_available_samples`) when more than four of those overlap, which one driver thread never does. Back-pressure: nothing moved, nothing recorded in `anira_handler_rt_error`; call again.
 - **Build:** tanh-lib is pinned at `358fed8` (`cmake/tanh-lib-pin.cmake`, was v0.5.0), the head of tanh-lab/tanh-lib#68: tanh-lib's main plus the `thl::RCU` reader slots (`RCU::add_reader()`, `read_scope(Reader)`), through which a handler's plan table is read while the stream runs. Not a release: the pin moves to the tag once #68 is merged and tagged. tanh-tooling stays at v0.3.0.
 
 ## [v3.0.0-alpha.3] - 2026-11-06

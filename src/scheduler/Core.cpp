@@ -459,14 +459,16 @@ const char* drain_word(anira_log_drain drain) {
     return drain == ANIRA_LOG_DRAIN_MANUAL ? "manual" : "thread";
 }
 
-// Whether the plan table of any session of `sessions` holds `loaded`.
+// Whether the plan list of any session of `sessions` holds `loaded` (an entry whose plan was
+// taken out is empty and holds nothing). The caller holds the lifecycle lock, under which alone
+// the lists of the registered sessions change (SessionElement::m_plans).
 bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions,
                     const std::shared_ptr<engine::Loaded>& loaded) {
     return std::ranges::any_of(sessions, [&loaded](const std::shared_ptr<SessionElement>& s) {
         return std::ranges::any_of(
             s->m_plans,
             [&loaded](const std::shared_ptr<SessionElement::PlanSlot>& slot) {
-                return slot->m_loaded == loaded;
+                return slot != nullptr && slot->m_loaded == loaded;
             });
     });
 }
@@ -1005,6 +1007,9 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
                     engine::PrepareRequest{.m_exclusive = session->exclusive(), .m_info = nullptr});
             }
         }
+        // The table the driving thread stamps from: the list as built, published before the
+        // session can be reached by anybody.
+        session->publish_plans();
 
         apply_or_compare_config_locked(state, config, /*builds_pool=*/true);
         register_session_locked(state, session);
@@ -1020,6 +1025,48 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
     }
 
     return session;
+}
+
+uint32_t Core::add_plan_slot(const std::shared_ptr<SessionElement>& session,
+                             std::shared_ptr<SessionElement::PlanSlot> slot) {
+    State& state = get_state();
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    session->m_plans.push_back(std::move(slot));
+    return static_cast<uint32_t>(session->m_plans.size() - 1);
+}
+
+std::shared_ptr<SessionElement::PlanSlot> Core::take_plan_slot(
+    const std::shared_ptr<SessionElement>& session,
+    uint32_t plan) {
+    State& state = get_state();
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    if (plan >= session->m_plans.size()) { return nullptr; }
+    // The entry stays, empty: the index is the plan's for the session's life.
+    return std::exchange(session->m_plans[plan], nullptr);
+}
+
+void Core::release_loaded_if_unheld(const std::shared_ptr<engine::Loaded>& loaded) {
+    if (loaded == nullptr) { return; }
+    State& state = get_state();
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    if (any_plan_holds(state.m_sessions, loaded)) { return; }
+    std::erase_if(state.m_loaded_models,
+                  [&loaded](const State::PoolEntry& entry) { return entry.m_loaded == loaded; });
+}
+
+void Core::wait_until_unused(const std::shared_ptr<SessionElement>& session,
+                             const SessionElement::PlanSlot& slot) {
+    while (slot.active_chunks() != 0) {
+        // A chunk of an exclusive session may wait in the pending queue with the dispatch gate
+        // free: its enqueue and an inference thread's release of the gate passed each other,
+        // which the driving thread's next call resolves. The caller does not wait for a call
+        // that may never come (a stopped transport): it kicks the chain itself, as the warm-up
+        // does. Nothing while the gate is held; nothing for a shared session.
+        try_dispatch_stateful(session);
+#ifndef __EMSCRIPTEN__
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+#endif
+    }
 }
 
 std::shared_ptr<engine::BuiltinEngine> Core::builtin_engine(anira_engine engine) {
@@ -1098,7 +1145,8 @@ void Core::acquire_loaded_locked(State& state,
 
 void Core::release_loaded_locked(State& state, const std::shared_ptr<SessionElement>& session) {
     for (const std::shared_ptr<SessionElement::PlanSlot>& slot : session->m_plans) {
-        if (slot->m_loaded == nullptr) { continue; }
+        // An entry whose plan was taken out holds nothing (its remover let the model go).
+        if (slot == nullptr || slot->m_loaded == nullptr) { continue; }
         // The pool entry stays while the plan table of another registered session holds
         // the loaded model (the releasing session left the registry already, or never
         // entered it); the check is by pointer identity, never by the record.
@@ -1128,7 +1176,7 @@ void Core::release_session(const std::shared_ptr<SessionElement>& session) {
     // inferences drained and before its loaded models are released (a registered engine's
     // unprepare runs here, ahead of any unload): nothing runs on them any more.
     for (const std::shared_ptr<SessionElement::PlanSlot>& slot : session->m_plans) {
-        slot->m_prepared.reset();
+        if (slot != nullptr) { slot->m_prepared.reset(); }
     }
 
     // Everything above only touches this session (the drain waits on its own
@@ -1359,7 +1407,8 @@ bool Core::inputs_ready(const std::shared_ptr<SessionElement>& session) {
     return true;
 }
 
-void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
+void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session,
+                              const SessionElement::PlanTable& plans) {
     // Return any structs orphaned by a prior wait-free reset to the free pool before
     // trying to claim one below. Cheap (O(num_structs)) and a no-op when no reset is
     // pending; keeps the free pool from draining across repeated onset re-anchors.
@@ -1377,7 +1426,7 @@ void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
             if (session->m_pending_pull_samples < hop) { return; }
             session->m_pending_pull_samples -= hop;
         }
-        bool const success = pre_process(session);
+        bool const success = pre_process(session, plans);
 
         if (!success) {
             // No slot is free: every slot holds a chunk not yet collected. This hop and every
@@ -1577,15 +1626,17 @@ std::vector<std::shared_ptr<SessionElement>> Core::get_sessions() {
     return state.m_sessions;
 }
 
-bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
+bool Core::pre_process(const std::shared_ptr<SessionElement>& session,
+                       const SessionElement::PlanTable& plans) {
     for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {
         if (session->m_struct_pool[i]->m_free.exchange(false)) {
-            // The one load of the session's selection for this chunk: the plan index is
-            // stamped on the struct with the plan's slot and what it reports, and the hooks,
-            // the engine call and post_process use what the struct carries, so a select_plan()
-            // that lands later applies from the next chunk on and never inside this one.
-            const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
-            session->stamp_plan(*session->m_struct_pool[i], plan);
+            // The one load of the session's selection for this chunk, out of the table the
+            // running entry holds its read lease on: the plan index is stamped on the struct
+            // with the plan's slot and what it reports, and the hooks, the engine call and
+            // post_process use what the struct carries, so a select_plan() that lands later
+            // applies from the next chunk on and never inside this one, and a table published
+            // later from the next call on.
+            session->stamp_selected_plan(*session->m_struct_pool[i], plans);
             session->m_struct_pool[i]->m_completed_as_zeros = false;
             session->m_struct_pool[i]->m_fills_after = 0;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
@@ -1696,7 +1747,7 @@ void Core::post_process(
 }
 
 WarmupFigure Core::warm_up_plan(const std::shared_ptr<SessionElement>& session, uint32_t plan) {
-    if (plan >= session->m_plans.size()) {
+    if (plan >= session->m_plans.size() || session->m_plans[plan] == nullptr) {
         throw StatusError(ANIRA_ERROR_INTERNAL,
                           "the warm-up was asked for plan " + std::to_string(plan) +
                               ", which the session does not have");

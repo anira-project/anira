@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -341,13 +342,27 @@ void InferenceManager::load_counts(const anira_tensor* tensors,
     }
 }
 
+void InferenceManager::submit(const SessionElement::PlanTable* plans) {
+    if (plans != nullptr) {
+        Core::new_data_submitted(m_session, *plans);
+        return;
+    }
+    // A caller without a lease: one for this submission.
+    const std::optional<SessionElement::PlanLease> lease = m_session->claim_plans();
+    // Every reader slot busy: nothing is stamped in this call. What the call made ready stays
+    // in the send rings, and the next call submits it.
+    if (!lease.has_value()) { return; }
+    Core::new_data_submitted(m_session, lease->data());
+}
+
 const size_t* InferenceManager::process_nowait(const anira_tensor* inputs,
-                                               const anira_tensor* outputs) {
+                                               const anira_tensor* outputs,
+                                               const SessionElement::PlanTable* plans) {
     load_counts(inputs, m_input_slots, m_input_counts);
     load_counts(outputs, m_output_slots, m_output_counts);
     process_input(inputs, m_input_counts.data());
     request_output(m_output_counts.data());
-    Core::new_data_submitted(m_session);
+    submit(plans);
     Core::new_data_request(m_session);
     return process_output(outputs, m_output_counts.data(), inputs, m_input_counts.data());
 }
@@ -355,12 +370,13 @@ const size_t* InferenceManager::process_nowait(const anira_tensor* inputs,
 const size_t* InferenceManager::process_wait(const anira_tensor* inputs,
                                              const anira_tensor* outputs,
                                              std::chrono::steady_clock::duration budget,
-                                             Core::WaitOutcome& outcome) {
+                                             Core::WaitOutcome& outcome,
+                                             const SessionElement::PlanTable* plans) {
     load_counts(inputs, m_input_slots, m_input_counts);
     load_counts(outputs, m_output_slots, m_output_counts);
     process_input(inputs, m_input_counts.data());
     request_output(m_output_counts.data());
-    Core::new_data_submitted(m_session);
+    submit(plans);
     // The clock is read after the submit, where the 2.x process() read it.
     const std::chrono::steady_clock::time_point deadline =
         budget == std::chrono::steady_clock::duration::max()
@@ -372,11 +388,12 @@ const size_t* InferenceManager::process_wait(const anira_tensor* inputs,
 
 const size_t* InferenceManager::pop_data_wait(const anira_tensor* outputs,
                                               std::chrono::steady_clock::duration budget,
-                                              Core::WaitOutcome& outcome) {
+                                              Core::WaitOutcome& outcome,
+                                              const SessionElement::PlanTable* plans) {
     load_counts(m_empty_inputs.data(), m_input_slots, m_input_counts);
     load_counts(outputs, m_output_slots, m_output_counts);
     request_output(m_output_counts.data());
-    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
+    if (!m_session->m_input_driven) { submit(plans); }
     const std::chrono::steady_clock::time_point deadline =
         budget == std::chrono::steady_clock::duration::max()
             ? std::chrono::steady_clock::time_point::max()
@@ -404,7 +421,7 @@ const size_t* InferenceManager::pop_data(const anira_tensor* outputs,
     load_counts(m_empty_inputs.data(), m_input_slots, m_input_counts);
     load_counts(outputs, m_output_slots, m_output_counts);
     request_output(m_output_counts.data());
-    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
+    if (!m_session->m_input_driven) { submit(nullptr); }
     if (m_session->uses_semaphore()) {
         Core::new_data_request(m_session, wait_until);
     } else {
@@ -438,7 +455,8 @@ std::chrono::steady_clock::duration InferenceManager::wait_budget_of(
         static_cast<long>(block_seconds * 1e6 * m_session->m_hard.m_wait_ratio));
 }
 
-void InferenceManager::push_data(const anira_tensor* inputs) {
+void InferenceManager::push_data(const anira_tensor* inputs,
+                                 const SessionElement::PlanTable* plans) {
     load_counts(inputs, m_input_slots, m_input_counts);
     process_input(inputs, m_input_counts.data());
     // Collect finished inferences before claiming a struct for this chunk (issue #99): a
@@ -455,7 +473,7 @@ void InferenceManager::push_data(const anira_tensor* inputs) {
                                   "stream.",
                                   m_session->m_session_id);
     }
-    Core::new_data_submitted(m_session);
+    submit(plans);
 }
 
 void InferenceManager::request_output(const size_t* num_output_samples) {
@@ -473,11 +491,12 @@ void InferenceManager::collect_nonblocking() {
     Core::collect_completed(m_session);
 }
 
-const size_t* InferenceManager::pop_data(const anira_tensor* outputs) {
+const size_t* InferenceManager::pop_data(const anira_tensor* outputs,
+                                         const SessionElement::PlanTable* plans) {
     load_counts(m_empty_inputs.data(), m_input_slots, m_input_counts);
     load_counts(outputs, m_output_slots, m_output_counts);
     request_output(m_output_counts.data());
-    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
+    if (!m_session->m_input_driven) { submit(plans); }
     collect_nonblocking();
 
     return process_output(outputs,

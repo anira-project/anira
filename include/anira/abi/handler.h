@@ -1046,7 +1046,11 @@ ANIRA_API anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report
  * @param handler The handler.
  * @param plan A dense plan index the report handed out.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler; ANIRA_ERROR_NOT_PREPARED
- *         before a successful prepare; ANIRA_ERROR_CONFIG for an index out of range.
+ *         before a successful prepare; ANIRA_ERROR_CONFIG for an index out of range;
+ *         ANIRA_ERROR_CAPACITY when more than four calls of anira_handler_set_plan,
+ *         anira_handler_set_model and anira_handler_set_backend overlap on the handler (they
+ *         read its plan rows through four reader slots): back-pressure, the selection unchanged
+ *         and nothing recorded; call again.
  * @par Thread contract
  * [thread-safe] ANIRA_NONBLOCKING
  * @since ABI 0.2
@@ -1087,7 +1091,9 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handle
  *        (anira_plan_info.variant).
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler; ANIRA_ERROR_NOT_PREPARED
  *         before a successful prepare; ANIRA_ERROR_NOT_FOUND when the variant has no plan on
- *         the selected plan's backend (the selection unchanged).
+ *         the selected plan's backend (the selection unchanged); ANIRA_ERROR_CAPACITY as
+ *         anira_handler_set_plan, and when the handler's plan rows were replaced under every
+ *         read of them (the selection unchanged, nothing recorded; call again).
  * @par Thread contract
  * [thread-safe] ANIRA_NONBLOCKING
  * @since ABI 0.4
@@ -1120,7 +1126,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_set_model(anira_handler* handler
  *         ANIRA_PROVIDER_CUSTOM without a provider_id or a provider_id beside another
  *         provider); ANIRA_ERROR_NOT_PREPARED before a successful prepare;
  *         ANIRA_ERROR_NOT_FOUND when the selected plan's variant has no plan on that backend
- *         (the selection unchanged).
+ *         (the selection unchanged); ANIRA_ERROR_CAPACITY as anira_handler_set_model.
  * @par Thread contract
  * [thread-safe] ANIRA_NONBLOCKING
  * @since ABI 0.4
@@ -1199,7 +1205,10 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_set_backend(anira_handler* handl
  *         ANIRA_ERROR_NOT_PREPARED before a successful prepare. A tensor is checked in the
  *         order rank, domain, flags, shape, dtype, memory and strides, then its count against
  *         the block, in before out. Every failure but the NULL handler is recorded in
- *         anira_handler_rt_error.
+ *         anira_handler_rt_error. ANIRA_ERROR_CAPACITY, behind every check and before anything
+ *         moved, when more than four calls of the handler's driver-thread entries overlap (each
+ *         reads the plan table through one of four reader slots for the length of its call; one
+ *         driver thread never meets it): back-pressure, not recorded.
  * @par Thread contract
  * [driver-thread] ANIRA_NONBLOCKING
  * @since ABI 0.2
@@ -1481,6 +1490,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_get_latencies(const anira_handle
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or out, or an index or a
  *         channel out of range; ANIRA_ERROR_NOT_PREPARED before a successful prepare. Every
  *         failure but the NULL handler is recorded in anira_handler_rt_error.
+ *         ANIRA_ERROR_CAPACITY as anira_handler_process (not recorded).
  * @par Thread contract
  * [driver-thread] ANIRA_NONBLOCKING
  * @since ABI 0.2

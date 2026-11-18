@@ -4105,6 +4105,9 @@ public:
         return anira_handler_rt_error(m_handler);
     }
     /// anira_handler_set_plan: the dense plan index of the report; effective at the next chunk.
+    /// Like set_model and set_backend it returns ANIRA_ERROR_CAPACITY, with the selection as it
+    /// was and nothing in rt_error(), when more than four calls of the three overlap on the
+    /// handler: call again.
     anira_status set_plan(uint32_t plan) noexcept ANIRA_NONBLOCKING {
         return anira_handler_set_plan(m_handler, plan);
     }

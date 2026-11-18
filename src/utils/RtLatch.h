@@ -42,7 +42,7 @@ enum class RtKind : uint32_t {
     NotSupported = 1U << 6,
     Other = 1U << 7,     ///< any other status, through record_any only (a processor callback's)
     Dropped = 1U << 8,   ///< ANIRA_ERROR_CAPACITY: a hop dropped, through record_drop only
-    NotFound = 1U << 9,  ///< ANIRA_ERROR_NOT_FOUND: a selection by axis that names no plan
+    NotFound = 1U << 9,  ///< ANIRA_ERROR_NOT_FOUND: a selection that names no plan
 };
 
 /// The kind bit of a status; 0 for a status that never latches.

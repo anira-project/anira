@@ -6043,7 +6043,11 @@ export class AniraBindings {
    * @param plan A dense plan index the report handed out.
    * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler;
    *   ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_CONFIG for an index
-   *   out of range. A failed status throws an AniraError.
+   *   out of range; ANIRA_ERROR_CAPACITY when more than four calls of
+   *   anira_handler_set_plan, anira_handler_set_model and anira_handler_set_backend overlap
+   *   on the handler (they read its plan rows through four reader slots): back-pressure,
+   *   the selection unchanged and nothing recorded; call again. A failed status throws an
+   *   AniraError.
    * Thread: [thread-safe] ANIRA_NONBLOCKING
    */
   anira_handler_set_plan(handler: number, plan: number): number {
@@ -6090,8 +6094,10 @@ export class AniraBindings {
    *   (anira_plan_info.variant).
    * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler;
    *   ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_NOT_FOUND when the
-   *   variant has no plan on the selected plan's backend (the selection unchanged). A
-   *   failed status throws an AniraError.
+   *   variant has no plan on the selected plan's backend (the selection unchanged);
+   *   ANIRA_ERROR_CAPACITY as anira_handler_set_plan, and when the handler's plan rows were
+   *   replaced under every read of them (the selection unchanged, nothing recorded; call
+   *   again). A failed status throws an AniraError.
    * Thread: [thread-safe] ANIRA_NONBLOCKING
    */
   anira_handler_set_model(handler: number, variant: number): number {
@@ -6129,7 +6135,8 @@ export class AniraBindings {
    *   ANIRA_PROVIDER_CUSTOM without a provider_id or a provider_id beside another
    *   provider); ANIRA_ERROR_NOT_PREPARED before a successful prepare;
    *   ANIRA_ERROR_NOT_FOUND when the selected plan's variant has no plan on that backend
-   *   (the selection unchanged). A failed status throws an AniraError.
+   *   (the selection unchanged); ANIRA_ERROR_CAPACITY as anira_handler_set_model. A failed
+   *   status throws an AniraError.
    * Thread: [thread-safe] ANIRA_NONBLOCKING
    */
   anira_handler_set_backend(handler: number, backend: number): number {
