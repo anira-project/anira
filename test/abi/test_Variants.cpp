@@ -64,8 +64,10 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
+#include "../../extras/models/model_files.h"
 #include "../support/engine_oracle.h"
 #include "../support/log_record_collector.h"
 #include "float_face.h"
@@ -218,10 +220,9 @@ struct StepEngine {
     template <class Value>
     static std::vector<Value> first_of(const std::array<std::atomic<Value>, k_capacity>& values,
                                        int count) {
-        std::vector<Value> out;
-        for (int i = 0; i < count && static_cast<size_t>(i) < k_capacity; ++i) {
-            out.push_back(values.at(static_cast<size_t>(i)).load());
-        }
+        const size_t recorded = std::min(static_cast<size_t>(std::max(count, 0)), k_capacity);
+        std::vector<Value> out(recorded);
+        for (size_t i = 0; i < recorded; ++i) { out[i] = values.at(i).load(); }
         return out;
     }
     std::vector<float> steps() const { return first_of(m_step, m_calls.load()); }
@@ -973,8 +974,7 @@ TEST(Variants, EveryVariantHasTheFormOfTheFirst) {
 TEST(Variants, TheRefusalNamesTheVariantThatDiffers) {
     const anira::ModelConfig first = factor_model("2");
     const anira::ModelConfig second = factor_model("4");
-    FormParts parts;
-    const anira::ModelConfig third = parts.model();
+    const anira::ModelConfig third = FormParts{}.model();
     const Rig rig({&first, &second, &third});
     EXPECT_EQ(rig.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(rig.m_message,
@@ -1337,8 +1337,8 @@ TEST(Variants, ABundledModelTwiceRunsOnEveryEngine) {
     const size_t priming = anira_test::available(h);
     std::vector<float> signal;
     std::vector<float> stream;
-    for (size_t k = 0; k < plan_of_block.size(); ++k) {
-        ASSERT_EQ(anira_handler_set_plan(h, plan_of_block[k]), ANIRA_OK);
+    for (const uint32_t plan : plan_of_block) {
+        ASSERT_EQ(anira_handler_set_plan(h, plan), ANIRA_OK);
         std::vector<float> block(k_cnn_block);
         for (size_t i = 0; i < k_cnn_block; ++i) {
             block[i] = 0.5F * std::sin(static_cast<float>(signal.size() + i) * 0.003F);

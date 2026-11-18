@@ -1693,10 +1693,13 @@ bool drop_plans_over_edge_cost(anira_handler& handler, anira_edge_class worst_al
         }
         if (dropped.empty()) { continue; }
         if (kept.empty()) {
-            throw StatusError(
-                ANIRA_ERROR_EDGE_UNREACHABLE,
-                "handler: " + prefix + "no plan is within the contract's edge cost (" +
-                    anira::capi::edge_class_word(worst_allowed) + " at most): " + dropped);
+            std::string message = "handler: ";
+            message += prefix;
+            message += "no plan is within the contract's edge cost (";
+            message += anira::capi::edge_class_word(worst_allowed);
+            message += " at most): ";
+            message += dropped;
+            throw StatusError(ANIRA_ERROR_EDGE_UNREACHABLE, message);
         }
         plans = std::move(kept);
         keep_rows_with_plans(handler.m_variant_derived[variant]);
