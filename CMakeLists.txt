@@ -306,7 +306,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 add_library(anira_objects OBJECT)
 tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
 
-# anira_tanh_core's objects (core.cpp, Dispatcher, Logger, Thread, RCU) are part of libanira,
+# anira_tanh_core's objects (core.cpp, Clock, Dispatcher, Logger, Thread, RCU) are part of libanira,
 # shared or static, compiled hidden with an empty TANH_API in the inline namespace thl::anira
 # (section 6b of docs/anira-v3-architecture.md). A shared libanira exports none of them; a static
 # one is linked into the consumer's image, where hidden separates nothing, but no symbol of anira's
