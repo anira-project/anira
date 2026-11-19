@@ -816,7 +816,10 @@ struct Sweep {
 // Runs `call` (one of the two above) with its first request failing, then with its second, and
 // so on until a run no longer reaches the request that was to fail: by then every request of
 // the call that can be failed has failed once. Behind every run the core must go (nothing of
-// the run is alive) and the process must hold as many blocks as before the first one.
+// the run is alive) and the process must hold as many blocks as before the first one. A log
+// record would count as a block left behind: the logger keeps the first records of a process
+// for a sink that is set later (tanh-lib's early buffers, 64 records each), so a run logs
+// nothing, at the rig's level, and asks no entry for a status that is recorded and logged.
 template <typename Call>
 Sweep fail_each_request(Call&& call) {
     const auto traced = [&call](uint64_t nth) {
