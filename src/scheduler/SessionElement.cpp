@@ -83,14 +83,35 @@ bool SessionElement::select_plan(uint32_t plan) noexcept {
 }
 
 void SessionElement::publish_plans() {
-    m_plan_table.replace([this](PlanTable& table) {
-        table.m_slots.reserve(m_plans.size());
+    commit_plans(stage_plans());
+}
+
+SessionElement::StagedPlanTable SessionElement::stage_plans(
+    std::span<const std::shared_ptr<PlanSlot>> added,
+    std::span<const uint32_t> removed) {
+    return m_plan_table.stage_replace([this, added, removed](PlanTable& table) {
+        table.m_slots.reserve(m_plans.size() + added.size());
         for (const std::shared_ptr<PlanSlot>& slot : m_plans) {
             table.m_slots.push_back(slot.get());
         }
+        for (const std::shared_ptr<PlanSlot>& slot : added) { table.m_slots.push_back(slot.get()); }
+        for (const uint32_t plan : removed) {
+            if (plan < m_plans.size()) { table.m_slots[plan] = nullptr; }
+        }
     });
+}
+
+void SessionElement::commit_plans(StagedPlanTable&& table) noexcept {
+    assert(std::ranges::equal(table->m_slots,
+                              m_plans,
+                              [](const PlanSlot* published, const std::shared_ptr<PlanSlot>& slot) {
+                                  return published == slot.get();
+                              }) &&
+           "the plan list is not the one the table was staged for");
+    const auto num_plans = static_cast<uint32_t>(table->m_slots.size());
+    m_plan_table.commit(std::move(table));
     // Behind the table: an index select_plan lets through is one the newest table has.
-    m_num_published_plans.store(static_cast<uint32_t>(m_plans.size()), std::memory_order_release);
+    m_num_published_plans.store(num_plans, std::memory_order_release);
 }
 
 void SessionElement::synchronize_plans() {
@@ -197,6 +218,22 @@ void SessionElement::stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept
 const char* SessionElement::intern_id(const std::string& id) {
     if (id.empty()) { return nullptr; }
     return m_interned_ids.insert(id).first->c_str();
+}
+
+const char* SessionElement::StagedIds::stage(const SessionElement& session, const char* id) {
+    if (id == nullptr || *id == '\0') { return nullptr; }
+    std::string key(id);
+    if (const auto held = session.m_interned_ids.find(key); held != session.m_interned_ids.end()) {
+        return held->c_str();
+    }
+    return m_ids.insert(std::move(key)).first->c_str();
+}
+
+void SessionElement::adopt_ids(StagedIds&& ids) noexcept {
+    // Node by node: nothing is copied, so nothing is allocated and a string stays where
+    // stage() found it. A string the store has already would stay behind; stage() makes none.
+    m_interned_ids.merge(ids.m_ids);
+    assert(ids.m_ids.empty() && "a staged id was the session's already");
 }
 
 SessionElement::PlanSlot* SessionElement::ThreadSafeStruct::take_slot() noexcept {

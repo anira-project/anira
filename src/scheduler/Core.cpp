@@ -1031,6 +1031,14 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
     return session;
 }
 
+void Core::reserve_plan_slots(const std::shared_ptr<SessionElement>& session, size_t count) {
+    State& state = get_state();
+    // Under the lock like every change of the list: the growth moves its entries, which the
+    // release of another session walks.
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    session->m_plans.reserve(session->m_plans.size() + count);
+}
+
 uint32_t Core::add_plan_slot(const std::shared_ptr<SessionElement>& session,
                              std::shared_ptr<SessionElement::PlanSlot> slot) {
     State& state = get_state();

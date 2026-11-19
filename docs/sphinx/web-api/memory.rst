@@ -101,6 +101,14 @@ the address space.
   one free hole of 24, 32 or 52 KiB in a full heap; a little more or a little less free memory gave
   the status). A page that loads models up to the maximum keeps headroom and does not rely on the
   status there.
+- **Inside the JSON library it is not guaranteed either.** anira reads and writes JSON with
+  nlohmann::json, which allocates while it destroys an array or an object, in a destructor that
+  cannot report a failure: an allocation that fails there ends the page. That concerns the calls
+  that read or write JSON text, and ``prepare`` and ``addVariant`` of a handler with a JavaScript
+  engine, which write the variant as JSON text to tell the engine's loaded models apart.
+- **A call that returns the status has changed nothing** where the guides say so:
+  ``addVariant`` and ``removeVariant`` allocate everything they need before the first of their
+  changes is visible (:ref:`usage-variant-set`).
 
 Views after a growth
 --------------------

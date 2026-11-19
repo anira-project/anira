@@ -48,6 +48,7 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
+#include <tanh/core/threading/RCU.h>
 
 #include <algorithm>
 #include <array>
@@ -65,6 +66,7 @@
 #include <new>
 #include <optional>
 #include <ratio>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -824,6 +826,28 @@ bool drop_hook(void* ctx,
                               handler->m_miss_user_data) == ANIRA_OK;
 }
 
+// A part of a control entry as the allocation test sees it: the handler's probe is told when
+// the part starts and when it is done (anira_handler::m_allocation_probe, NULL outside that
+// test; anira::capi::AllocationScope says which parts there are).
+class ProbedScope {
+public:
+    ProbedScope(const anira_handler& handler, anira::capi::AllocationScope scope) noexcept
+        : m_probe(handler.m_allocation_probe), m_scope(scope) {
+        if (m_probe != nullptr) { m_probe(m_scope, true); }
+    }
+    ~ProbedScope() {
+        if (m_probe != nullptr) { m_probe(m_scope, false); }
+    }
+    ProbedScope(const ProbedScope&) = delete;
+    ProbedScope& operator=(const ProbedScope&) = delete;
+    ProbedScope(ProbedScope&&) = delete;
+    ProbedScope& operator=(ProbedScope&&) = delete;
+
+private:
+    void (*m_probe)(anira::capi::AllocationScope scope, bool entered) noexcept;
+    anira::capi::AllocationScope m_scope;
+};
+
 // The processor's unprepare, once per successful prepare, when no phase call of this handler can
 // run any more: what its prepare handed back for this handler goes back to it.
 void unprepare_processor(anira_handler& handler) noexcept {
@@ -849,26 +873,44 @@ void zero_state_ports(anira_handler& handler) noexcept {
     }
 }
 
-// Publishes the handler's plan rows as the selection entries read them (anira::capi::PlanRows):
-// one row per plan of m_plans, by value, with the two id strings copied into the published
-// version itself. Control thread; a selection entry that holds a lease keeps the version it
-// claimed.
-void publish_plan_rows(anira_handler& handler) {
-    handler.m_plan_rows.replace([&handler](anira::capi::PlanRows& published) {
-        published.m_rows.reserve(handler.m_plans.size());
-        for (const anira::capi::Plan& plan : handler.m_plans) {
+/// The plan rows of a handler, built and not yet published: what stage_plan_rows() makes and
+/// thl::RCU::commit() publishes. Dropped without a commit, it frees its rows and the handler's
+/// published rows are as they were; until the commit its rows may still be changed.
+using StagedPlanRows = thl::RCU<anira::capi::PlanRows>::Staged;
+
+// Builds the handler's plan rows as the selection entries read them (anira::capi::PlanRows),
+// and makes the room their publication needs: one row per plan of m_plans and then of `added`
+// (the plans a control entry is about to append to m_plans), by value, with the two id strings
+// copied into the version itself. Everything of the publication that can fail happens here:
+// when it throws (std::bad_alloc) nothing was published. handler.m_plan_rows.commit()
+// publishes the result and cannot fail; between the two nothing else publishes the rows
+// (thl::RCU::commit's rule), which the handler's control lock keeps. Control thread.
+StagedPlanRows stage_plan_rows(anira_handler& handler,
+                               std::span<const anira::capi::Plan> added = {}) {
+    return handler.m_plan_rows.stage_replace([&handler, added](anira::capi::PlanRows& rows) {
+        rows.m_rows.reserve(handler.m_plans.size() + added.size());
+        const auto append = [&rows](const anira::capi::Plan& plan) {
             anira_plan_info row = plan.m_info;
             if (row.engine_id != nullptr) {
-                published.m_strings.emplace_back(row.engine_id);
-                row.engine_id = published.m_strings.back().c_str();
+                rows.m_strings.emplace_back(row.engine_id);
+                row.engine_id = rows.m_strings.back().c_str();
             }
             if (row.provider_id != nullptr) {
-                published.m_strings.emplace_back(row.provider_id);
-                row.provider_id = published.m_strings.back().c_str();
+                rows.m_strings.emplace_back(row.provider_id);
+                row.provider_id = rows.m_strings.back().c_str();
             }
-            published.m_rows.push_back(row);
-        }
+            rows.m_rows.push_back(row);
+        };
+        std::ranges::for_each(handler.m_plans, append);
+        std::ranges::for_each(added, append);
     });
+}
+
+// Publishes the handler's plan rows from m_plans (stage_plan_rows, then the commit). Control
+// thread; a selection entry that holds a lease keeps the version it claimed. When it throws
+// (std::bad_alloc) nothing was published.
+void publish_plan_rows(anira_handler& handler) {
+    handler.m_plan_rows.commit(stage_plan_rows(handler));
 }
 
 // Releases the session and everything prepare built; the handler is unprepared afterwards.
@@ -1579,6 +1621,9 @@ void append_plan_requests(const anira_handler& handler,
             if (variant == nullptr) {
                 variant = std::make_shared<const anira_model_config>(
                     anira::capi::clone_model_config(model));
+                // nlohmann::json allocates in the destructor of a value, which is noexcept: an
+                // allocation that fails while the record is made terminates the process.
+                const ProbedScope record(handler, anira::capi::AllocationScope::ModelRecord);
                 variant_json = anira::capi::model_config_json(model);
             }
             // The engine's load may read the whole variant (the load record names it), so
@@ -3420,38 +3465,88 @@ void log_added_plans([[maybe_unused]] const anira_handler& handler,
 #endif
 }
 
-// The last step of a live build, when nothing can fail for a reason of the configuration or an
-// engine any more: the plans join the playing handler. Their slots (the loaded model and the
-// prepared handle of each) move from the build's session into the handler's, at the dense
-// indices the rows get, and what the stream reads is published in the order that keeps every
-// selectable index valid: the session's table first (the driving thread could stamp the new
-// plans, but nobody can select them), the handler's rows second (the selection entries see
-// them), then the report. A slot goes into the handler's list before it leaves the build's, so
-// that a registered session's list holds its model at every moment (another handler that
-// releases the same model never drops its pool entry in between); it starts the stream's
-// life as a plan does after a prepare: the ids it reports are the handler's session's own
-// strings, and its engine's first inference there is the first of a new stream (the pass ran
-// on it). noexcept: an out-of-memory between the first publication and the last has no way
-// back, and terminates.
+// What the commit of a live build publishes and writes to, made while the call can still fail
+// (stage_added_plans): commit_added_plans takes it and asks for no memory. Dropped without the
+// commit, it frees what it made, and the handler and its session are as they were.
+struct StagedAddition {
+    /// One entry per slot of the build's session, in its order: the engine id and the provider
+    /// id as the handler's session holds them once it adopted m_ids (NULL for none).
+    struct SlotIds {
+        const char* m_engine_id = nullptr;
+        const char* m_provider_id = nullptr;
+    };
+    std::vector<SlotIds> m_slot_ids;
+    /// Those of the strings above that the handler's session does not have yet.
+    anira::SessionElement::StagedIds m_ids;
+    /// The session's plan table with the build's slots behind the ones it has.
+    anira::SessionElement::StagedPlanTable m_table;
+    /// The handler's plan rows with the new plans' behind the ones it has.
+    StagedPlanRows m_rows;
+};
+
+// Everything commit_added_plans needs that can fail, which is everything it would have to
+// allocate: the two published versions (the session's plan table and the handler's plan rows
+// as they are once the new plans joined, staged in their RCUs with the room their publication
+// takes), the ids of the new slots as the handler's session keeps them, and the room of the
+// three lists the commit appends to (the session's slots, the handler's plans, its reports).
+// A throw (std::bad_alloc) leaves the handler and its session as they were: what was staged
+// goes with its scope, and room that was made is only room.
+StagedAddition stage_added_plans(anira_handler& handler,
+                                 const anira::SessionElement& built,
+                                 const std::vector<anira::capi::Plan>& plans) {
+    const std::shared_ptr<anira::SessionElement>& live = handler.m_manager->shared_session();
+    StagedAddition staged;
+    staged.m_slot_ids.reserve(built.m_plans.size());
+    for (const std::shared_ptr<anira::SessionElement::PlanSlot>& slot : built.m_plans) {
+        staged.m_slot_ids.push_back(
+            {.m_engine_id = staged.m_ids.stage(*live, slot->m_engine_id),
+             .m_provider_id = staged.m_ids.stage(*live, slot->m_provider_id)});
+    }
+    anira::Core::reserve_plan_slots(live, built.m_plans.size());
+    staged.m_table = live->stage_plans(built.m_plans);
+    handler.m_plans.reserve(handler.m_plans.size() + plans.size());
+    staged.m_rows = stage_plan_rows(handler, plans);
+    handler.m_reports.reserve(handler.m_reports.size() + 1);
+    return staged;
+}
+
+// The last step of a live build, when nothing can fail any more: the plans join the playing
+// handler. Their slots (the loaded model and the prepared handle of each) move from the build's
+// session into the handler's, at the dense indices the rows get, and what the stream reads is
+// published in the order that keeps every selectable index valid: the session's table first
+// (the driving thread could stamp the new plans, but nobody can select them), the handler's
+// rows second (the selection entries see them), then the report. A slot goes into the handler's
+// list before it leaves the build's, so that a registered session's list holds its model at
+// every moment (another handler that releases the same model never drops its pool entry in
+// between); it starts the stream's life as a plan does after a prepare: the ids it reports are
+// the handler's session's own strings, and its engine's first inference there is the first of a
+// new stream (the pass ran on it).
+//
+// noexcept, and it is: between the first publication and the last there is no way back, so
+// nothing in here allocates. Both versions it publishes, the ids and the room of every list it
+// appends to are `staged`'s (stage_added_plans); a publication is thl::RCU::commit(), which
+// swaps the pointer and retires the old version into room its stage made.
 void commit_added_plans(anira_handler& handler,
                         const std::shared_ptr<anira::SessionElement>& built,
                         const std::vector<anira::capi::Plan>& plans,
-                        std::unique_ptr<anira_plan_report> report) noexcept {
+                        std::unique_ptr<anira_plan_report> report,
+                        StagedAddition&& staged) noexcept {
+    const ProbedScope scope(handler, anira::capi::AllocationScope::Commit);
     const std::shared_ptr<anira::SessionElement>& live = handler.m_manager->shared_session();
+    live->adopt_ids(std::move(staged.m_ids));
     for (uint32_t plan = 0; plan < built->m_plans.size(); ++plan) {
         const std::shared_ptr<anira::SessionElement::PlanSlot> slot = built->m_plans[plan];
-        slot->m_engine_id = live->intern_id(slot->m_engine_id != nullptr ? slot->m_engine_id : "");
-        slot->m_provider_id =
-            live->intern_id(slot->m_provider_id != nullptr ? slot->m_provider_id : "");
+        slot->m_engine_id = staged.m_slot_ids[plan].m_engine_id;
+        slot->m_provider_id = staged.m_slot_ids[plan].m_provider_id;
         slot->m_engine_generation = anira::SessionElement::k_no_generation;
         slot->m_engine_state_epoch = 0;
         [[maybe_unused]] const uint32_t index = anira::Core::add_plan_slot(live, slot);
         assert(index == handler.m_plans.size() + plan && "the two plan tables left their order");
         static_cast<void>(anira::Core::take_plan_slot(built, plan));
     }
-    live->publish_plans();
+    live->commit_plans(std::move(staged.m_table));
     handler.m_plans.insert(handler.m_plans.end(), plans.begin(), plans.end());
-    publish_plan_rows(handler);
+    handler.m_plan_rows.commit(std::move(staged.m_rows));
     handler.m_reports.push_back(std::move(report));
     handler.m_published_report.store(handler.m_reports.back().get(), std::memory_order_release);
 }
@@ -3647,12 +3742,19 @@ size_t add_variant_live(anira_handler& handler, const anira_model_config& added)
     warn_added_latency(handler, live, variant);
     log_added_plans(handler, live, plans, measurements, first_index);
 
+    // The last thing that can fail: what the commit publishes and the room it writes into.
+    StagedAddition staged = stage_added_plans(handler, built, plans);
+
     // No inference thread is inside a job of the pass any more (a job gives its count on the
     // slot back behind its done signal): the slots move, and the handler has the variant.
     for (const std::shared_ptr<anira::SessionElement::PlanSlot>& slot : built.m_plans) {
         anira::Core::wait_until_unused(build.m_manager->shared_session(), *slot);
     }
-    commit_added_plans(handler, build.m_manager->shared_session(), plans, std::move(report));
+    commit_added_plans(handler,
+                       build.m_manager->shared_session(),
+                       plans,
+                       std::move(report),
+                       std::move(staged));
     pending.commit();
     return variant;
 }
@@ -3683,13 +3785,19 @@ void check_removable(const anira_handler& handler, size_t variant) {
 // specs are released), and its index joins the removed ones, in order, so that no other
 // variant's index moves and none is given out again; its derivation, where the handler holds
 // one for it, is emptied too (no plan of a later table is its). The caller reserved the room
-// of the list. Control side only: nothing of this is read by another thread.
-void forget_variant(anira_handler& handler, size_t variant) noexcept {
+// of the list and made the two empty objects the entries become: nothing in here allocates (a
+// container's constructor may, and the debug containers of some standard libraries do, so
+// none is constructed here; a move assignment frees and takes). Control side only: nothing of
+// this is read by another thread.
+void forget_variant(anira_handler& handler,
+                    size_t variant,
+                    anira_model_config&& no_model,
+                    anira::capi::Derived&& no_derivation) noexcept {
     anira_pipeline& pipeline = handler.m_pipeline;
-    pipeline.m_variants[variant] = anira_model_config{};
+    pipeline.m_variants[variant] = std::move(no_model);
     pipeline.m_removed.insert(std::ranges::upper_bound(pipeline.m_removed, variant), variant);
     if (variant < handler.m_variant_derived.size()) {
-        handler.m_variant_derived[variant] = anira::capi::Derived{};
+        handler.m_variant_derived[variant] = std::move(no_derivation);
     }
 }
 
@@ -3698,8 +3806,50 @@ void forget_variant(anira_handler& handler, size_t variant) noexcept {
 void remove_variant_unprepared(anira_handler& handler, size_t variant) {
     check_removable(handler, variant);
     handler.m_pipeline.m_removed.reserve(handler.m_pipeline.m_removed.size() + 1);
-    forget_variant(handler, variant);
+    forget_variant(handler, variant, anira_model_config{}, anira::capi::Derived{});
 }
+
+// What finish_removal publishes and writes to, made while the call can still be refused
+// (stage_removal): finish_removal takes it and asks for no memory. Dropped without it, it
+// frees what it made, and the handler and its session are as they were.
+struct StagedRemoval {
+    /// The handler's plan rows with the variant's plans marked removed.
+    StagedPlanRows m_rows;
+    /// The session's plan table without the variant's slots: their entries empty.
+    anira::SessionElement::StagedPlanTable m_table;
+    /// Room for the slots taken out of the session's list, which finish_removal holds until no
+    /// chunk counts on them.
+    std::vector<std::shared_ptr<anira::SessionElement::PlanSlot>> m_taken;
+    /// What the variant's entry of the pipeline copy and its derivation become (forget_variant).
+    anira_model_config m_no_model;
+    anira::capi::Derived m_no_derivation;
+};
+
+// Everything finish_removal needs that can fail, which is everything it would have to
+// allocate: the two published versions (the handler's plan rows with the plans of `plans`
+// marked removed and the session's plan table with their entries empty, staged in their RCUs
+// with the room their publication takes), room for the slots it takes out, the empty objects
+// the variant's entries become, and the room of the two lists it appends to (the handler's
+// reports, the removed variants). A throw (std::bad_alloc) leaves the handler and its session
+// as they were, the variant still there and still running.
+StagedRemoval stage_removal(anira_handler& handler, const std::vector<uint32_t>& plans) {
+    StagedRemoval staged;
+    staged.m_rows = stage_plan_rows(handler);
+    for (const uint32_t plan : plans) {
+        staged.m_rows->m_rows[plan].state = static_cast<uint32_t>(ANIRA_PLAN_REMOVED);
+    }
+    staged.m_table = handler.m_manager->session().stage_plans({}, plans);
+    staged.m_taken.reserve(plans.size());
+    handler.m_reports.reserve(handler.m_reports.size() + 1);
+    handler.m_pipeline.m_removed.reserve(handler.m_pipeline.m_removed.size() + 1);
+    return staged;
+}
+
+/// A selection finish_removal found on a plan of the variant it removes, and where it moved it.
+struct MovedSelection {
+    uint32_t m_from = 0;  ///< the removed plan a selection entry had stored
+    uint32_t m_to = 0;    ///< the first ready plan
+};
 
 // The part of a removal from a prepared handler that cannot be refused any more, in the order
 // that keeps every index a thread can read valid at every moment (the reverse of an add's):
@@ -3726,18 +3876,24 @@ void remove_variant_unprepared(anira_handler& handler, size_t variant) {
 //    model another handler, or another variant, still runs stays loaded.
 // 6. The variant leaves the pipeline copy (forget_variant).
 //
-// noexcept: behind the first publication there is no way back, and an out-of-memory in a
-// publication terminates. `plans` are the dense indices of the variant's plans, `report` the
-// new report, complete; the caller reserved the room of the report list and of the removed
-// variants.
-void finish_removal(anira_handler& handler,
-                    size_t variant,
-                    const std::vector<uint32_t>& plans,
-                    std::unique_ptr<anira_plan_report> report) noexcept {
+// noexcept, and it is: behind the first publication there is no way back, so nothing in here
+// allocates (an engine's unprepare and unload are the engine's own code). Both versions it
+// publishes, the room for the slots it takes and for the two lists it appends to, and the
+// empty entries of step 6 are `staged`'s (stage_removal); a publication is
+// thl::RCU::commit(), which swaps the pointer and retires the old version into room its stage
+// made. `plans` are the dense indices of the variant's plans, `report` the new report,
+// complete. The answer is the selection step 2 moved, if it moved one: the caller logs it,
+// since a log record allocates.
+std::optional<MovedSelection> finish_removal(anira_handler& handler,
+                                             size_t variant,
+                                             const std::vector<uint32_t>& plans,
+                                             std::unique_ptr<anira_plan_report> report,
+                                             StagedRemoval&& staged) noexcept {
+    const ProbedScope scope(handler, anira::capi::AllocationScope::Commit);
     for (const uint32_t plan : plans) {
         handler.m_plans[plan].m_info.state = static_cast<uint32_t>(ANIRA_PLAN_REMOVED);
     }
-    publish_plan_rows(handler);
+    handler.m_plan_rows.commit(std::move(staged.m_rows));
     handler.m_reports.push_back(std::move(report));
     handler.m_published_report.store(handler.m_reports.back().get(), std::memory_order_release);
     handler.m_plan_rows.synchronize();
@@ -3748,29 +3904,25 @@ void finish_removal(anira_handler& handler,
            handler.m_plans[first_ready].m_info.state != static_cast<uint32_t>(ANIRA_PLAN_READY)) {
         ++first_ready;
     }
+    // At most one of the plans is the selection, and behind the synchronize no entry selects
+    // one of them again.
+    std::optional<MovedSelection> moved;
     for (const uint32_t plan : plans) {
         uint32_t expected = plan;
         if (handler.m_selected_plan.compare_exchange_strong(expected,
                                                             first_ready,
                                                             std::memory_order_relaxed,
                                                             std::memory_order_relaxed)) {
-            ANIRA_LOG_WARNING(anira::log_group::k_capi,
-                              "anira_handler_remove_variant: plan %u of variants[%zu] was "
-                              "selected while the variant was being removed; the selection "
-                              "moves to plan %u, the first ready plan",
-                              static_cast<unsigned int>(plan),
-                              variant,
-                              static_cast<unsigned int>(first_ready));
+            moved = MovedSelection{.m_from = plan, .m_to = first_ready};
         }
     }
 
     const std::shared_ptr<anira::SessionElement>& session = handler.m_manager->shared_session();
-    std::vector<std::shared_ptr<anira::SessionElement::PlanSlot>> taken;
-    taken.reserve(plans.size());
+    std::vector<std::shared_ptr<anira::SessionElement::PlanSlot>>& taken = staged.m_taken;
     for (const uint32_t plan : plans) {
         taken.push_back(anira::Core::take_plan_slot(session, plan));
     }
-    session->publish_plans();
+    session->commit_plans(std::move(staged.m_table));
     session->synchronize_plans();
 
     for (std::shared_ptr<anira::SessionElement::PlanSlot>& slot : taken) {
@@ -3783,11 +3935,16 @@ void finish_removal(anira_handler& handler,
         // The last reference when the pool let the model go: it unloads here.
         loaded.reset();
     }
-    forget_variant(handler, variant);
+    forget_variant(handler,
+                   variant,
+                   std::move(staged.m_no_model),
+                   std::move(staged.m_no_derivation));
+    return moved;
 }
 
-// anira_handler_remove_variant on a prepared handler: the refusals, the new report (everything
-// that can fail), then the removal itself (finish_removal). A refused call changes nothing.
+// anira_handler_remove_variant on a prepared handler: the refusals, the new report and what
+// the removal publishes (everything that can fail), then the removal itself (finish_removal).
+// A call that is refused or cannot allocate changes nothing.
 void remove_variant_live(anira_handler& handler, size_t variant) {
     check_removable(handler, variant);
     // The plans of the variant, by their dense indices, and the selection, which must be on
@@ -3810,9 +3967,19 @@ void remove_variant_live(anira_handler& handler, size_t variant) {
     for (const uint32_t plan : plans) {
         report->m_plans[plan].state = static_cast<uint32_t>(ANIRA_PLAN_REMOVED);
     }
-    handler.m_reports.reserve(handler.m_reports.size() + 1);
-    handler.m_pipeline.m_removed.reserve(handler.m_pipeline.m_removed.size() + 1);
-    finish_removal(handler, variant, plans, std::move(report));
+    // The last thing that can fail: what the removal publishes and the room it writes into.
+    StagedRemoval staged = stage_removal(handler, plans);
+    [[maybe_unused]] const std::optional<MovedSelection> moved =
+        finish_removal(handler, variant, plans, std::move(report), std::move(staged));
+    if (moved.has_value()) {
+        ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                          "anira_handler_remove_variant: plan %u of variants[%zu] was "
+                          "selected while the variant was being removed; the selection "
+                          "moves to plan %u, the first ready plan",
+                          static_cast<unsigned int>(moved->m_from),
+                          variant,
+                          static_cast<unsigned int>(moved->m_to));
+    }
     ANIRA_LOG_INFO(anira::log_group::k_capi,
                    "anira_handler_remove_variant: variants[%zu] removed with its %zu plan%s; "
                    "the handler has %zu variant%s",

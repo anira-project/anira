@@ -451,7 +451,10 @@ and ``handler.removeVariant(variant)``
 ``destroy``: they block their caller, none is real-time, and one control entry runs on a handler
 at a time (a second one on another thread waits for the first). Unlike ``prepare`` they are legal
 while the driver thread and the inference threads run. A failed call throws ``anira::Error`` (an
-:js:class:`AniraError`) and changes nothing.
+:js:class:`AniraError`) and changes nothing, a call that runs out of memory
+(``ANIRA_ERROR_OUT_OF_MEMORY``) included: either call allocates everything it needs, the tables it
+publishes among it, before the first of its changes is visible, and nothing behind that can fail.
+After a failed removal the variant is still there and still runs.
 
 **Adding.** On an unprepared handler the model is validated as ``anira_handler_create`` validates
 it and joins the handler's copy of the pipeline; the next prepare builds it. On a prepared handler

@@ -238,6 +238,29 @@ anira_add_test_binary(test_abi WHITE_BOX
 # body (handler_support.h).
 add_subdirectory(abi)
 
+# What a control entry allocates and what an allocation that fails does to it
+# (anira_handler_add_variant, anira_handler_remove_variant). An executable of its own beside
+# test_abi: its one file replaces the global operator new and operator delete, to count the
+# requests of a call and to make the n-th one fail, which no other test should run under.
+# White-box, so the library's objects are part of the executable and their allocations go
+# through the replaced operators whatever the linkage of libanira (a shared libanira's would
+# only on ELF, through interposition, and never across a DLL boundary). Built where that was
+# run or its standard library was:
+#   - Linux and macOS (libstdc++, and libc++ on Linux);
+#   - not on Windows: MSVC's containers allocate in constructors, a debug build's (a container
+#     proxy) inside noexcept ones, where a request that fails terminates before the library
+#     under test is asked anything; the suite was not run there;
+#   - not on Android, iOS and Emscripten, whose runners start the binaries they are told by
+#     name (.github/workflows/build_test_mobile.yml) and were not run either;
+#   - not under ThreadSanitizer or LeakSanitizer, whose static runtimes define these operators
+#     themselves and do not link with a second definition. AddressSanitizer (which finds the
+#     leaks too), UBSan and RealtimeSanitizer builds have it.
+if(TANH_OPERATING_SYSTEM MATCHES "^(Linux|macOS)$" AND NOT ANIRA_WITH_TSAN AND NOT ANIRA_WITH_LSAN)
+    anira_add_test_binary(test_abi_allocation WHITE_BOX
+        abi/test_VariantSetAllocation.cpp
+    )
+endif()
+
 # Host-shaped library-unload test: a plugin-like module embedding anira is dlopen'ed,
 # driven and dlclose'd by an executable that does not link anira. It proves that no
 # anira thread survives the unload (and that the library really gets unmapped). Not

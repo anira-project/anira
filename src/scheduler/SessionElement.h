@@ -697,9 +697,48 @@ public:
      *
      * One raw pointer per entry of the list, NULL for an empty one. Control thread (the
      * handler's, which alone changes the list); allocates and takes the table's writer lock.
-     * A lease claimed from now on sees this version; one that is out keeps its own.
+     * A lease claimed from now on sees this version; one that is out keeps its own. When it
+     * throws (std::bad_alloc) nothing was published. stage_plans() and commit_plans() in one
+     * call.
      */
     void publish_plans();
+
+    /// A plan table that is built and not yet published: what stage_plans() makes and
+    /// commit_plans() publishes (thl::RCU::Staged). Dropped without a commit, it frees its
+    /// table and the session is as it was.
+    using StagedPlanTable = thl::RCU<PlanTable>::Staged;
+
+    /**
+     * @brief The first half of publish_plans(), for a list the caller is about to change
+     *
+     * Builds the table m_plans will be published as once the caller has appended `added` to
+     * the list, in this order (Core::add_plan_slot), and emptied the entries `removed`
+     * (Core::take_plan_slot), and makes the room the publication needs. Everything of the
+     * publication that can fail happens here: when it throws (std::bad_alloc) nothing was
+     * published and nothing changed. For a control entry that changes the list and what it
+     * publishes beside the playing stream, and must have everything that can fail behind it
+     * before the first change is visible (anira_handler_add_variant,
+     * anira_handler_remove_variant).
+     *
+     * Control thread (the handler's). Between this call and commit_plans() of its result
+     * nothing else publishes the table (thl::RCU::commit's rule: no publish_plans(), no
+     * second commit); the handler's control lock keeps that.
+     *
+     * @param added The slots the caller appends before it commits, in the order it appends them
+     * @param removed The indices of the list whose entries the caller empties before it commits
+     * @return The table, to be given to commit_plans()
+     */
+    StagedPlanTable stage_plans(std::span<const std::shared_ptr<PlanSlot>> added = {},
+                                std::span<const uint32_t> removed = {});
+
+    /**
+     * @brief The second half of publish_plans(): publishes a table stage_plans() built
+     *
+     * The list has been changed as stage_plans() was told (asserted): the table is m_plans,
+     * entry for entry. Allocates nothing and cannot fail. Control thread; takes the table's
+     * writer lock. A lease claimed from now on sees this version.
+     */
+    void commit_plans(StagedPlanTable&& table) noexcept;
 
     /**
      * @brief Waits until no read lease claimed before the last publish_plans() is still out
@@ -824,6 +863,37 @@ public:
      * @return The stored string, or NULL for an empty one
      */
     const char* intern_id(const std::string& id);
+
+    /**
+     * @brief intern_id() in two steps: id strings that are not the session's yet
+     *
+     * For a control entry that must have everything that can fail behind it before it changes
+     * the session (anira_handler_add_variant's commit). stage() answers with the pointer the
+     * session holds the string under once adopt_ids() ran: the session's own copy when it has
+     * the string already, else the copy this object makes, in a node that adopt_ids() moves
+     * into the session's store, where it stays at its address. stage() allocates and may
+     * throw; adopt_ids() does neither. Dropped without adopt_ids(), the object frees its
+     * strings and the session is as it was (a pointer stage() gave for a new string is then
+     * dangling). Control thread; nothing else interns in the session between the two calls
+     * (the handler's control lock).
+     */
+    class StagedIds {
+    public:
+        /**
+         * @param session The session the string is for
+         * @param id The string; NULL or empty for a built-in engine or a provider of the enum
+         * @return The string as the session holds it after adopt_ids(), or NULL for none
+         */
+        const char* stage(const SessionElement& session, const char* id);
+
+    private:
+        friend class SessionElement;
+        std::set<std::string> m_ids;  ///< the strings the session lacks: node-based, as its store
+    };
+
+    /// The second half: the staged strings join the session's store, node by node. Allocates
+    /// nothing and cannot fail.
+    void adopt_ids(StagedIds&& ids) noexcept;
 
     unsigned long m_current_queue = 0;         ///< The time stamp of the next submitted chunk
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring

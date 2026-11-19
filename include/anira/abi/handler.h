@@ -1211,12 +1211,15 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_set_backend(anira_handler* handl
  * playing stream start on is refused (ANIRA_ERROR_CONFIG naming both figures): only a
  * prepare builds the chunks. On a failure nothing is published and everything the call
  * built is released: the report, the plan count, the latency, the entry count and
- * anira_handler_rt_error are as before the call. The callbacks of the call (an engine's
- * init, load, prepare, unprepare and unload) run on the calling thread beside the
- * playing stream: from inside one, every control entry of the handler and the two Static
- * entries are refused with ANIRA_ERROR_INVALID_STATE, and the getters answer. The load
- * and the warm-up share the inference threads and the core with the playing stream, so
- * misses during the call are possible. A model of another form is another handler.
+ * anira_handler_rt_error are as before the call. So it is when the call runs out of
+ * memory (ANIRA_ERROR_OUT_OF_MEMORY): everything it allocates, the tables it publishes
+ * included, exists before the first new plan is visible, and nothing behind that can
+ * fail. The callbacks of the call (an engine's init, load, prepare, unprepare and
+ * unload) run on the calling thread beside the playing stream: from inside one, every
+ * control entry of the handler and the two Static entries are refused with
+ * ANIRA_ERROR_INVALID_STATE, and the getters answer. The load and the warm-up share the
+ * inference threads and the core with the playing stream, so misses during the call are
+ * possible. A model of another form is another handler.
  * @param handler The handler; prepared or not.
  * @param model The variant: a model of the form the handler's variants have
  *        (anira_pipeline_add_inference). Copied; the handle may be destroyed when the
@@ -1289,7 +1292,9 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_add_variant(anira_handler* handl
  *         an index that names no variant of the handler, or one that was removed;
  *         ANIRA_ERROR_INVALID_STATE for the last variant the handler has, for the variant of
  *         the selected plan, and when called from inside a callback of a control entry of the
- *         same handler. A refused call changes nothing.
+ *         same handler. A refused call changes nothing, and neither does one that runs out of
+ *         memory (ANIRA_ERROR_OUT_OF_MEMORY): everything the removal allocates exists before
+ *         the first row is marked, so the variant is still there and still runs.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.4

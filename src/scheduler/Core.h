@@ -195,20 +195,33 @@ public:
      * The control side of a plan that joins or leaves a session behind its create: the list
      * that owns the plan slots (SessionElement::m_plans) changes under the lifecycle lock,
      * because the release of another session walks the lists of all registered sessions under
-     * it. None of the four publishes anything: the driving thread stamps from the table the
-     * session's handler publishes (SessionElement::publish_plans), and a slot that left the
-     * list is freed by its remover once SessionElement::synchronize_plans() and
-     * wait_until_unused() returned. Control threads only; the caller is the session's handler
-     * (its control lock serialises its own calls).
+     * it. None of the five publishes anything: the driving thread stamps from the table the
+     * session's handler publishes (SessionElement::publish_plans, or stage_plans and
+     * commit_plans around the change), and a slot that left the list is freed by its remover
+     * once SessionElement::synchronize_plans() and wait_until_unused() returned. Control
+     * threads only; the caller is the session's handler (its control lock serialises its own
+     * calls).
      * @{
      */
+
+    /**
+     * @brief Makes room in the session's list for `count` more plan slots
+     *
+     * The one step of an append that can fail (std::bad_alloc; the list is as it was then):
+     * the add_plan_slot() calls that follow, up to `count` of them, allocate nothing. For a
+     * caller that must have everything that can fail behind it before it changes the list
+     * (anira_handler_add_variant's commit). The room stays when it is not used.
+     */
+    static void reserve_plan_slots(const std::shared_ptr<SessionElement>& session, size_t count);
 
     /**
      * @brief Appends a plan slot to the session's list
      *
      * The slot arrives complete: its loaded model, this session's prepared handle over it, its
-     * wait list, and the id strings interned in THIS session (SessionElement::intern_id).
-     * Nothing stamps it before the next SessionElement::publish_plans().
+     * wait list, and the id strings interned in THIS session (SessionElement::intern_id, or
+     * SessionElement::StagedIds). Nothing stamps it before the next publication of the list
+     * (SessionElement::publish_plans, commit_plans). It allocates when the list is full, and
+     * not behind reserve_plan_slots().
      *
      * @return The plan's index, its position in the list
      */
@@ -222,7 +235,7 @@ public:
      * the slot it gets until it has published the list again, waited for the read leases
      * (SessionElement::synchronize_plans) and for the chunks (wait_until_unused). Then it gives
      * the prepared handle back, lets the pool forget the model (release_loaded_if_unheld) and
-     * drops the slot, on its own thread.
+     * drops the slot, on its own thread. Allocates nothing.
      *
      * @return The slot, or null for an index the list does not have or an empty entry
      */

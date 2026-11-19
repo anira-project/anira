@@ -118,6 +118,20 @@ struct SlotSignature {
     const Side& side(bool input) const noexcept { return input ? m_inputs : m_outputs; }
 };
 
+/// The parts of a control entry that the allocation test is told the start and the end of
+/// (anira_handler::m_allocation_probe; test/abi/test_VariantSetAllocation.cpp).
+enum class AllocationScope : uint8_t {
+    /// The part of anira_handler_add_variant or anira_handler_remove_variant that cannot fail
+    /// and allocates nothing: it makes the call's result visible (commit_added_plans,
+    /// finish_removal in handler.cpp). The test counts the requests in here, which must be 0.
+    Commit,
+    /// The JSON record of a registered engine's variant, which the pool tells two variants
+    /// apart by (model_config_json). It is made with nlohmann::json, which allocates in the
+    /// destructor of a non-empty array or object, a noexcept function: an allocation that
+    /// fails in here terminates the process. The test fails no request in here.
+    ModelRecord,
+};
+
 }  // namespace anira::capi
 
 // The handle bodies carry the C tag names the header forward-declares.
@@ -356,6 +370,11 @@ struct anira_handler {
     static_assert(std::atomic<std::thread::id>::is_always_lock_free,
                   "the Static entries read the holder of the control lock on the driver thread");
     std::atomic<bool> m_live_build{false};
+    /// A white-box seam of the allocation test (test/abi/test_VariantSetAllocation.cpp), NULL
+    /// everywhere else: called on the control thread when a part of a control entry that the
+    /// test treats on its own starts (true) and when it is done (false), with which part it is
+    /// (anira::capi::AllocationScope).
+    void (*m_allocation_probe)(anira::capi::AllocationScope scope, bool entered) noexcept = nullptr;
     /// What the processor's prepare handed back for this handler (the out_prepared of
     /// anira_processor_prepare_fn; NULL is a legal value): the `prepared` pointer every phase call,
     /// the reset and the unprepare of this handler receive beside the registration's user_data.
