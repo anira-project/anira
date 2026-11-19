@@ -65,10 +65,14 @@ inference stage are slots of the one table, and one stream runs them all (:ref:`
   result, so a stopped transport holds no slot.
 - **The table is a published snapshot.** The session publishes its table through an RCU
   (``thl::RCU`` of the private tanh-lib copy). An entry of the driver thread that can form a chunk
-  reads it through one of four reader slots, held until the entry returns, and stamps every chunk
-  of the call from that one version; reading allocates nothing and locks nothing. A control thread
-  publishes a new table when a variant is added or removed and waits for the reader slots that
-  were out. The handler's plan rows are published the same way for the three selection entries.
+  reads it through the table's one reader slot, held until the entry returns, and stamps every
+  chunk of the call from that one version; reading allocates nothing and locks nothing. A control
+  thread publishes a new table when a variant is added or removed and waits for the reader that
+  was out. The handler's plan rows are published the same way for the three selection entries,
+  with a reader slot of their own, so neither group holds the other up. An entry that finds its
+  group's slot held returns ``ANIRA_ERROR_CONCURRENT_CALL``: from a selection entry a legal
+  overlap (the caller calls again), from a driver entry a second driver thread, which the thread
+  contract forbids.
 - **The control lock.** One mutex per handler serialises ``prepare``, ``add_variant``,
   ``remove_variant`` and ``destroy``. No real-time path takes it.
 

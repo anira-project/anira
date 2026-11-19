@@ -153,7 +153,10 @@ export class InferenceHandler {
   /**
    * Select the plan the next chunk runs on, a dense index of the report
    * (`anira_handler_set_plan`). The row of a removed variant (`ANIRA_PLAN_REMOVED`) throws an
-   * `AniraError` with `ANIRA_ERROR_NOT_FOUND`, the selection as it was.
+   * `AniraError` with `ANIRA_ERROR_NOT_FOUND`, the selection as it was. Like `setModel` and
+   * `setBackend` it throws one with `ANIRA_ERROR_CONCURRENT_CALL`, the selection as it was and
+   * nothing in `rtError()`, while another call of the three is inside the handler in another
+   * scope (a Worker or the worklet beside the main thread): call again.
    */
   setPlan(plan: number): void {
     this.abi.anira_handler_set_plan(this.handler, plan)

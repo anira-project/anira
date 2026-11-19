@@ -4145,8 +4145,9 @@ public:
     /// anira_handler_set_plan: the dense plan index of the report; effective at the next chunk.
     /// The row of a removed variant (ANIRA_PLAN_REMOVED) is ANIRA_ERROR_NOT_FOUND, with the
     /// selection as it was and the status in rt_error(). Like set_model and set_backend it
-    /// returns ANIRA_ERROR_CAPACITY, with the selection as it was and nothing in rt_error(),
-    /// when more than four calls of the three overlap on the handler: call again.
+    /// returns ANIRA_ERROR_CONCURRENT_CALL, with the selection as it was and nothing in
+    /// rt_error(), while another call of the three is inside the handler on another thread:
+    /// call again, a real-time caller with its next block.
     anira_status set_plan(uint32_t plan) noexcept ANIRA_NONBLOCKING {
         return anira_handler_set_plan(m_handler, plan);
     }

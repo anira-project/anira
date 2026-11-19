@@ -349,7 +349,9 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // axis: set_backend keeps the model that runs and moves to the chosen backend, set_model
     // keeps that backend and moves to the chosen variant (the "Model" parameter). Both are
     // real-time safe. The next chunk runs the pair; a chunk in flight finishes on its own plan,
-    // nothing restarts and the latency stays.
+    // nothing restarts and the latency stays. The statuses are not looked at: this thread is
+    // the only one that selects, so no call meets another one (ANIRA_ERROR_CONCURRENT_CALL),
+    // and both are made again with every block anyway.
     model.handler.set_backend(query.backend);
     model.handler.set_model(static_cast<uint32_t>(model_variant.load()));
 #else

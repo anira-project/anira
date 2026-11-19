@@ -214,10 +214,10 @@ what a switch to another variant does to it is the contract's (:ref:`usage-varia
 ``set_model(variant)`` and ``set_backend(backend)`` move one axis of the same selection and keep
 the other (:ref:`usage-variant-switch`). An index out of range is a no-op recorded as
 ``ANIRA_ERROR_CONFIG`` in ``rt_error()``, the index of a removed plan one recorded as
-``ANIRA_ERROR_NOT_FOUND``. The three selection entries read the plan table through four reader
-slots: when more than four calls of them overlap on one handler, a call returns
-``ANIRA_ERROR_CAPACITY`` with the selection unchanged and nothing recorded, and the caller calls
-again. Every prepare starts on the default plan again.
+``ANIRA_ERROR_NOT_FOUND``. The three selection entries run one at a time on a handler: a call that
+finds another of them inside returns ``ANIRA_ERROR_CONCURRENT_CALL`` with the selection unchanged
+and nothing recorded, and the caller calls again (a real-time caller with its next block). Every
+prepare starts on the default plan again.
 
 The engines a build may carry are ``ANIRA_ENGINE_ONNXRUNTIME`` (``"onnxruntime"``),
 ``ANIRA_ENGINE_LIBTORCH`` (``"libtorch"``), ``ANIRA_ENGINE_LITERT`` (``"litert"``, the default of
@@ -384,7 +384,8 @@ Three entries move the one selection ``get_plan()`` reads. All three are ``[thre
 - **One axis moves, the other stays.** ``set_model`` and ``set_backend`` are each a
   compare-and-swap on the selection: the plan is resolved against the plan selected at that
   moment and stored only while that plan is still selected. A ``set_model`` and a ``set_backend``
-  from two threads both land, in either order.
+  from two threads both land, in either order: one that meets the other inside the handler returns
+  ``ANIRA_ERROR_CONCURRENT_CALL`` and lands when it is called again.
 - ``ANIRA_ERROR_NOT_FOUND`` **changes nothing.** When the variant has no plan on that backend (its
   entries run on other engines or providers, the index names no variant, or the variant was
   removed), the selection stays as it is, and the status is recorded in ``rt_error()`` and logged
@@ -392,8 +393,8 @@ Three entries move the one selection ``get_plan()`` reads. All three are ``[thre
   throws.
 - ``set_backend`` refuses a backend against the pair rule (:ref:`usage-providers`) with
   ``ANIRA_ERROR_INVALID_ARGUMENT``. All three return ``ANIRA_ERROR_NOT_PREPARED`` before a
-  successful prepare and ``ANIRA_ERROR_CAPACITY`` under more than four overlapping calls
-  (:ref:`usage-select-plan`).
+  successful prepare and ``ANIRA_ERROR_CONCURRENT_CALL`` while another of them is inside the
+  handler (:ref:`usage-select-plan`).
 
 .. _usage-variant-state:
 
