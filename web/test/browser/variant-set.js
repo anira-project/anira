@@ -13,15 +13,16 @@
 // handler's entry (the plans appended, a new report, the earlier report object as it was, the
 // selection, the latency and the entry count unchanged, the processor not prepared again); a
 // variant whose warm-up takes its time, added while the stream plays on the JavaScript engine,
-// which loads the two models in turn on its Workers: chunks are formed during the call; a
-// removal while the stream plays (the rows marked, find and the selection entries past them,
-// every refusal with its status); two adds that fail, a model of another window and one that
-// does not load, which leave the report as it was; then rounds of add, select, remove the one
-// before, each on a model of its own with two mebibytes of model bytes, half of them on the
-// JavaScript engine: the whole stream is what the selected plan computes, and the heap does
-// not grow by a model per round. First, before any of it: a prepare whose plans have their
-// figures needs no Worker, an add of a model without one does, and is refused with
-// ANIRA_ERROR_INVALID_STATE until the Workers run. The verdict is window.anira_test_result.
+// which loads the two models in turn on its Workers (the page counts the loads): chunks are
+// formed during the call; a removal while the stream plays (the rows marked, find and the
+// selection entries past them, every refusal with its status); two adds that fail, a model of
+// another window and one that does not load, which leave the report as it was; then rounds of
+// add, select, remove the one before, each on a model of its own with two mebibytes of model
+// bytes, half of them on the JavaScript engine: the whole stream is what the selected plan
+// computes, and the heap does not grow by a model per round. First, before any of it: a
+// prepare whose plans have their figures needs no Worker, an add of a model without one does,
+// and is refused with ANIRA_ERROR_INVALID_STATE until the Workers run. The verdict is
+// window.anira_test_result.
 import {
   Anira,
   AniraError,
@@ -44,6 +45,7 @@ import {
   WORKER_MODULE,
   gateOfLastPrepare,
   gatePrepares,
+  loadCounter,
   modelWithEngine,
   ramp,
   refusal,
@@ -58,6 +60,7 @@ const HOP = 512
 const CHUNKS = 1024
 const PACE_MS = 2
 const WARMUP = 2
+const THREADS = 2
 // One inference of the slow variant on the JavaScript engine sleeps this long: its warm-up
 // keeps the add inside its call for WARMUP times as long, by construction.
 const SLOW_MS = 40
@@ -186,8 +189,8 @@ const beforeTheWorkersRun = async (anira, check, models) => {
   context.destroy()
 }
 
-const underARenderingNode = async (anira, check, models) => {
-  const context = Context.create(anira, { threads: 2, workerModule: WORKER_MODULE })
+const underARenderingNode = async (anira, check, models, counters) => {
+  const context = Context.create(anira, { threads: THREADS, workerModule: WORKER_MODULE })
   await context.ready()
   const contract = warmingContract(anira)
   const handler = handlerOf(anira, context, [models.half])
@@ -263,14 +266,28 @@ const underARenderingNode = async (anira, check, models) => {
     gate.open(PACE_MS)
     {
       const formed = gate.formed()
+      const before = { playing: counters.double.loads(), added: counters.slow.loads() }
       const index = handler.addVariant(models.slow)
       const during = gate.formed() - formed
+      // The Workers hold one model each: the warm-up of the added one and the chunks of the
+      // playing one take turns on them, and each turn is a load.
+      const loaded = {
+        playing: counters.double.loads() - before.playing,
+        added: counters.slow.loads() - before.added,
+      }
       weightOf[index] = WEIGHTS.invert
       check(
-        index === 2 && during >= 2 && handler.planReport().numPlans() === 6,
+        index === 2 &&
+          during >= 2 &&
+          handler.planReport().numPlans() === 6 &&
+          loaded.added >= 1 &&
+          loaded.added <= WARMUP &&
+          loaded.playing <= WARMUP + THREADS - 1,
         `a variant whose warm-up sleeps ${WARMUP} x ${SLOW_MS} ms on the JavaScript engine is ` +
           `added while the stream plays on that engine: ${during} chunks were formed during ` +
-          `the call, and it is variant ${index}`
+          `the call, and it is variant ${index}; the ${THREADS} Workers loaded the added ` +
+          `model ${loaded.added} times for its ${WARMUP} warm-up inferences and the playing ` +
+          `one ${loaded.playing} times in between`
       )
     }
     selectAt(await gate.holdNext(), () => handler.setPlan(4))
@@ -419,11 +436,13 @@ const run = async () => {
 
   const anira = await Anira.create()
   anira.setLogSink((record) => console.log(`[anira ${record.group}] ${record.message}`))
+  // What the Workers' weight engines load of the two models that share them during an add.
+  const counters = { double: loadCounter(anira), slow: loadCounter(anira) }
   const models = {
     half: await variant(anira, 'half'),
-    double: await variant(anira, 'double'),
+    double: await variant(anira, 'double', { counter: counters.double }),
     invert: await variant(anira, 'invert'),
-    slow: await variant(anira, 'invert', { sleepMs: SLOW_MS }),
+    slow: await variant(anira, 'invert', { sleepMs: SLOW_MS, counter: counters.slow }),
     // A model of another form: half the window. And one whose ONNX Runtime entry is no model.
     otherWindow: await variant(anira, 'half', {
       edit: (json) => {
@@ -441,7 +460,7 @@ const run = async () => {
   }
 
   await beforeTheWorkersRun(anira, check, models)
-  await underARenderingNode(anira, check, models)
+  await underARenderingNode(anira, check, models, counters)
 
   Object.values(models).forEach((model) => model.destroy())
   return { checks }

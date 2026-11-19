@@ -146,17 +146,29 @@ const fetchOnce = async (url) => {
 }
 
 /**
+ * An int32 in the module's memory that the weight engine counts the loads of a model in (a
+ * model made with `counter`): what the Workers' engines were told to load, read by the page.
+ */
+export const loadCounter = (anira) => {
+  const address = anira.module._malloc(4)
+  const words = () => heap(anira.module).HEAP32
+  Atomics.store(words(), address >>> 2, 0)
+  return { address, loads: () => Atomics.load(words(), address >>> 2) }
+}
+
+/**
  * A bundled model config with one entry more, for a JavaScript engine of variants-worker.js,
- * whose bytes begin with the float32 values `floats` (what that engine computes with) and go on
- * with `ballast` zero bytes (what a model of that size weighs in the heap while it is loaded).
- * `edit` may change the parsed file first.
+ * whose bytes begin with the float32 values `floats` (what that engine computes with), go on
+ * with the address of `counter` (a `loadCounter`, for the weight engine) where one is given,
+ * and end with `ballast` zero bytes (what a model of that size weighs in the heap while it is
+ * loaded). `edit` may change the parsed file first.
  */
 export const modelWithEngine = async (
   anira,
   file,
   engine,
   floats,
-  { edit = (json) => json, ballast = 0 } = {}
+  { edit = (json) => json, ballast = 0, counter = null } = {}
 ) => {
   const json = edit(JSON.parse(await (await fetchOnce(new URL(file, MODELS))).text()))
   json.models.push({ engine })
@@ -164,8 +176,10 @@ export const modelWithEngine = async (
     baseUrl: MODELS,
     fetch: fetchOnce,
   })
-  const bytes = new Uint8Array(4 * floats.length + ballast)
+  const head = 4 * floats.length
+  const bytes = new Uint8Array(head + (counter === null ? 0 : 4) + ballast)
   bytes.set(new Uint8Array(new Float32Array(floats).buffer))
+  if (counter !== null) new DataView(bytes.buffer).setUint32(head, counter.address, true)
   return model.setModelBytes(json.models.length - 1, bytes)
 }
 

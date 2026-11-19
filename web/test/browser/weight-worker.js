@@ -19,6 +19,9 @@ export const floatsOf = (model, count) => {
 
 // y = weight * x. The entry's bytes begin with two float32: the weight, and the milliseconds
 // one inference of this model sleeps first (Atomics.wait, which a Worker may call), 0 for none.
+// A third word, where the entry has one and it is not 0, is the address of an int32 in the
+// module's memory that every load of the model counts up: how a page sees the loads its
+// Workers make.
 defineEngine('org.anira-test.weight', (env) => {
   let weight = NaN
   let sleepMs = 0
@@ -27,6 +30,14 @@ defineEngine('org.anira-test.weight', (env) => {
       const floats = floatsOf(model, 2)
       if (floats === null) return anira_status.ANIRA_ERROR_MODEL_LOAD
       ;[weight, sleepMs] = floats
+      if (model.bytes.length >= 12) {
+        const counter = new DataView(
+          model.bytes.buffer,
+          model.bytes.byteOffset + 8,
+          4
+        ).getUint32(0, true)
+        if (counter !== 0) Atomics.add(env.module.HEAP32, counter >>> 2, 1)
+      }
       return anira_status.ANIRA_OK
     },
     process(ctx) {

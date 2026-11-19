@@ -16,8 +16,12 @@
 // engine and on a JavaScript engine. Under the default, ANIRA_VARIANT_STATE_FRESH, a variant
 // starts from the initial state at the switch, also the first variant when the stream comes
 // back to it; under ANIRA_VARIANT_STATE_KEEP it continues from the state the other one left. A
-// backend switch inside one variant keeps the state in both. The verdict is
-// window.anira_test_result.
+// backend switch inside one variant keeps the state in both.
+//
+// Last, what a variant switch costs a JavaScript engine: its Worker's instance holds the model
+// of its last load, so on a context of one Worker every switch to a variant is one load of its
+// model, at the first chunk behind the switch, and a backend switch away from the engine and
+// back is none. The verdict is window.anira_test_result.
 import {
   Anira,
   Context,
@@ -41,6 +45,7 @@ import {
   WEIGHT_ENGINE,
   WORKER_MODULE,
   gateOfLastPrepare,
+  loadCounter,
   modelWithEngine,
   ramp,
   refusal,
@@ -308,6 +313,87 @@ const variantState = async (anira, context, check, keep) => {
   contract.destroy()
 }
 
+// One loaded model per Worker: the registry runs a JavaScript engine's load before the first
+// call on a model and again when a later call runs another one. Two variants on the weight
+// engine, whose loads the page counts, on a context of one Worker, so that every chunk is that
+// Worker's: the stream goes to and fro between the variants, then to the built-in engine and
+// back.
+const engineLoads = async (anira, check) => {
+  const context = Context.create(anira, { threads: 1, workerModule: WORKER_MODULE })
+  await context.ready()
+  const WEIGHTS = [0.5, 2]
+  const counters = [loadCounter(anira), loadCounter(anira)]
+  const models = await Promise.all(
+    ['half', 'double'].map((name, v) =>
+      modelWithEngine(
+        anira,
+        `variant_gain_${name}.model.json`,
+        WEIGHT_ENGINE,
+        [WEIGHTS[v] / 2, 0],
+        { counter: counters[v] }
+      )
+    )
+  )
+  const pipeline = Pipeline.create(anira)
+    .addInference(models)
+    .addEngine(WEIGHT_ENGINE)
+    .addProcessor(GATE, { phases: GATE_PHASES })
+  const contract = await fileContract(anira, 'variant_gain.contract.json')
+  const handler = InferenceHandler.create(context, pipeline)
+  handler.prepare(contract)
+  const gate = gateOfLastPrepare(anira)
+  pipeline.destroy()
+  models.forEach((model) => model.destroy())
+  // The stream starts on the first variant's plan on the JavaScript engine. A prepare without
+  // a warm-up runs no inference, so nothing is loaded yet.
+  handler.setBackend(WEIGHT_BACKEND)
+  const atStart = counters.map((counter) => counter.loads())
+
+  const HOP = 512
+  const CHUNKS = 24
+  const samples = ramp(CHUNKS * HOP)
+  const latency = handler.getLatency()
+  // The loads so far, read while the render is held at a chunk: before that chunk's inference.
+  const seen = []
+  const note = () => seen.push(counters.map((counter) => counter.loads()).join('+'))
+  const { rendered, planOf } = await steppedRender(handler, gate, [samples], HOP, [
+    [2, () => (note(), handler.setModel(1))],
+    [5, () => (note(), handler.setModel(0))],
+    [8, () => (note(), handler.setModel(1))],
+    [11, () => (note(), handler.setModel(0))],
+    [14, () => (note(), handler.setBackend(BUILT_IN))],
+    [17, () => (note(), handler.setBackend(WEIGHT_BACKEND))],
+    [20, () => note()],
+  ])
+  const loads = counters.map((counter) => counter.loads())
+  const { wrong, chunks } = wrongChunks(
+    rendered[0],
+    latency,
+    HOP,
+    (chunk, i) =>
+      WEIGHTS[Math.floor(planOf[chunk] / 2)] *
+      (planOf[chunk] % 2 === 1 ? 0.5 : 1) *
+      samples[i]
+  )
+  check(
+    atStart.join('+') === '0+0' &&
+      loads.join('+') === '3+2' &&
+      seen.join(' ') === '1+0 1+1 2+1 2+2 3+2 3+2 3+2' &&
+      wrong.length === 0 &&
+      chunks >= 21,
+    `on one Worker a JavaScript engine loads a variant's model once behind every switch to ` +
+      `it and never else: ${loads[0]} loads of the first variant (the stream's start and two ` +
+      `switches back to it) and ${loads[1]} of the second over the plans ` +
+      `${planOf.slice(0, chunks).join(' ')}, none for the switch to the built-in engine and ` +
+      `back (loads at each switch: ${seen.join(' ')}); the stream is exact (wrong chunks: ` +
+      `${wrong.join(' ') || 'none'})`
+  )
+
+  handler.destroy()
+  contract.destroy()
+  context.destroy()
+}
+
 const run = async () => {
   const checks = []
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
@@ -320,8 +406,9 @@ const run = async () => {
   await gainVariants(anira, context, check)
   await variantState(anira, context, check, false)
   await variantState(anira, context, check, true)
-
   context.destroy()
+
+  await engineLoads(anira, check)
   return { checks }
 }
 
