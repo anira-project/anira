@@ -62,6 +62,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <ratio>
 #include <string>
@@ -897,8 +898,17 @@ void unprepare(anira_handler& handler) noexcept {
     if (!handler.m_reports.empty()) { *handler.m_reports.front() = anira_plan_report{}; }
     handler.m_plans.clear();
     handler.m_plan_strings.clear();
-    // No rows for a selection entry either: the published version is the empty table.
-    publish_plan_rows(handler);
+    // No rows for a selection entry either: the published version is the empty table. A
+    // publication allocates its version, and this function runs where memory may have run out
+    // (a prepare that failed with std::bad_alloc unprepares here, and must still return its
+    // status): when the empty version cannot be made, the rows of the released session stay
+    // published. No entry reads them: every selection entry asks m_runnable first, which is
+    // false from the first line of this function until the next prepare has published its own
+    // rows. A version owns what it names, and goes with the next publication or the handler.
+    try {
+        publish_plan_rows(handler);
+    } catch (const std::bad_alloc&) {  // NOLINT(bugprone-empty-catch) the comment above
+    }
 }
 
 // What the latency getters answer from, after a sizing of the session: one figure per output
