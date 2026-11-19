@@ -44,7 +44,7 @@ the tests by ``extras/models/model_files.h``:
    * - ``model-pool/variant_gain_half``, ``variant_gain_double``, ``variant_gain_invert``
      - VariantGainNetwork: one architecture with three weights (``y = 0.5 x``, ``2 x``, ``-x`` on
        a mono stream), so three models of one form, the variants of one inference stage; one
-       contract file for the three, ``variant_gain.contract.json``
+       contract file for the three, ``variant_gain.contract.json`` (:ref:`usage-variants`)
      - the default fill
    * - ``model-pool/typed_gain_<dtype>``
      - TypedGainNetwork at ``int16``, ``int8`` and ``float16`` on every engine; the ``_unplanned``
@@ -136,7 +136,7 @@ never held.
        - VariantGainNetwork: three models of one form (``y = 0.5 x``, ``2 x`` and ``-x``) as the
          variants of the one inference stage (``add_inference({half, twice, inverted}, {})``),
          which one handler loads and measures together; a "Model" parameter switches between them
-         while audio runs
+         while audio runs (:ref:`usage-variants`)
 
 - The "Backend Type" parameter stores its choice in an atomic and ``processBlock`` applies it: the
   plan that runs the chosen engine (``PlanReport::find``, then ``set_plan``).

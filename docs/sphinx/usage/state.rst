@@ -91,8 +91,9 @@ switch does to it depends on which axis of the selection moves:
     anira::Hard hard{.host_block_min = 64, .host_block_max = 64, .host_rate = 48000,
                      .variant_state = ANIRA_VARIANT_STATE_KEEP};   // in the file: "variant_state": "keep"
 
-Take the accumulator and a twin of the same tensors that subtracts the running sum where the
-accumulator adds it, as two variants. Under ``KEEP`` the twin's first block behind the switch is
+The bundled twin of the accumulator, ``stateful_accumulator_negated.model.json``, has the same
+tensors and subtracts the running sum where the accumulator adds it: the two are variants of one
+stage. Under ``KEEP`` the twin's first block behind the switch is
 its input minus the sum of every sample the accumulator consumed, and the block counter goes on.
 Under ``FRESH`` it is the input alone, and the sum and the counter start over.
 

@@ -261,6 +261,11 @@ place of this one or beside it.
     handler.set_model(2);                                     // the inverted gain, on the backend that runs now
     handler.set_backend({.engine = ANIRA_ENGINE_LIBTORCH});   // the same model on LibTorch
 
+The bundled VariantGainNetwork is such a set:
+``extras/models/model-pool/variant_gain_half.model.json``, ``variant_gain_double.model.json`` and
+``variant_gain_invert.model.json`` under the one contract file ``variant_gain.contract.json``
+(:doc:`../examples`).
+
 In C the variants are the list ``anira_pipeline_add_inference`` takes, and the two selection
 entries return their status:
 
