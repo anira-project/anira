@@ -23,10 +23,13 @@ export const floatsOf = (info, count) => {
 // A third word, where the entry has one and it is not 0, is the address of three int32 in the
 // module's memory, the model's counts: its loads, the destroys of what they returned, and the
 // loads by a Worker that held an object of the model already (a model loaded twice in one
-// Worker).
+// Worker). A fourth word that is not 0 makes the model's first load on each Worker throw, as
+// a model that does not load would: the Worker's next call for the model loads it.
 defineEngine('org.anira-test.weight', (env) => {
   // The models this Worker holds an object of, by their counts.
   const held = new Set()
+  // The models whose first load this Worker has refused already.
+  const refused = new Set()
   return {
     load(info) {
       const floats = floatsOf(info, 2)
@@ -35,10 +38,15 @@ defineEngine('org.anira-test.weight', (env) => {
       const [weight, sleepMs] = floats
       // Read here: the entry's bytes go with the model's unload, before the destroy.
       const bytes = info.modelBytes
-      const counts =
-        bytes.length >= 12
-          ? new DataView(bytes.buffer, bytes.byteOffset + 8, 4).getUint32(0, true) >>> 2
+      const word = (at) =>
+        bytes.length >= at + 4
+          ? new DataView(bytes.buffer, bytes.byteOffset + at, 4).getUint32(0, true)
           : 0
+      const counts = word(8) >>> 2
+      if (word(12) !== 0 && !refused.has(counts)) {
+        refused.add(counts)
+        throw new Error('the weight engine: the page asked for a load that fails once')
+      }
       if (counts !== 0) {
         Atomics.add(heap(env.module).HEAP32, counts, 1)
         if (held.has(counts)) Atomics.add(heap(env.module).HEAP32, counts + 2, 1)

@@ -17,7 +17,11 @@
 // Then a Worker that leaves its loop while a model is still loaded: an inference thread the
 // page starts and stops itself, on a context without a pool. Stopped, the Worker destroys what
 // it holds before it goes, though no model was unloaded; the Worker started next loads the
-// model for itself. The verdict is window.anira_test_result.
+// model for itself.
+//
+// Last, a load that throws: the inference that needed the model fails (zeros at its place in
+// the stream, ANIRA_ERROR_ENGINE in rtError()), and the Worker's next inference of the model
+// loads it. The verdict is window.anira_test_result.
 import {
   Anira,
   Context,
@@ -25,6 +29,7 @@ import {
   InferenceHandler,
   ModelConfig,
   Pipeline,
+  anira_status,
   anira_warmup_mode,
   heap,
 } from '../../dist/index.js'
@@ -50,9 +55,10 @@ const streamed = (name) => ({
   window: { min: QUANTUM, max: QUANTUM },
 })
 
-// A model the weight engine runs: its entry's bytes are the weight, no sleep, and the address
-// of the counts every load and every destroy of the model is counted in.
-const weightModel = async (anira, weight, counts) => {
+// A model the weight engine runs: its entry's bytes are the weight, no sleep, the address of
+// the counts every load and every destroy of the model is counted in, and with `failsOnce` the
+// word that makes its first load on a Worker throw.
+const weightModel = async (anira, weight, counts, failsOnce = false) => {
   const model = await ModelConfig.fromJson(
     anira,
     JSON.stringify({
@@ -61,9 +67,10 @@ const weightModel = async (anira, weight, counts) => {
       outputs: [streamed('out')],
     })
   )
-  const bytes = new Uint8Array(12)
+  const bytes = new Uint8Array(failsOnce ? 16 : 12)
   bytes.set(new Uint8Array(new Float32Array([weight, 0]).buffer))
   new DataView(bytes.buffer).setUint32(8, counts, true)
+  if (failsOnce) new DataView(bytes.buffer).setUint32(12, 1, true)
   return model.setModelBytes(0, bytes)
 }
 
@@ -256,6 +263,54 @@ const leavingWorker = async (anira, check) => {
   anira.module._free(counts.address)
 }
 
+// A model whose load throws at the Worker's first inference of it and succeeds at the next:
+// natively a load that throws fails the prepare; here the prepare is long over when a Worker
+// loads, so the inference fails, as one whose engine fails does, and the load is tried again.
+const failingLoad = async (anira, check) => {
+  const context = Context.create(anira, { threads: 1, workerModule: WORKER_MODULE })
+  await context.ready()
+  const contract = ContractHandle.hard(anira, {
+    hostBlockMin: QUANTUM,
+    hostRate: RATE,
+    budgetMs: 5,
+    warmup: anira_warmup_mode.ANIRA_WARMUP_NONE,
+  })
+  const counts = modelCounts(anira)
+  const WEIGHT = 5
+  const model = await weightModel(anira, WEIGHT, counts.address, true)
+  const pipeline = Pipeline.create(anira).addInference(model).addEngine(ENGINE_ID)
+  const handler = InferenceHandler.create(context, pipeline)
+  pipeline.destroy()
+  model.destroy()
+  handler.prepare(contract)
+  const latency = handler.getLatency()
+  const before = handler.rtError()
+  const rendered = await render(handler)
+  const after = handler.rtError()
+  // One inference per quantum: the first one's output is the first quantum behind the latency.
+  let silent = true
+  let exact = true
+  for (let i = 0; i + latency < rendered.length; i++) {
+    if (i < QUANTUM) silent &&= rendered[i + latency] === 0
+    else exact &&= rendered[i + latency] === Math.fround(WEIGHT * samples[i])
+  }
+  check(
+    before === anira_status.ANIRA_OK &&
+      after === anira_status.ANIRA_ERROR_ENGINE &&
+      silent &&
+      exact &&
+      counts.read(0) === 1,
+    `a load that throws fails the inference that needed the model (zeros for its quantum: ` +
+      `${silent}; rtError() ${after} behind the render, ${before} before it), and the ` +
+      `Worker's next inference loads the model (${counts.read(0)} load counted; the rest of ` +
+      `the render is the model's weight: ${exact})`
+  )
+  handler.destroy()
+  contract.destroy()
+  context.destroy()
+  anira.module._free(counts.address)
+}
+
 const run = async () => {
   const checks = []
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
@@ -264,6 +319,7 @@ const run = async () => {
   anira.setLogSink((record) => console.log(`[anira ${record.group}] ${record.message}`))
   await handlersInTurn(anira, check)
   await leavingWorker(anira, check)
+  await failingLoad(anira, check)
   return { checks }
 }
 
