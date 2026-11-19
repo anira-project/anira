@@ -16,7 +16,8 @@
  * (Pipeline: add_inference, add_processor, add_engine; PlanReport), the handler half of section 6
  * (InferenceHandler over anira/abi/handler.h: prepare returning the PlanReport, the Hard
  * entries and their _wait twins over Tensor, the Static pair, the latencies, reset, rt_error,
- * set_plan / get_plan; InferenceThread over anira/abi/thread.h; log_rt), the processors and the
+ * set_plan / get_plan, set_model / set_backend, add_variant / remove_variant; InferenceThread
+ * over anira/abi/thread.h; log_rt), the processors and the
  * custom engines of section 7 (Processor, Processor::Prepared, ProcessorContext and RingView over
  * anira/abi/processor.h; Engine, Engine::Loaded, Engine::Prepared, EngineLoadInfo and
  * EngineContext over anira/abi/engine.h, added through Pipeline::add_engine; InitInfo and
@@ -68,7 +69,9 @@
  * the 2.x survivors (the static thread count, a member drain_log) are the free functions
  * num_inference_threads() and drain_log(), and set_model / set_backend take the variant's index
  * and a PlanQuery::Backend and return the C status: each moves one axis of the selection and
- * keeps the other, where set_plan sets both by a plan's index of the PlanReport.
+ * keeps the other, where set_plan sets both by a plan's index of the PlanReport. add_variant and
+ * remove_variant, which change the variants of a handler while its stream plays, throw like
+ * prepare (add_variant returns the new variant's index).
  *
  * Requirements: C++20 with exceptions; std::filesystem, which on Apple platforms means a
  * deployment target of macOS 10.15 / iOS 13 or later.
@@ -2246,6 +2249,10 @@ struct PlanQuery {
  * @brief A view of a handler's anira_plan_report (valid until its next prepare or destroy):
  * the rows copied into vectors through the stride-explicit enumerators. Plan 0 is the only
  * plan of a single-candidate pipeline; the budget is the row field anira_plan_info::budget_ms.
+ * A handler makes a new report at every prepare and at every InferenceHandler::add_variant and
+ * remove_variant that succeeds, and leaves the earlier ones of that prepare as they were: a
+ * PlanReport taken before such a call keeps reading the rows it had, and
+ * InferenceHandler::plan_report() returns the newest.
  */
 class PlanReport {
 public:
@@ -2253,9 +2260,13 @@ public:
     /// ANIRA_ERROR_INVALID_ARGUMENT.
     explicit PlanReport(const anira_plan_report* report) noexcept : m_report(report) {}
 
-    /// The number of plans; a plan is a dense index below it.
+    /// The number of plans, the rows of removed variants included; a plan is a dense index
+    /// below it.
     uint32_t num_plans() const noexcept { return anira_plan_report_num_plans(m_report); }
-    /// One anira_plan_info per plan, in plan order.
+    /// One anira_plan_info per plan, in plan order. A plan keeps its index between two prepares:
+    /// InferenceHandler::add_variant appends rows, and remove_variant leaves the rows of the
+    /// variant it takes out where they are, their anira_plan_info::state ANIRA_PLAN_REMOVED
+    /// (ANIRA_PLAN_READY for every plan that runs). A prepare numbers the plans anew.
     std::vector<anira_plan_info> plans() const {
         return detail::enumerate<anira_plan_info>(
             [this](uint32_t* count, anira_plan_info* out) {
@@ -2286,9 +2297,10 @@ public:
     }
 
     /// anira_plan_report_find: the dense index of the first plan with every property the
-    /// query names, std::nullopt when none has them (ANIRA_ERROR_NOT_FOUND) or for a query that
-    /// breaks the pair rule. Allocation-free; callable from any thread while the report is valid,
-    /// so a host looks the plan of a backend choice up where it applies it (set_plan).
+    /// query names (a row marked ANIRA_PLAN_REMOVED is skipped), std::nullopt when none has
+    /// them (ANIRA_ERROR_NOT_FOUND) or for a query that breaks the pair rule. Allocation-free;
+    /// callable from any thread while the report is valid, so a host looks the plan of a
+    /// backend choice up where it applies it (set_plan).
     std::optional<uint32_t> find(const PlanQuery& query) const noexcept ANIRA_NONBLOCKING {
         const anira_plan_query native_query{
             .struct_size = sizeof(anira_plan_query),
@@ -2569,10 +2581,14 @@ class PrepareInfo {
 public:
     explicit PrepareInfo(const anira_prepare_info* info) noexcept : m_info(info) {}
 
-    /// The handler being prepared: its getters and the two Static entries are legal, never
-    /// prepare, destroy or a Hard entry.
+    /// The handler being prepared: its getters and the two Static entries are legal, never a
+    /// control entry (prepare, add_variant, remove_variant, destroy: ANIRA_ERROR_INVALID_STATE
+    /// from inside a callback of one) or a Hard entry. Under ANIRA_PREPARE_LIVE the handler is
+    /// playing, and the two Static entries are refused too.
     anira_handler* handler() const noexcept { return m_info->handler; }
-    /// This prepare's plan report.
+    /// This prepare's plan report; under ANIRA_PREPARE_LIVE the report the running
+    /// InferenceHandler::add_variant publishes when it succeeds, with the rows of the new plans
+    /// in it.
     PlanReport report() const noexcept { return PlanReport(m_info->report); }
     /// anira_handler_num_entries of this prepare: the chunks that can be in flight at once, one
     /// scratch slot per entry (ProcessorContext::entry).
@@ -2601,7 +2617,9 @@ public:
     }
     /// The flags of this prepare: ANIRA_PREPARE_EXCLUSIVE when the handler's inferences run one
     /// at a time and in order (a model declared stateful or with a declared State pair), with a
-    /// reset at every stream start.
+    /// reset at every stream start; ANIRA_PREPARE_LIVE when the prepare runs beside the
+    /// handler's playing stream (InferenceHandler::add_variant; an Engine::Loaded's prepare
+    /// alone, never a Processor's).
     uint32_t flags() const noexcept { return m_info->flags; }
     /// Whether ANIRA_PREPARE_EXCLUSIVE is set: an Engine::Loaded builds the session's own
     /// executor in its Prepared then, since the session's calls claim no shared instance.
@@ -3203,7 +3221,8 @@ public:
      * the instance the context names (the Loaded's), an exclusive call on what this object
      * built at prepare (its own executor). Created by prepare on the main thread (it may
      * allocate there), deleted by anira at the C unprepare (the handler's next prepare or its
-     * destroy), after the last process and before the Loaded; never copied, never moved.
+     * destroy, or the InferenceHandler::remove_variant that takes its variant out), after the
+     * last process and before the Loaded; never copied, never moved.
      */
     class Prepared {
     public:
@@ -3235,8 +3254,8 @@ public:
      * of them, never two calls at once on one) live here; prepare hands every handler that runs
      * the model its Prepared. Created by load on the main thread under the core's lifecycle
      * lock (it may allocate and read files there), deleted by anira at the C unload (when the
-     * last handler holding the model is re-prepared or destroyed), after every Prepared over it;
-     * never copied, never moved.
+     * last handler holding the model is re-prepared or destroyed, or removes the last variant
+     * that runs it), after every Prepared over it; never copied, never moved.
      */
     class Loaded {
     public:
@@ -3254,10 +3273,17 @@ public:
         /// the handler's calls claim no shared instance, so the Prepared builds the executor
         /// they run on (and what it keeps per stream); a stateless handler's Prepared routes
         /// its calls to the shared instances. Of anira it may call the [callback-safe] entries,
-        /// the handler's getters and the two Static entries, never prepare, destroy or a Hard
-        /// entry. The prepares of one Loaded never overlap, nor a prepare and the destruction
-        /// of a Prepared of it (anira serialises them per loaded model; those of different
-        /// loaded models may run at once). It may throw, as Engine::load may; a null return is
+        /// the handler's getters and the two Static entries, never a control entry (prepare,
+        /// add_variant, remove_variant, destroy: ANIRA_ERROR_INVALID_STATE) or a Hard entry.
+        /// InferenceHandler::add_variant calls it too, for the plans of the variant it adds to
+        /// a prepared handler, beside the playing stream (ANIRA_PREPARE_LIVE in
+        /// PrepareInfo::flags): process and reset keep running on the inference threads
+        /// meanwhile, for the handler's other plans and on this Loaded's other Prepared
+        /// objects, and from inside such a prepare the two Static entries are refused as well
+        /// (the driver thread writes them while the stream plays); the getters answer. The
+        /// prepares of one Loaded never overlap, nor a prepare and the destruction of a Prepared
+        /// of it (anira serialises them per loaded model; those of different loaded models may
+        /// run at once). It may throw, as Engine::load may; a null return is
         /// ANIRA_ERROR_INTERNAL.
         virtual std::unique_ptr<Prepared> prepare(const PrepareInfo& info) = 0;
 
@@ -3756,7 +3782,9 @@ public:
      * between them while audio runs. Free per variant: its model entries, layouts and binding
      * names, extensions, default engine and provider, max_instances and the internal latency (the
      * handler reports the largest per output; the stream is sized for the fewest instances).
-     * Empty candidates are the default set over the entries of every variant.
+     * Empty candidates are the default set over the entries of every variant. A handler's
+     * variants also change after its creation: InferenceHandler::add_variant and
+     * remove_variant, on a prepared handler while its stream plays.
      * @throws Error as the single form does. That every variant has the form of the first is
      * the handler's question: ANIRA_ERROR_CONFIG from the InferenceHandler constructor and from
      * prepare, naming the variant, the slot and the property.
@@ -3922,7 +3950,9 @@ private:
  * Created from a Pipeline, whose processors and engines the handler copies (anira_handler_create):
  * the Pipeline may die afterwards, and so may the Engine and Processor objects the program holds
  * (the handler keeps what it runs alive). prepare takes the contract and returns the PlanReport,
- * a view of the handler's report, valid until the next prepare or the handler's end.
+ * a view of the handler's report, valid until the next prepare or the handler's end. add_variant
+ * and remove_variant change the variants of the inference stage afterwards, on a prepared
+ * handler while its stream plays; each publishes a new report, which plan_report() returns.
  *
  * The Hard entries are one-line forwarders onto the tensor entries of anira/abi/handler.h:
  * noexcept, ANIRA_NONBLOCKING, a status returned and never thrown (the reason of a failure is
@@ -3939,8 +3969,13 @@ private:
  *
  * Every member is [main-thread] except: the Hard entries, the Static pair, reset and
  * get_available_samples, which are the driver thread's ([driver-thread], nonblocking); rt_error,
- * set_plan, get_plan, get_latency and get_latencies, which are [thread-safe] (set_plan and
- * get_plan nonblocking); the _wait twins ([any-thread, blocking]).
+ * set_plan, set_model, set_backend, get_plan, get_latency and get_latencies, which are
+ * [thread-safe] (the three setters and get_plan nonblocking); the _wait twins ([any-thread,
+ * blocking]). prepare, add_variant, remove_variant and the destructor are the handler's control
+ * entries: each blocks its caller, they take turns on one handler, and none is called from the
+ * driver thread or from inside a callback of another (an engine's load or prepare, a processor's
+ * prepare: ANIRA_ERROR_INVALID_STATE). prepare and the destructor need the driver thread to
+ * have stopped calling; add_variant and remove_variant are made to run beside it.
  */
 class InferenceHandler {
 public:
@@ -3976,7 +4011,10 @@ public:
     PlanReport prepare(const Hard& hard) { return prepare(ContractHandle(hard)); }
     PlanReport prepare(const Async& async) { return prepare(ContractHandle(async)); }
     PlanReport prepare(const Contract& contract) { return prepare(ContractHandle(contract)); }
-    /// The report of the last successful prepare (a report without plans before it).
+    /// anira_handler_plan_report: the newest report, the one of the last successful prepare or
+    /// the one a later add_variant or remove_variant published (a report without plans before
+    /// the first prepare). A PlanReport taken earlier keeps the rows it had: read this again
+    /// behind either call.
     PlanReport plan_report() const noexcept {
         return PlanReport(anira_handler_plan_report(m_handler));
     }
@@ -4105,9 +4143,10 @@ public:
         return anira_handler_rt_error(m_handler);
     }
     /// anira_handler_set_plan: the dense plan index of the report; effective at the next chunk.
-    /// Like set_model and set_backend it returns ANIRA_ERROR_CAPACITY, with the selection as it
-    /// was and nothing in rt_error(), when more than four calls of the three overlap on the
-    /// handler: call again.
+    /// The row of a removed variant (ANIRA_PLAN_REMOVED) is ANIRA_ERROR_NOT_FOUND, with the
+    /// selection as it was and the status in rt_error(). Like set_model and set_backend it
+    /// returns ANIRA_ERROR_CAPACITY, with the selection as it was and nothing in rt_error(),
+    /// when more than four calls of the three overlap on the handler: call again.
     anira_status set_plan(uint32_t plan) noexcept ANIRA_NONBLOCKING {
         return anira_handler_set_plan(m_handler, plan);
     }
@@ -4118,8 +4157,9 @@ public:
     /// plan of `variant` (its position in the list Pipeline::add_inference took) on the selected
     /// plan's engine and provider. One axis of the selection moves and the other stays, also
     /// against a set_backend on another thread. ANIRA_ERROR_NOT_FOUND, with the selection as it
-    /// was and the status in rt_error(), when the variant has no plan on that backend. What the
-    /// switch does to the model's state is the contract's (Hard::variant_state).
+    /// was and the status in rt_error(), when the variant has no plan on that backend, or was
+    /// removed. What the switch does to the model's state is the contract's
+    /// (Hard::variant_state).
     anira_status set_model(uint32_t variant) noexcept ANIRA_NONBLOCKING {
         return anira_handler_set_model(m_handler, variant);
     }
@@ -4137,6 +4177,84 @@ public:
                                               .engine_id = backend.engine_id,
                                               .provider_id = backend.provider_id};
         return anira_handler_set_backend(m_handler, &native_backend);
+    }
+
+    /**
+     * @brief anira_handler_add_variant: adds a model of the stage's form to the handler and
+     * returns its variant index (anira_plan_info.variant, what set_model takes): the next one of
+     * the inference stage, which no variant of the handler had before. A control entry like
+     * prepare: it blocks its caller and is never called from the driver thread. Unlike prepare
+     * it is legal while the driver thread calls the Hard entries, and the stream keeps playing.
+     *
+     * On an unprepared handler the variant joins the handler's copy of the pipeline, and the
+     * next prepare builds it. On a prepared handler the model is validated under the contract of
+     * the last prepare, and its plans are built and measured beside the stream, in a session of
+     * their own: the models load, the engines' handles are prepared (an Engine::Loaded's prepare
+     * sees ANIRA_PREPARE_LIVE in PrepareInfo::flags and runs while process runs for the
+     * handler's other plans), and the contract's warm-up pass runs for every new plan without a
+     * stored figure. The call blocks for all of it, as long as a prepare does for those plans,
+     * and shares the inference threads with the stream meanwhile. It then appends the plans
+     * behind the existing ones and publishes a new report: read plan_report() again (a
+     * PlanReport taken earlier keeps the rows it had). A plan keeps its index between two
+     * prepares; a prepare numbers the plans anew and keeps the variants' indices. The
+     * selection, the latency (get_latency) and num_entries() do not change: set_model or
+     * set_plan selects the new variant, and what the switch does to the model's state is the
+     * contract's (Hard::variant_state).
+     *
+     * The Processor is not called: it is not prepared again (every variant has the same
+     * shapes) and no phase of it runs for the build, so the figure of an added plan is the
+     * engine's alone, without the processor's before_inference and after_inference, until the
+     * next prepare measures the whole. An internal latency other than the reported one and an
+     * inference time above the budget the stream is sized for are one Warning each, never a
+     * refusal. The model is copied: `model` may die when the call returns.
+     * @throws Error with the status and the reason, and the handler as it was (nothing is
+     * published, everything the call built is released): ANIRA_ERROR_CONFIG for a rule the
+     * model breaks, a form other than the handler's (the message names the variant, the slot
+     * and the property; a model of another form is another handler) or a variant without a
+     * plan; ANIRA_ERROR_NOT_SUPPORTED and the extension statuses as the constructor. On a
+     * prepared handler also what a load or an engine's prepare failed with
+     * (ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD, ANIRA_ERROR_ENGINE),
+     * ANIRA_ERROR_EDGE_UNREACHABLE when no plan of the variant is within the contract's edge
+     * cost, and ANIRA_ERROR_INVALID_STATE when the warm-up finds no inference thread inside its
+     * loop. ANIRA_ERROR_INVALID_STATE too when called from inside a callback of a control entry
+     * of this handler.
+     */
+    uint32_t add_variant(const ModelConfig& model) {
+        anira_error err{};
+        uint32_t variant = 0;
+        detail::check(anira_handler_add_variant(m_handler, model.native(), &variant, &err), err);
+        return variant;
+    }
+    /**
+     * @brief anira_handler_remove_variant: removes a variant from the handler and frees what
+     * only it held. A control entry like add_variant: it blocks its caller, and on a prepared
+     * handler it is legal while the stream plays. On an unprepared handler the variant leaves
+     * the handler's copy of the pipeline. On a prepared handler its plans leave the table: their
+     * rows stay at their indices, marked ANIRA_PLAN_REMOVED (anira_plan_info.state) in a new
+     * report (read plan_report() again; a PlanReport taken earlier keeps the rows it had);
+     * PlanReport::find, set_model and set_backend skip them, and set_plan on one is
+     * ANIRA_ERROR_NOT_FOUND. The call then waits until the entry the driver thread is inside
+     * has returned (a _wait twin for its timeout) and until the variant's inferences in flight
+     * have ended, without a timeout (their chunks are delivered; a driver thread that is not
+     * running holds nothing back), and gives the engines' prepared handles back and releases
+     * the models on the calling thread: a model no other plan of any handler runs is unloaded.
+     * It returns when the memory is released.
+     *
+     * The variant's index is never given out again (add_variant continues behind the highest
+     * index the stage has had); a later prepare keeps the indices of the variants that remain
+     * and numbers the plans anew, without the removed rows. num_entries() and the latency do
+     * not change before the next prepare, also when the removed variant had the largest
+     * internal latency. Read get_plan() again: a selection of one of the variant's plans that
+     * raced the call was moved to the first ready plan.
+     * @throws Error, the handler as it was: ANIRA_ERROR_NOT_FOUND for an index that names no
+     * variant of the handler, or one that was removed; ANIRA_ERROR_INVALID_STATE for the last
+     * variant the handler has, for the variant of the selected plan (select a plan of another
+     * variant first: set_model), and when called from inside a callback of a control entry of
+     * this handler.
+     */
+    void remove_variant(uint32_t variant) {
+        anira_error err{};
+        detail::check(anira_handler_remove_variant(m_handler, variant, &err), err);
     }
 
     const anira_handler* native() const noexcept { return m_handler; }

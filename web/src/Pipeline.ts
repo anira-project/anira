@@ -113,7 +113,9 @@ export class Pipeline {
    * (`PlanInfo.variant` is the position here), and `setPlan` switches between them while audio
    * runs. That every variant has the form of the first is checked when the handler is created
    * and when it is prepared (an `AniraError` with `ANIRA_ERROR_CONFIG` naming the variant,
-   * the slot and the property).
+   * the slot and the property). A handler's variants also change after its creation:
+   * `InferenceHandler.addVariant` and `removeVariant`, on a prepared handler while its stream
+   * plays.
    */
   addInference(models: ModelConfig | ModelConfig[]): this {
     const list = Array.isArray(models) ? models : [models]

@@ -600,9 +600,29 @@ anira_status hard_entries_probe(anira::InferenceHandler& handler) noexcept ANIRA
     status = ANIRA_FAILED(status) ? status : handler.get_available_samples(0, 0, &available);
     handler.reset();
     status = ANIRA_FAILED(status) ? status : handler.set_plan(handler.get_plan());
+    // The selection by its axes: the model that runs, the backend it runs on.
+    status = ANIRA_FAILED(status) ? status : handler.set_model(0);
+    status =
+        ANIRA_FAILED(status) ? status : handler.set_backend({.engine = ANIRA_ENGINE_ONNXRUNTIME});
     anira::log_rt(ANIRA_LOG_INFO, "probe", "the hard entries", 1, 2);
     return ANIRA_FAILED(status) || handler.get_latency(0) > 0 ? status : handler.rt_error();
 }
+
+// The entries that change a handler's variants are control entries like prepare: they block,
+// they throw anira::Error, and they are no part of the nonblocking set above.
+static_assert(
+    !noexcept(std::declval<anira::InferenceHandler&>().add_variant(
+        std::declval<const anira::ModelConfig&>())) &&
+    !noexcept(std::declval<anira::InferenceHandler&>().remove_variant(0U)) &&
+    !noexcept(std::declval<anira::InferenceHandler&>().prepare(
+        std::declval<const anira::ContractHandle&>())) &&
+    noexcept(std::declval<anira::InferenceHandler&>().set_model(0U)) &&
+    noexcept(std::declval<anira::InferenceHandler&>().set_backend(anira::PlanQuery::Backend{})));
+static_assert(
+    std::is_same_v<decltype(std::declval<anira::InferenceHandler&>().add_variant(
+                       std::declval<const anira::ModelConfig&>())),
+                   uint32_t> &&
+    std::is_void_v<decltype(std::declval<anira::InferenceHandler&>().remove_variant(0U))>);
 
 // The lookup of a backend choice on the thread that applies it: PlanReport::find is
 // nonblocking, the query an aggregate with designated initializers.
@@ -736,6 +756,11 @@ int anira_header_cxx20_probe() {
         checks += hard_entries_probe(handler) == ANIRA_OK ? 1 : 0;
         checks += find_probe(handler.plan_report()).value_or(0U) > 0 ? 1 : 0;
         checks += handler.get_latencies().size() + handler.get_latency() > 0 ? 1 : 0;
+        // A variant added to the handler and removed again, the row's state read behind it.
+        const uint32_t added = handler.add_variant(model);
+        handler.remove_variant(added);
+        const std::vector<anira_plan_info> added_rows = handler.plan_report().plans();
+        checks += !added_rows.empty() && added_rows.back().state == ANIRA_PLAN_REMOVED ? 1 : 0;
         const anira::Tensor waited_block{};
         const std::array<anira::Tensor, 1> waited_slots{waited_block};
         size_t waited = 0;
