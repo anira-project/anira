@@ -1043,17 +1043,25 @@ std::string slot_text(bool is_input, size_t slot, const std::string& name) {
            name + "'";
 }
 
+// The two variants of one comparison of the form rule, by their indices in the stage: the one
+// that is checked and the first one, whose form it must have.
+struct ComparedVariants {
+    size_t m_other = 0;
+    size_t m_first = 0;
+};
+
 // The refusal of the form rule: the variant, where (a slot, or nothing for a property of the
 // whole model), the property and both values.
-[[noreturn]] void form_error(size_t variant,
+[[noreturn]] void form_error(const ComparedVariants& variant,
                              const std::string& where,
                              const std::string& property,
                              const std::string& value,
                              const std::string& first_value) {
-    config_error("variants[" + std::to_string(variant) +
+    config_error("variants[" + std::to_string(variant.m_other) +
                  "]: " + (where.empty() ? std::string() : where + ": ") + "the " + property +
-                 " is " + value + ", but " + first_value +
-                 " in variants[0]; every variant of an inference stage has the form of the " +
+                 " is " + value + ", but " + first_value + " in variants[" +
+                 std::to_string(variant.m_first) +
+                 "]; every variant of an inference stage has the form of the " +
                  "first one (a model of another form is another handler)");
 }
 
@@ -1063,7 +1071,7 @@ void check_same_side(const std::vector<anira_tensor_spec>& first_specs,
                      const std::vector<anira_tensor_spec>& other_specs,
                      const std::vector<DerivedSpec>& other,
                      bool is_input,
-                     size_t variant) {
+                     const ComparedVariants& variant) {
     if (other.size() != first.size()) {
         form_error(variant,
                    {},
@@ -1147,7 +1155,9 @@ void check_same_form(const anira_model_config& first,
                      const Derived& first_derived,
                      const anira_model_config& other,
                      const Derived& other_derived,
-                     size_t variant) {
+                     size_t other_variant,
+                     size_t first_variant) {
+    const ComparedVariants variant{.m_other = other_variant, .m_first = first_variant};
     check_same_side(first.m_inputs,
                     first_derived.m_inputs,
                     other.m_inputs,

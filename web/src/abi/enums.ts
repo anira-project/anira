@@ -210,6 +210,13 @@ export const anira_rt_verdict = {
 /** @internal */
 export type anira_rt_verdict = (typeof anira_rt_verdict)[keyof typeof anira_rt_verdict]
 
+export const anira_plan_state = {
+  ANIRA_PLAN_READY: 0,
+  ANIRA_PLAN_REMOVED: 1,
+} as const
+/** @internal */
+export type anira_plan_state = (typeof anira_plan_state)[keyof typeof anira_plan_state]
+
 export const anira_miss_policy = {
   ANIRA_MISS_BYPASS: 0,
   ANIRA_MISS_HOLD_LAST: 1,

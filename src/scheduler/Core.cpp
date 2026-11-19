@@ -1626,6 +1626,15 @@ std::vector<std::shared_ptr<SessionElement>> Core::get_sessions() {
     return state.m_sessions;
 }
 
+size_t Core::get_num_loaded_models() {
+    // A query must not allocate the core: no core means no pool.
+    void* existing = s_state.load(std::memory_order_acquire);
+    if (existing == nullptr) { return 0; }
+    State& state = *static_cast<State*>(existing);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    return state.m_loaded_models.size();
+}
+
 bool Core::pre_process(const std::shared_ptr<SessionElement>& session,
                        const SessionElement::PlanTable& plans) {
     for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {

@@ -662,6 +662,18 @@ public:
     static std::vector<std::shared_ptr<SessionElement>> get_sessions();
 
     /**
+     * @brief How many loaded models the pool holds
+     *
+     * One per model a plan of a registered session runs (the pool's entries): two plans of one
+     * model, in one handler or in two, are one. What a handler's release and the removal of a
+     * variant bring down when they let a model's last plan go. Taken under the lifecycle lock;
+     * for tests and diagnostics.
+     *
+     * @return The pool's entries; 0 without a core
+     */
+    static size_t get_num_loaded_models();
+
+    /**
      * @brief Wait-free reset of a session, safe on the session's driving (audio) thread.
      *
      * NEVER blocks the caller on in-flight inferences: it bumps the session

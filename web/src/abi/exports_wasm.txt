@@ -91,6 +91,7 @@ _anira_handler_process_multi_wait
 _anira_handler_process_wait
 _anira_handler_push_data
 _anira_handler_push_data_multi
+_anira_handler_remove_variant
 _anira_handler_reset
 _anira_handler_rt_error
 _anira_handler_set_backend

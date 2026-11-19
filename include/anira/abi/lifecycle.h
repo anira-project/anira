@@ -89,9 +89,9 @@ typedef struct anira_prepare_info {
     uint32_t num_entries;
     /**
      * The handler being prepared: its getters and the two Static entries are legal, never a
-     * control entry (prepare, add_variant, destroy: ANIRA_ERROR_INVALID_STATE from inside a
-     * callback of one) or a Hard entry. Under ANIRA_PREPARE_LIVE the handler is playing, and
-     * the two Static entries are refused too.
+     * control entry (prepare, add_variant, remove_variant, destroy: ANIRA_ERROR_INVALID_STATE
+     * from inside a callback of one) or a Hard entry. Under ANIRA_PREPARE_LIVE the handler is
+     * playing, and the two Static entries are refused too.
      */
     anira_handler* handler;
     /**

@@ -70,28 +70,30 @@
  * records it in anira_handler_rt_error and logs once through the real-time queue. The variants
  * of a handler's inference stage may change while its stream runs: anira_handler_add_variant
  * builds and measures the plans of one more model of the stage's form beside the stream and
- * appends them to the plan table. It is a control entry, like anira_handler_prepare and
+ * appends them to the plan table, and anira_handler_remove_variant takes a variant's plans out
+ * and frees its models. They are control entries, like anira_handler_prepare and
  * anira_handler_destroy: one of them runs on a handler at a time (a second one on another
  * thread waits for the first), none is real-time, and one called from inside a callback of
  * another (an engine's or a processor's init, load, prepare, unprepare or unload, on the thread
  * of the running entry) is refused with ANIRA_ERROR_INVALID_STATE (anira_handler_destroy then
- * does nothing). The plan indices a host holds stay what they were: plans are only appended
- * between two prepares. A handler counts as a user of the core: anira_shutdown is refused while
- * one lives. In this pre-release every handler is Host-only (every backend's domain is the
- * host's), its plans are one per variant, model entry of that variant and candidate naming that
- * entry's engine and a provider it accepts (anira_pipeline_add_inference: the variants of an
- * inference stage are models of one form, which one stream runs and anira_handler_set_plan
- * switches between), an Async contract is refused at prepare, and a ring dtype that differs
- * from its spec's dtype is refused at prepare unless the pipeline's processor fills the phase
- * that moves that ring (pre_process for an input, post_process for an output), since nothing in
- * anira converts. Every tensor of either side has one declared host-end domain
- * (anira_contract_set_host_domain, default ANIRA_DOMAIN_HOST): the domain anira allocates the
- * ring, the model tensor, the Static store and, overriding the backend's domain of the plans
- * that run the pair (host memory for every backend of this pre-release), the state buffers of
- * the slot in, and the domain all four processor phases work in; the plan report's slot rows
- * carry it as from_domain of an input and to_domain of an output, against the backend's domain
- * on the other side. Anything but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED at prepare in
- * this pre-release.
+ * does nothing). The indices a host holds stay what they were between two prepares: plans are
+ * only appended, a removed plan keeps its row, marked ANIRA_PLAN_REMOVED
+ * (anira_plan_info.state), and a variant's index is never given to another variant. A handler
+ * counts as a user of the core: anira_shutdown is refused while one lives. In this pre-release
+ * every handler is Host-only (every backend's domain is the host's), its plans are one per
+ * variant, model entry of that variant and candidate naming that entry's engine and a provider
+ * it accepts (anira_pipeline_add_inference: the variants of an inference stage are models of
+ * one form, which one stream runs and anira_handler_set_plan switches between), an Async
+ * contract is refused at prepare, and a ring dtype that differs from its spec's dtype is
+ * refused at prepare unless the pipeline's processor fills the phase that moves that ring
+ * (pre_process for an input, post_process for an output), since nothing in anira converts.
+ * Every tensor of either side has one declared host-end domain (anira_contract_set_host_domain,
+ * default ANIRA_DOMAIN_HOST): the domain anira allocates the ring, the model tensor, the Static
+ * store and, overriding the backend's domain of the plans that run the pair (host memory for
+ * every backend of this pre-release), the state buffers of the slot in, and the domain all four
+ * processor phases work in; the plan report's slot rows carry it as from_domain of an input and
+ * to_domain of an output, against the backend's domain on the other side. Anything but
+ * ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
  */
 
 #include <stddef.h>
@@ -285,8 +287,10 @@ typedef struct anira_plan_info {
     uint32_t struct_size;  /**< sizeof(anira_plan_info) of the caller's header. */
     /**
      * The index of the variant in the inference stage: its position in the list
-     * anira_pipeline_add_inference took. The plans of a variant are consecutive rows, and the
-     * variants come in their order.
+     * anira_pipeline_add_inference took, or the index anira_handler_add_variant returned. The
+     * plans of a variant are consecutive rows, and the variants come in their order. A
+     * variant's index is its own for the handler's life: anira_handler_remove_variant leaves a
+     * gap that no later variant fills.
      */
     uint32_t variant;
     /**
@@ -378,11 +382,18 @@ typedef struct anira_plan_info {
      */
     uint32_t rt_verdict;
     uint32_t reserved2;  /**< 0. */
+    /**
+     * anira_plan_state: ANIRA_PLAN_READY, or ANIRA_PLAN_REMOVED for a plan of a variant
+     * anira_handler_remove_variant took out, whose row stays at its index with what it said. A
+     * tail field: a caller whose header ends before it gets its rows without it.
+     */
+    uint32_t state;
+    uint32_t reserved3;  /**< 0. */
 } anira_plan_info;
 /**
  * @brief No plan.
  */
-#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL, ANIRA_MEMORY_UNKNOWN, 0u, 0.0, 0.0, ANIRA_WARMUP_OUTCOME_NONE, 0u, 0.0, ANIRA_RT_UNMEASURED, 0u)
+#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL, ANIRA_MEMORY_UNKNOWN, 0u, 0.0, 0.0, ANIRA_WARMUP_OUTCOME_NONE, 0u, 0.0, ANIRA_RT_UNMEASURED, 0u, ANIRA_PLAN_READY, 0u)
 
 /**
  * @brief The variant of an anira_plan_query that matches every variant (0 is a variant: the
@@ -784,12 +795,12 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_create(anira_context* context,
  * share of the processor and engine carriers (the release function of a processor or an
  * engine fires here when this handler held the last one). The driver thread must have
  * stopped calling the Hard entries. A control entry of the handler that runs on another
- * thread (anira_handler_prepare, anira_handler_add_variant) is waited for; called from
- * inside a callback of one, on its thread, the destroy does nothing and logs one Error
- * record (the handler stays alive). A plugin must destroy its handlers, then its
- * contexts, before its host unloads it (its instance teardown or module-exit entry
- * point), and never from its own static destructors or DllMain, which run inside the
- * unload under the loader lock.
+ * thread (anira_handler_prepare, anira_handler_add_variant,
+ * anira_handler_remove_variant) is waited for; called from inside a callback of one, on
+ * its thread, the destroy does nothing and logs one Error record (the handler stays
+ * alive). A plugin must destroy its handlers, then its contexts, before its host unloads
+ * it (its instance teardown or module-exit entry point), and never from its own static
+ * destructors or DllMain, which run inside the unload under the loader lock.
  * @param handler The handle; NULL is a no-op.
  * @par Thread contract
  * [main-thread & !loader-lock]
@@ -856,15 +867,20 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * consumed extension) and re-arms the real-time latches, logging the count of failures
  * suppressed since the last prepare or reset. A second prepare replaces the previous
  * session whole: the processor's unprepare of the previous prepare runs once the old
- * session is released, before the new prepare. A failed prepare leaves the handler
- * unprepared, the previous prepare's unprepare called all the same. A model too slow for
- * the stream is not refused: the session is sized as for an infeasible explicit budget
- * (for one host block's burst), and the plan rows carry what was measured. A prepare
- * that warms up needs an inference thread inside its loop (a context without a pool
- * needs a host thread in anira_inference_thread_run_loop; on WebAssembly the pool's
- * Workers must have started) and fails with ANIRA_ERROR_INVALID_STATE without one or
- * when an inference of the pass has not completed within 10 s; an inference of the pass
- * that fails fails it with ANIRA_ERROR_ENGINE naming the plan. Refused in this
+ * session is released, before the new prepare. It builds the variants the handler has
+ * then: one anira_handler_add_variant added is among them, one
+ * anira_handler_remove_variant took out is not; the remaining variants keep their
+ * indices (anira_plan_info.variant), the plans are numbered anew without a removed row,
+ * and the first variant the handler has takes the role of the first (the form the others
+ * are compared with, the defaults that select the initial plan). A failed prepare leaves
+ * the handler unprepared, the previous prepare's unprepare called all the same. A model
+ * too slow for the stream is not refused: the session is sized as for an infeasible
+ * explicit budget (for one host block's burst), and the plan rows carry what was
+ * measured. A prepare that warms up needs an inference thread inside its loop (a context
+ * without a pool needs a host thread in anira_inference_thread_run_loop; on WebAssembly
+ * the pool's Workers must have started) and fails with ANIRA_ERROR_INVALID_STATE without
+ * one or when an inference of the pass has not completed within 10 s; an inference of
+ * the pass that fails fails it with ANIRA_ERROR_ENGINE naming the plan. Refused in this
  * pre-release: an Async contract (ANIRA_ERROR_NOT_SUPPORTED), a MEASURED budget whose
  * warm-up runs no inference (ANIRA_WARMUP_NONE, FIXED 0; ANIRA_ERROR_CONFIG naming the
  * warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's
@@ -906,9 +922,10 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_prepare(anira_handler* handler,
 /**
  * @brief The handler-owned plan report, walked by anira_plan_report_num_plans / plans / slots /
  * exts: the one of the last successful prepare, or the one a later
- * anira_handler_add_variant published. Every such call makes a new report and leaves the
- * earlier ones as they were, so a pointer taken here stays valid, with the rows it had,
- * until the next prepare or destroy, and a host reads the newest by calling again.
+ * anira_handler_add_variant or anira_handler_remove_variant published. Every such call
+ * makes a new report and leaves the earlier ones as they were, so a pointer taken here
+ * stays valid, with the rows it had, until the next prepare or destroy, and a host reads
+ * the newest by calling again.
  * @param handler A prepared handler.
  * @return The newest report, or NULL for a NULL or unprepared handler.
  * @par Thread contract
@@ -1016,10 +1033,12 @@ ANIRA_API anira_status ANIRA_CALL anira_plan_report_exts(const anira_plan_report
  * variant unless ANIRA_VARIANT_ANY, the engine unless ANIRA_ENGINE_NONE (a custom engine
  * by ANIRA_ENGINE_CUSTOM and its engine_id, compared as a string), the provider unless
  * ANIRA_PROVIDER_NONE (a custom provider by ANIRA_PROVIDER_CUSTOM and its provider_id,
- * compared as a string). What a host looks the plan of a backend choice up with, from
- * the thread that picks it: the index goes to anira_handler_set_plan. Reads the report's
- * rows and nothing else: no allocation, no lock. Callable from any thread while the
- * report is valid (until the handler's next prepare or its destroy).
+ * compared as a string). A row marked ANIRA_PLAN_REMOVED (anira_plan_info.state) is
+ * skipped: the plan of a removed variant is never found. What a host looks the plan of a
+ * backend choice up with, from the thread that picks it: the index goes to
+ * anira_handler_set_plan. Reads the report's rows and nothing else: no allocation, no
+ * lock. Callable from any thread while the report is valid (until the handler's next
+ * prepare or its destroy).
  * @param report The report.
  * @param query What the plan must have; ANIRA_PLAN_QUERY_INIT matches every plan.
  * @param plan Receives the dense index of the first matching plan; untouched when none matches.
@@ -1062,10 +1081,12 @@ ANIRA_API anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report
  * @param plan A dense plan index the report handed out.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler; ANIRA_ERROR_NOT_PREPARED
  *         before a successful prepare; ANIRA_ERROR_CONFIG for an index out of range;
- *         ANIRA_ERROR_CAPACITY when more than four calls of anira_handler_set_plan,
- *         anira_handler_set_model and anira_handler_set_backend overlap on the handler (they
- *         read its plan rows through four reader slots): back-pressure, the selection unchanged
- *         and nothing recorded; call again.
+ *         ANIRA_ERROR_NOT_FOUND for the index of a removed plan (ANIRA_PLAN_REMOVED: the
+ *         selection unchanged, recorded in anira_handler_rt_error); ANIRA_ERROR_CAPACITY when
+ *         more than four calls of anira_handler_set_plan, anira_handler_set_model and
+ *         anira_handler_set_backend overlap on the handler (they read its plan rows through
+ *         four reader slots): back-pressure, the selection unchanged and nothing recorded; call
+ *         again.
  * @par Thread contract
  * [thread-safe] ANIRA_NONBLOCKING
  * @since ABI 0.2
@@ -1096,11 +1117,12 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handle
  * order, and a call never undoes the other's axis. What a switch between variants does
  * to the model's state is the contract's (anira_contract_hard_set_variant_state); a
  * chunk queued or in flight finishes on its plan, and nothing restarts. When the variant
- * has no plan on that backend (its entries run on other engines or providers, or the
- * index names no variant) the selection stays as it is: a no-op recorded as
- * ANIRA_ERROR_NOT_FOUND in anira_handler_rt_error. A call on an unprepared handler is a
- * no-op recorded as ANIRA_ERROR_NOT_PREPARED. No allocation, no lock. Not while
- * anira_handler_prepare runs (prepare is the quiescence point).
+ * has no plan on that backend (its entries run on other engines or providers, the index
+ * names no variant, or the variant was removed: a row marked ANIRA_PLAN_REMOVED is no
+ * plan) the selection stays as it is: a no-op recorded as ANIRA_ERROR_NOT_FOUND in
+ * anira_handler_rt_error. A call on an unprepared handler is a no-op recorded as
+ * ANIRA_ERROR_NOT_PREPARED. No allocation, no lock. Not while anira_handler_prepare runs
+ * (prepare is the quiescence point).
  * @param handler The handler.
  * @param variant The variant to run: its index in the inference stage's list
  *        (anira_plan_info.variant).
@@ -1119,15 +1141,15 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_set_model(anira_handler* handler
 /**
  * @brief Selects the backend the next submitted chunk runs on, for the model that runs now: the
  * first plan, in dense-index order, of the selected plan's variant that has every
- * property the backend names. The twin of anira_handler_set_model on the other axis,
- * with the same compare-and-swap on the selection, so the two never undo each other. A
- * backend switch inside one variant keeps the model's state. When the variant has no
- * plan on that backend the selection stays as it is: a no-op recorded as
- * ANIRA_ERROR_NOT_FOUND in anira_handler_rt_error. A NULL backend, one whose struct_size
- * is below its head (struct_size, engine, provider) or one that breaks the pair rule is
- * a no-op recorded as ANIRA_ERROR_INVALID_ARGUMENT; a call on an unprepared handler one
- * recorded as ANIRA_ERROR_NOT_PREPARED. No allocation, no lock. Not while
- * anira_handler_prepare runs.
+ * property the backend names (a row marked ANIRA_PLAN_REMOVED is skipped). The twin of
+ * anira_handler_set_model on the other axis, with the same compare-and-swap on the
+ * selection, so the two never undo each other. A backend switch inside one variant keeps
+ * the model's state. When the variant has no plan on that backend the selection stays as
+ * it is: a no-op recorded as ANIRA_ERROR_NOT_FOUND in anira_handler_rt_error. A NULL
+ * backend, one whose struct_size is below its head (struct_size, engine, provider) or
+ * one that breaks the pair rule is a no-op recorded as ANIRA_ERROR_INVALID_ARGUMENT; a
+ * call on an unprepared handler one recorded as ANIRA_ERROR_NOT_PREPARED. No allocation,
+ * no lock. Not while anira_handler_prepare runs.
  * @param handler The handler.
  * @param backend The backend to run on, read as the backend of an anira_plan_query within its
  *        struct_size: the engine (ANIRA_ENGINE_NONE: any engine; ANIRA_ENGINE_CUSTOM
@@ -1224,6 +1246,57 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_add_variant(anira_handler* handl
                                                             const anira_model_config* model,
                                                             uint32_t* variant,
                                                             anira_error* err) ANIRA_NOEXCEPT;
+
+/**
+ * @brief Removes a variant from the handler's inference stage and frees what only it held. A
+ * control entry: it blocks its caller, and on a prepared handler it is legal while the
+ * driver thread and the inference threads run, and the stream keeps playing. Refused: an
+ * index that names no variant, or one that was removed (ANIRA_ERROR_NOT_FOUND); the last
+ * variant the handler has, and the variant of the selected plan
+ * (ANIRA_ERROR_INVALID_STATE: select a plan of another variant first,
+ * anira_handler_set_model). On an unprepared handler the variant leaves the handler's
+ * copy of the pipeline. On a prepared handler its plans leave the table: their rows stay
+ * at their indices, marked ANIRA_PLAN_REMOVED (anira_plan_info.state) in a new plan
+ * report (anira_handler_plan_report returns the newest; a report pointer taken earlier
+ * stays valid, with the rows it had, until the next prepare); anira_plan_report_find,
+ * anira_handler_set_model and anira_handler_set_backend skip them, and
+ * anira_handler_set_plan on one is ANIRA_ERROR_NOT_FOUND. A selection of such a plan
+ * that raced the call is moved to the first ready plan (one Warning record). The call
+ * then waits until no entry of the driver thread that could still stamp one of the plans
+ * is running (a _wait twin inside its wait is waited for, for its timeout) and until
+ * every chunk stamped with one of them has left the inference threads: a running
+ * inference of the variant is waited for, without a timeout. Chunks of the variant that
+ * were in flight are delivered normally, and a driver thread that is not running holds
+ * nothing back. Then, on the calling thread, the engines' prepared handles are given
+ * back (a registered engine's unprepare) and the loaded models are released: a model
+ * that no other plan of any handler runs is unloaded (the engine's unload), one that
+ * another handler, or another variant of this one, still runs stays loaded. The call
+ * returns when the memory is released. The variant's index is not given out again:
+ * anira_handler_add_variant continues behind the highest index the stage has had, and a
+ * later anira_handler_prepare keeps the indices of the variants that remain and numbers
+ * the plans anew, without the removed rows. The selection (unless it raced), the entry
+ * count and the processor's prepared pointer do not change, and neither does the
+ * latency: the handler keeps reporting what its last prepare computed, also when the
+ * removed variant had the largest internal latency, until a prepare computes it again.
+ * The callbacks of the call (an engine's unprepare and unload) run on the calling thread
+ * beside the playing stream: from inside one, every control entry of the handler and the
+ * two Static entries are refused with ANIRA_ERROR_INVALID_STATE, and the getters answer.
+ * @param handler The handler; prepared or not.
+ * @param variant The variant to remove: its index in the inference stage
+ *        (anira_plan_info.variant).
+ * @param err Nullable.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler; ANIRA_ERROR_NOT_FOUND for
+ *         an index that names no variant of the handler, or one that was removed;
+ *         ANIRA_ERROR_INVALID_STATE for the last variant the handler has, for the variant of
+ *         the selected plan, and when called from inside a callback of a control entry of the
+ *         same handler. A refused call changes nothing.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.4
+ */
+ANIRA_API anira_status ANIRA_CALL anira_handler_remove_variant(anira_handler* handler,
+                                                               uint32_t variant,
+                                                               anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Pushes one block into the input ring of in_slot, submits whatever inferences are due,
@@ -1494,9 +1567,10 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_pop_data_multi(anira_handler* ha
  *         the order slot, domain, flags, rank and extents, dtype, memory and strides. Every
  *         failure but the NULL handler is recorded in anira_handler_rt_error and logged once
  *         through the real-time queue; a refused call stores nothing.
- *         ANIRA_ERROR_INVALID_STATE, not recorded, when called from inside a callback of a live
- *         build of the handler (anira_handler_add_variant on a prepared handler: the driver
- *         thread is the store's one writer while the stream plays).
+ *         ANIRA_ERROR_INVALID_STATE, not recorded, when called from inside a callback of a
+ *         control entry that runs beside the handler's stream (anira_handler_add_variant,
+ *         anira_handler_remove_variant: the driver thread is the store's one writer while the
+ *         stream plays).
  * @par Thread contract
  * [driver-thread] ANIRA_NONBLOCKING
  * @since ABI 0.2
@@ -1525,8 +1599,8 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_set_static_input(anira_handler* 
  * @return ANIRA_OK; the failures of anira_handler_set_static_input, and
  *         ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_TENSOR_READ_ONLY on out. Every failure but the
  *         NULL handler is recorded in anira_handler_rt_error; a refused call writes nothing.
- *         ANIRA_ERROR_INVALID_STATE, not recorded, from inside a callback of a live build of
- *         the handler, as anira_handler_set_static_input.
+ *         ANIRA_ERROR_INVALID_STATE, not recorded, from inside a callback of a control entry
+ *         that runs beside the handler's stream, as anira_handler_set_static_input.
  * @par Thread contract
  * [driver-thread] ANIRA_NONBLOCKING
  * @since ABI 0.2

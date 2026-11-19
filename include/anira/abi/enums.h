@@ -459,6 +459,29 @@ typedef enum anira_rt_verdict {
 } anira_rt_verdict;
 
 /**
+ * @brief Whether a plan of a handler's table runs (anira_plan_info.state). A plan's dense index
+ * is its position in the table for as long as the handler stays prepared: a plan that
+ * leaves the table keeps its row and its index, marked, so that no index a host holds
+ * ever names another plan.
+ */
+typedef enum anira_plan_state {
+    /**
+     * The plan is loaded and prepared: anira_handler_set_plan, anira_handler_set_model and
+     * anira_handler_set_backend select it.
+     */
+    ANIRA_PLAN_READY = 0,
+    /**
+     * A plan of a variant anira_handler_remove_variant took out: its prepared handle is given
+     * back and its model released. The row says what the plan was; anira_plan_report_find,
+     * anira_handler_set_model and anira_handler_set_backend skip it, and anira_handler_set_plan
+     * on its index is ANIRA_ERROR_NOT_FOUND. The next anira_handler_prepare builds a table
+     * without it.
+     */
+    ANIRA_PLAN_REMOVED = 1,
+    ANIRA_PLAN_STATE_FORCE32 = 0x7fffffff
+} anira_plan_state;
+
+/**
  * @brief What a Hard contract delivers when an inference misses its deadline.
  */
 typedef enum anira_miss_policy {
@@ -1035,9 +1058,10 @@ typedef enum anira_phase {
  * is the playing stream's, its report the one the call publishes when it succeeds
  * (anira_handler_plan_report answers the previous one until then). From inside such a
  * prepare the handler's getters are legal; every control entry of the handler
- * (anira_handler_prepare, anira_handler_add_variant, anira_handler_destroy) and the two
- * Static entries are refused with ANIRA_ERROR_INVALID_STATE. Never set for a processor:
- * a live build does not prepare it again.
+ * (anira_handler_prepare, anira_handler_add_variant, anira_handler_remove_variant,
+ * anira_handler_destroy) and the two Static entries are refused with
+ * ANIRA_ERROR_INVALID_STATE. Never set for a processor: a live build does not prepare it
+ * again.
  */
 #define ANIRA_PREPARE_LIVE 2u
 

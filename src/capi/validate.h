@@ -226,8 +226,8 @@ void validate(const anira_model_config& model,
 /// The form rule of an inference stage: every variant derives the form of the first one, so
 /// that nothing of the stream depends on which variant runs (one set of rings, one chunk pool,
 /// one set of State buffers, one latency model). Compares what the validator derived for the
-/// variant `variant` under the contract the first was derived under: the number of tensors per
-/// side and, at every position, the role, the canonical name, the dtype, the resolved extents,
+/// variant `other_variant` under the contract the first was derived under: the number of tensors
+/// per side and, at every position, the role, the canonical name, the dtype, the resolved extents,
 /// the channel count, the window in effect (its minimum, its maximum, the overlap and the
 /// value a flexible one is pinned to), the hop and the Time axis; then the anchor, the State
 /// pairs (which output feeds which input) and whether the handler is exclusive. The comparison
@@ -237,11 +237,14 @@ void validate(const anira_model_config& model,
 /// layouts and binding names, the extensions, default_engine and default_provider,
 /// max_instances and the internal latency. Throws StatusError with ANIRA_ERROR_CONFIG naming
 /// the variant, the side, the slot, the tensor's canonical name, the property and both values.
+/// `other_variant` and `first_variant` are the two variants' indices in the stage, which the
+/// message names them by: the first one is variant 0 unless a handler removed that one.
 void check_same_form(const anira_model_config& first,
                      const Derived& first_derived,
                      const anira_model_config& other,
                      const Derived& other_derived,
-                     size_t variant);
+                     size_t other_variant,
+                     size_t first_variant = 0);
 
 /// The form of the stream alone: a derivation's tensors, anchor and exclusivity without its
 /// rows and plans, which are one variant's own. What a handler over several variants keeps

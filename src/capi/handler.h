@@ -126,8 +126,15 @@ struct SlotSignature {
 struct anira_pipeline {
     /// The variants of the inference stage, copied at add_inference, in the caller's order
     /// (the index is the variant's, anira_plan_info.variant): models of one form
-    /// (anira::capi::check_same_form, checked at anira_handler_create and at prepare).
+    /// (anira::capi::check_same_form, checked at anira_handler_create and at prepare). A
+    /// handler's copy grows by anira_handler_add_variant, at the end, and keeps the entry of a
+    /// variant anira_handler_remove_variant took out, emptied (m_removed), so that an index
+    /// names one variant for the handler's life.
     std::vector<anira_model_config> m_variants;
+    /// The variants a handler's copy no longer has (anira_handler_remove_variant), in
+    /// ascending order: indices into m_variants, whose entries there are empty configs. Always
+    /// empty in a pipeline a host builds.
+    std::vector<size_t> m_removed;
     std::vector<anira::capi::Candidate> m_candidates;  ///< never empty after add_inference: the
                                                        ///< caller's list, or the default set
     /// Whether m_candidates is the default set (a NULL list at add_inference: every engine of
@@ -150,6 +157,15 @@ struct anira_pipeline {
     /// The candidate view a validate/ext call takes (pointers into the strings); control
     /// thread only. Never empty after add_inference.
     std::vector<anira_backend_id> candidate_ids() const;
+
+    /// Whether the stage has the variant: an index of m_variants that was not removed.
+    bool has_variant(size_t variant) const noexcept;
+    /// The first variant the stage has, the one whose form the others have and whose defaults
+    /// select a prepare's initial plan: 0 unless the first ones were removed. m_variants.size()
+    /// for a stage without any (no handler has one: the last variant is never removed).
+    size_t first_variant() const noexcept;
+    /// How many variants the stage has: those of m_variants that were not removed.
+    size_t num_variants() const noexcept { return m_variants.size() - m_removed.size(); }
 
     anira_pipeline() = default;
     /// Clones the variants (anira_model_config is move-only); anira_handler_create's copy.
@@ -231,9 +247,11 @@ struct anira_handler {
     /// prepare, in the order the session's plan table is built in from the same derivations
     /// (plan_requests), and extended by anira_handler_add_variant, which appends the plans of
     /// its variant behind the others as it appends their slots to the session's table: the
-    /// dense index is the position here, in the session's list and in the published rows. The
-    /// control side of the table: read and written by the thread inside a control entry alone.
-    /// What an entry of another thread reads is m_plan_rows.
+    /// dense index is the position here, in the session's list and in the published rows. A
+    /// plan anira_handler_remove_variant took out keeps its row here, marked
+    /// ANIRA_PLAN_REMOVED, as its entry stays, empty, in the session's list: no index moves
+    /// before the next prepare. The control side of the table: read and written by the thread
+    /// inside a control entry alone. What an entry of another thread reads is m_plan_rows.
     std::vector<anira::capi::Plan> m_plans;
     /// The engine and provider ids the rows of m_plans point at, the handler's own copies: a
     /// deque, so that a string stays where it is when plans are appended. Cleared with m_plans.
@@ -257,8 +275,10 @@ struct anira_handler {
      */
     std::atomic<uint32_t> m_selected_plan{0};
     /// The plan reports of the prepared handler, oldest first: the one its prepare built, then
-    /// one per control entry that changed the plan table since (anira_handler_add_variant), each
-    /// a whole report that owns every string its rows name. A host holds raw pointers to them
+    /// one per control entry that changed the plan table since (anira_handler_add_variant,
+    /// anira_handler_remove_variant), each a whole report: its slot and extension rows name
+    /// strings of its own store, its plan rows the ids of m_plan_strings, which lives as long
+    /// as the reports do. A host holds raw pointers to them
     /// (anira_handler_plan_report, a prepare record's report), so each is an object of its own
     /// at one address, none is changed once a newer one exists and none is freed before the
     /// next prepare or destroy. unprepare frees the later ones and empties the first, which
@@ -314,7 +334,8 @@ struct anira_handler {
      * @brief The control lock: one control entry of the handler at a time.
      *
      * Serialises anira_handler_prepare (anira_em_audio_node_prepare's included),
-     * anira_handler_add_variant and anira_handler_destroy. No real-time entry takes it, and
+     * anira_handler_add_variant, anira_handler_remove_variant and anira_handler_destroy. No
+     * real-time entry takes it, and
      * none waits for it: the getters answer from the atomics above, the Hard entries are the
      * driver thread's. m_control_holder is the thread inside the locked region
      * (std::thread::id() while nobody is): a callback of that region (an engine's or a
@@ -323,7 +344,8 @@ struct anira_handler {
      * nothing): it neither locks again nor runs inside the entry that called it.
      *
      * m_live_build is set while the lock is held by an entry that runs beside the playing
-     * stream (anira_handler_add_variant): the two Static entries, which a callback of a plain
+     * stream (anira_handler_add_variant, anira_handler_remove_variant): the two Static
+     * entries, which a callback of a plain
      * prepare may call, are refused on the holding thread then, since the driver thread is the
      * one writer of a Static store while the stream plays. They read the flag first and the
      * holder only when it is set, so a Static entry of a stream that no control entry runs

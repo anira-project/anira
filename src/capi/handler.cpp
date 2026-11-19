@@ -1,9 +1,10 @@
 // anira/abi/handler.h: the pipeline, the handler, the plan report and the Hard entries.
 //
-// The control entries (the pipeline, create, prepare, add_variant, destroy, the report
-// enumerators) sit behind the exception firewall of capi_internal.h; prepare, add_variant and
-// destroy run one at a time on a handler, under its control lock, and add_variant runs beside
-// the playing stream ("the variants of a handler"). The Hard entries are ANIRA_NONBLOCKING:
+// The control entries (the pipeline, create, prepare, add_variant, remove_variant, destroy, the
+// report enumerators) sit behind the exception firewall of capi_internal.h; prepare,
+// add_variant, remove_variant and destroy run one at a time on a handler, under its control
+// lock, and the two variant entries run beside the playing stream ("the variants of a
+// handler"). The Hard entries are ANIRA_NONBLOCKING:
 // no handler, no lock, no allocation; every one returns an anira_status (ANIRA_OK,
 // ANIRA_MISSED for a block the miss policy filled, or a failure) and hands the delivered count
 // back through a nullable size_t*; a refusal records into the handler's latch (rt_refuse), and
@@ -164,9 +165,12 @@ bool same_name(const char* a, const char* b) noexcept ANIRA_NONBLOCKING {
     return *a == *b;
 }
 
-/// Whether a plan has every property the (readable) query names.
+/// Whether a plan has every property the (readable) query names. A plan that was removed
+/// (ANIRA_PLAN_REMOVED: its variant left the handler) has none: no lookup finds it and no
+/// selection by axis resolves to it.
 bool matches(const anira_plan_info& plan,
              const anira_plan_query& query) noexcept ANIRA_NONBLOCKING {
+    if (plan.state != static_cast<uint32_t>(ANIRA_PLAN_READY)) { return false; }
     if (query.variant != ANIRA_VARIANT_ANY && plan.variant != query.variant) { return false; }
     const anira_backend_id& backend = query.backend;
     if (backend.engine != ANIRA_ENGINE_NONE) {
@@ -247,11 +251,11 @@ bool holds_control(const anira_handler& handler) noexcept ANIRA_NONBLOCKING {
 }
 
 // Whether the calling thread is inside a live build of the handler: a control entry that runs
-// beside the playing stream (anira_handler_add_variant) holds the control lock, on this
-// thread. The two Static entries ask: a callback of a live build must not write a Static
-// store, whose one writer is the driver thread while the stream plays, and is refused. The
-// flag is read first, so a Static entry of a stream that no control entry runs beside costs
-// one load.
+// beside the playing stream (anira_handler_add_variant, anira_handler_remove_variant) holds the
+// control lock, on this thread. The two Static entries ask: a callback of such an entry must
+// not write a Static store, whose one writer is the driver thread while the stream plays, and
+// is refused. The flag is read first, so a Static entry of a stream that no control entry runs
+// beside costs one load.
 bool inside_live_build(const anira_handler& handler) noexcept ANIRA_NONBLOCKING {
     return handler.m_live_build.load(std::memory_order_acquire) && holds_control(handler);
 }
@@ -1136,33 +1140,40 @@ anira::capi::Derived validate_variant(const anira_pipeline& pipeline,
     return derived;
 }
 
-// Every variant of the pipeline through the validator under one contract (validate_variant),
-// in variant order, each compared with the first (anira::capi::check_same_form: the variants
-// of a stage have one form). One derivation per variant.
+// Every variant the pipeline has through the validator under one contract (validate_variant),
+// in variant order, each compared with the first of them (anira::capi::check_same_form: the
+// variants of a stage have one form). One derivation per index of the stage: a variant a
+// handler's copy no longer has (anira_pipeline::m_removed) keeps an empty one, without a plan.
 std::vector<anira::capi::Derived> validate_variants(const anira_pipeline& pipeline,
                                                     const anira_contract* contract,
                                                     const anira::capi::ProcessorFacts& processors,
                                                     const anira::capi::EngineFacts& engines) {
     std::vector<anira::capi::Derived> derived(pipeline.m_variants.size());
+    const size_t first = pipeline.first_variant();
     for (size_t variant = 0; variant < pipeline.m_variants.size(); ++variant) {
+        if (!pipeline.has_variant(variant)) { continue; }
         derived[variant] = validate_variant(pipeline, variant, contract, processors, engines);
-        if (variant == 0) { continue; }
-        anira::capi::check_same_form(pipeline.m_variants[0],
-                                     derived[0],
+        if (variant == first) { continue; }
+        anira::capi::check_same_form(pipeline.m_variants[first],
+                                     derived[first],
                                      pipeline.m_variants[variant],
                                      derived[variant],
-                                     variant);
+                                     variant,
+                                     first);
     }
     return derived;
 }
 
 // What sizes the session over the variants (anira::VariantBounds): per output the largest
-// internal latency any variant declares, and the fewest instances any variant allows. The
-// variants have one form, so every one has the first one's output count.
+// internal latency any variant the pipeline has declares, and the fewest instances any of them
+// allows. The variants have one form, so every one has the first one's output count.
 anira::VariantBounds variant_bounds(const anira_pipeline& pipeline) {
     anira::VariantBounds bounds;
-    bounds.m_internal_latency.assign(pipeline.m_variants.front().m_outputs.size(), 0);
-    for (const anira_model_config& variant : pipeline.m_variants) {
+    bounds.m_internal_latency.assign(pipeline.m_variants[pipeline.first_variant()].m_outputs.size(),
+                                     0);
+    for (size_t index = 0; index < pipeline.m_variants.size(); ++index) {
+        if (!pipeline.has_variant(index)) { continue; }
+        const anira_model_config& variant = pipeline.m_variants[index];
         for (size_t slot = 0;
              slot < variant.m_outputs.size() && slot < bounds.m_internal_latency.size();
              ++slot) {
@@ -1183,21 +1194,22 @@ void warn_internal_latencies([[maybe_unused]] const anira_pipeline& pipeline,
                              [[maybe_unused]] const anira::VariantBounds& bounds) {
 #ifdef ENABLE_LOGGING
     std::string differing;
-    const anira_model_config& first = pipeline.m_variants.front();
+    const anira_model_config& first = pipeline.m_variants[pipeline.first_variant()];
     for (size_t slot = 0; slot < bounds.m_internal_latency.size(); ++slot) {
-        const bool differs =
-            std::ranges::any_of(pipeline.m_variants, [slot, &first](const anira_model_config& v) {
-                return v.m_outputs[slot].m_latency != first.m_outputs[slot].m_latency;
-            });
+        // The figure of every variant the pipeline has, in variant order.
+        std::string figures;
+        bool differs = false;
+        for (size_t variant = 0; variant < pipeline.m_variants.size(); ++variant) {
+            if (!pipeline.has_variant(variant)) { continue; }
+            const int64_t latency = pipeline.m_variants[variant].m_outputs[slot].m_latency;
+            differs = differs || latency != first.m_outputs[slot].m_latency;
+            figures += (figures.empty() ? "variants[" : ", variants[") + std::to_string(variant) +
+                       "] " + std::to_string(latency);
+        }
         if (!differs) { continue; }
         differing += differing.empty() ? "" : "; ";
-        differing +=
-            "output slot " + std::to_string(slot) + " '" + first.m_outputs[slot].m_name + "': ";
-        for (size_t variant = 0; variant < pipeline.m_variants.size(); ++variant) {
-            differing += (variant == 0 ? "variants[" : ", variants[") + std::to_string(variant) +
-                         "] " +
-                         std::to_string(pipeline.m_variants[variant].m_outputs[slot].m_latency);
-        }
+        differing += "output slot " + std::to_string(slot) + " '" + first.m_outputs[slot].m_name +
+                     "': " + figures;
         differing +=
             " samples, reported " + std::to_string(bounds.m_internal_latency[slot]) + " samples";
     }
@@ -1672,11 +1684,12 @@ void build_plans(anira_handler& handler, const anira::capi::HardContract& hard) 
     for (size_t variant = 0; variant < handler.m_variant_derived.size(); ++variant) {
         append_plans(handler, variant, session, handler.m_plans.size(), hard, handler.m_plans);
     }
-    // The first variant's plans are the table's first ones, in its derivation's order: the
-    // defaults that decide the start are that variant's own.
-    const anira_model_config& model = handler.m_pipeline.m_variants.front();
-    const std::vector<anira::capi::PlanKey>& first_plans =
-        handler.m_variant_derived.front().m_plans;
+    // The plans of the first variant the handler has are the table's first ones, in its
+    // derivation's order (a variant removed ahead of it has none): the defaults that decide
+    // the start are that variant's own.
+    const size_t first = handler.m_pipeline.first_variant();
+    const anira_model_config& model = handler.m_pipeline.m_variants[first];
+    const std::vector<anira::capi::PlanKey>& first_plans = handler.m_variant_derived[first].m_plans;
     std::optional<uint32_t> of_engine;
     std::optional<uint32_t> on_provider;
     for (uint32_t i = 0; i < first_plans.size(); ++i) {
@@ -2680,9 +2693,12 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // The snapshot: the handle may be destroyed when the call returns; the handler keeps it
     // (moved into handler.m_contract below, once the previous session is released).
     anira_contract snapshot = contract;
-    // The first variant stands for the form below: the tensors' names, roles and dtypes, the
-    // anchor and the extents are the same in every variant (check_same_form).
-    const anira_model_config& model = handler.m_pipeline.m_variants.front();
+    // The first variant the handler has stands for the form below: the tensors' names, roles
+    // and dtypes, the anchor and the extents are the same in every variant (check_same_form).
+    // A variant anira_handler_remove_variant took out keeps its index and is skipped: its
+    // derivation stays empty, so no plan of the new table is its.
+    const size_t first_variant = handler.m_pipeline.first_variant();
+    const anira_model_config& model = handler.m_pipeline.m_variants[first_variant];
 
     // Every rule (the contract's, the structural ones again, the extension walk with the
     // contract's bag) for every variant, each compared with the first under the contract, then
@@ -2696,7 +2712,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         anira::capi::engine_facts(handler.m_pipeline.m_engines);
     std::vector<anira::capi::Derived> variants =
         validate_variants(handler.m_pipeline, &snapshot, processors, engines);
-    const anira::capi::Derived& derived = variants.front();
+    const anira::capi::Derived& derived = variants[first_variant];
     const anira::capi::HardContract& hard = *snapshot.hard();  // validate refused Async
     check_buffer_specs(model);
     check_realtime_phases(processor);
@@ -2708,6 +2724,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // seen here), a custom engine's query as it answered at create (the query runs on the main
     // thread only; a prepare may run on any control thread).
     for (size_t variant = 0; variant < variants.size(); ++variant) {
+        if (!handler.m_pipeline.has_variant(variant)) { continue; }
         check_providers(*handler.m_context,
                         handler.m_pipeline,
                         variant,
@@ -3089,8 +3106,9 @@ anira_status enumerate_rows(const std::vector<T>& rows,
 
 // The control lock of a handler for the length of one control entry (anira_handler::m_control),
 // with the thread that holds it recorded for that time, and whether the entry runs beside the
-// playing stream (Kind::Live: anira_handler_add_variant; anira_handler::m_live_build, which
-// the two Static entries read). The caller is not the holder: a control entry called from a
+// playing stream (Kind::Live: anira_handler_add_variant and anira_handler_remove_variant;
+// anira_handler::m_live_build, which the two Static entries read). The caller is not the
+// holder: a control entry called from a
 // callback of the locked region, on the holding thread, is refused before it gets here
 // (holds_control), since the mutex is not recursive and the entry must not run inside another.
 class ControlScope {
@@ -3130,8 +3148,8 @@ void refuse_inside_control(const anira_handler& handler, const char* entry) {
                       std::string(entry) +
                           ": called from inside a callback of a control entry of the same "
                           "handler (anira_handler_prepare, anira_handler_add_variant, "
-                          "anira_handler_destroy), which runs on this thread; a callback may "
-                          "call the handler's getters");
+                          "anira_handler_remove_variant, anira_handler_destroy), which runs on "
+                          "this thread; a callback may call the handler's getters");
 }
 
 // ==== the variants of a handler ===============================================================
@@ -3207,12 +3225,13 @@ size_t add_variant_unprepared(anira_handler& handler, const anira_model_config& 
     const anira_pipeline& pipeline = handler.m_pipeline;
     anira::capi::Derived derived =
         validate_variant(pipeline, variant, nullptr, processors, engines);
-    const anira::capi::Derived first = validate_variant(pipeline, 0, nullptr, processors, engines);
-    anira::capi::check_same_form(pipeline.m_variants[0],
-                                 first,
+    const size_t first = pipeline.first_variant();
+    anira::capi::check_same_form(pipeline.m_variants[first],
+                                 validate_variant(pipeline, first, nullptr, processors, engines),
                                  pipeline.m_variants[variant],
                                  derived,
-                                 variant);
+                                 variant,
+                                 first);
     check_providers(*handler.m_context,
                     pipeline,
                     variant,
@@ -3448,11 +3467,13 @@ size_t add_variant_live(anira_handler& handler, const anira_model_config& added)
     const anira_model_config& model = handler.m_pipeline.m_variants[variant];
     handler.m_variant_derived.push_back(
         validate_variant(handler.m_pipeline, variant, &contract, processors, engines));
-    anira::capi::check_same_form(handler.m_pipeline.m_variants[0],
-                                 handler.m_variant_derived[0],
+    const size_t first = handler.m_pipeline.first_variant();
+    anira::capi::check_same_form(handler.m_pipeline.m_variants[first],
+                                 handler.m_variant_derived[first],
                                  model,
                                  handler.m_variant_derived[variant],
-                                 variant);
+                                 variant,
+                                 first);
     check_providers(*handler.m_context,
                     handler.m_pipeline,
                     variant,
@@ -3625,6 +3646,172 @@ size_t add_variant_live(anira_handler& handler, const anira_model_config& added)
     return variant;
 }
 
+// The refusals of anira_handler_remove_variant that a prepared and an unprepared handler share:
+// an index that names no variant of the handler (never one, or removed before) is not found,
+// and a handler keeps one variant, the stream's form being the form of its variants.
+void check_removable(const anira_handler& handler, size_t variant) {
+    const anira_pipeline& pipeline = handler.m_pipeline;
+    if (!pipeline.has_variant(variant)) {
+        throw StatusError(ANIRA_ERROR_NOT_FOUND,
+                          "handler: variants[" + std::to_string(variant) + "] " +
+                              (variant < pipeline.m_variants.size()
+                                   ? "was removed from the handler before"
+                                   : "is no variant of the handler (its inference stage has "
+                                     "had " +
+                                         std::to_string(pipeline.m_variants.size()) + ")"));
+    }
+    if (pipeline.num_variants() == 1) {
+        throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                          "handler: variants[" + std::to_string(variant) +
+                              "] is the last variant of the handler, which keeps one; add the "
+                              "variant that replaces it first (anira_handler_add_variant)");
+    }
+}
+
+// A variant leaves the pipeline copy: its entry stays, emptied (the model's entries, bytes and
+// specs are released), and its index joins the removed ones, in order, so that no other
+// variant's index moves and none is given out again; its derivation, where the handler holds
+// one for it, is emptied too (no plan of a later table is its). The caller reserved the room
+// of the list. Control side only: nothing of this is read by another thread.
+void forget_variant(anira_handler& handler, size_t variant) noexcept {
+    anira_pipeline& pipeline = handler.m_pipeline;
+    pipeline.m_variants[variant] = anira_model_config{};
+    pipeline.m_removed.insert(std::ranges::upper_bound(pipeline.m_removed, variant), variant);
+    if (variant < handler.m_variant_derived.size()) {
+        handler.m_variant_derived[variant] = anira::capi::Derived{};
+    }
+}
+
+// anira_handler_remove_variant on an unprepared handler: the refusals, then the variant leaves
+// the pipeline copy. Nothing is loaded, so nothing is released.
+void remove_variant_unprepared(anira_handler& handler, size_t variant) {
+    check_removable(handler, variant);
+    handler.m_pipeline.m_removed.reserve(handler.m_pipeline.m_removed.size() + 1);
+    forget_variant(handler, variant);
+}
+
+// The part of a removal from a prepared handler that cannot be refused any more, in the order
+// that keeps every index a thread can read valid at every moment (the reverse of an add's):
+//
+// 1. The handler's rows with the variant's plans marked removed, and the new report with them.
+//    From here on no selection entry resolves to one of the plans or accepts its index. The
+//    wait behind it (the rows' synchronize) is for the selection entries that read the rows
+//    while the plans were ready: such an entry stores inside its lease.
+// 2. A selection one of those entries left on a removed plan (a set_plan that raced the call)
+//    is moved to the first ready plan, by compare-and-swap, so a selection made meanwhile
+//    stands. The table still has the plans: a chunk the driving thread formed on one of them
+//    in between is a chunk in flight like any other.
+// 3. The session's table without the plans (their entries stay, empty: the indices are the
+//    session's for its life), and the wait for the leases of the driving thread's entries
+//    (synchronize_plans): no entry that could still stamp one of the plans is running.
+// 4. The wait for the chunks stamped with one of the plans to leave the inference threads
+//    (Core::wait_until_unused, which also keeps an exclusive session's dispatch chain moving,
+//    so a driving thread that never calls again holds nothing back). Such chunks are
+//    delivered as every chunk is: their results are in their structs, whose slot nothing on
+//    the driving thread reads.
+// 5. The release, on this thread: the prepared handle of each plan goes back (a registered
+//    engine's unprepare), then its loaded model, which the pool forgets when no plan of any
+//    registered session holds it any more and which dies here then (the engine's unload); a
+//    model another handler, or another variant, still runs stays loaded.
+// 6. The variant leaves the pipeline copy (forget_variant).
+//
+// noexcept: behind the first publication there is no way back, and an out-of-memory in a
+// publication terminates. `plans` are the dense indices of the variant's plans, `report` the
+// new report, complete; the caller reserved the room of the report list and of the removed
+// variants.
+void finish_removal(anira_handler& handler,
+                    size_t variant,
+                    const std::vector<uint32_t>& plans,
+                    std::unique_ptr<anira_plan_report> report) noexcept {
+    for (const uint32_t plan : plans) {
+        handler.m_plans[plan].m_info.state = static_cast<uint32_t>(ANIRA_PLAN_REMOVED);
+    }
+    publish_plan_rows(handler);
+    handler.m_reports.push_back(std::move(report));
+    handler.m_published_report.store(handler.m_reports.back().get(), std::memory_order_release);
+    handler.m_plan_rows.synchronize();
+
+    // The first ready plan exists: the handler keeps a variant, and a variant has a plan.
+    uint32_t first_ready = 0;
+    while (first_ready < handler.m_plans.size() &&
+           handler.m_plans[first_ready].m_info.state != static_cast<uint32_t>(ANIRA_PLAN_READY)) {
+        ++first_ready;
+    }
+    for (const uint32_t plan : plans) {
+        uint32_t expected = plan;
+        if (handler.m_selected_plan.compare_exchange_strong(expected,
+                                                            first_ready,
+                                                            std::memory_order_relaxed,
+                                                            std::memory_order_relaxed)) {
+            ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                              "anira_handler_remove_variant: plan %u of variants[%zu] was "
+                              "selected while the variant was being removed; the selection "
+                              "moves to plan %u, the first ready plan",
+                              static_cast<unsigned int>(plan),
+                              variant,
+                              static_cast<unsigned int>(first_ready));
+        }
+    }
+
+    const std::shared_ptr<anira::SessionElement>& session = handler.m_manager->shared_session();
+    std::vector<std::shared_ptr<anira::SessionElement::PlanSlot>> taken;
+    taken.reserve(plans.size());
+    for (const uint32_t plan : plans) {
+        taken.push_back(anira::Core::take_plan_slot(session, plan));
+    }
+    session->publish_plans();
+    session->synchronize_plans();
+
+    for (std::shared_ptr<anira::SessionElement::PlanSlot>& slot : taken) {
+        if (slot == nullptr) { continue; }
+        anira::Core::wait_until_unused(session, *slot);
+        slot->m_prepared.reset();
+        std::shared_ptr<anira::engine::Loaded> loaded = std::move(slot->m_loaded);
+        slot.reset();
+        anira::Core::release_loaded_if_unheld(loaded);
+        // The last reference when the pool let the model go: it unloads here.
+        loaded.reset();
+    }
+    forget_variant(handler, variant);
+}
+
+// anira_handler_remove_variant on a prepared handler: the refusals, the new report (everything
+// that can fail), then the removal itself (finish_removal). A refused call changes nothing.
+void remove_variant_live(anira_handler& handler, size_t variant) {
+    check_removable(handler, variant);
+    // The plans of the variant, by their dense indices, and the selection, which must be on
+    // another variant: the stream runs the selected plan from its next chunk on. The check
+    // is on the selection as it is now; one that moves onto the variant behind it is the
+    // race finish_removal resolves.
+    std::vector<uint32_t> plans;
+    for (uint32_t plan = 0; plan < handler.m_plans.size(); ++plan) {
+        if (handler.m_plans[plan].m_variant == variant) { plans.push_back(plan); }
+    }
+    const uint32_t selected = handler.m_selected_plan.load(std::memory_order_relaxed);
+    if (selected < handler.m_plans.size() && handler.m_plans[selected].m_variant == variant) {
+        throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                          "handler: variants[" + std::to_string(variant) +
+                              "] runs the selected plan " + std::to_string(selected) +
+                              "; select a plan of another variant first "
+                              "(anira_handler_set_model, anira_handler_set_plan)");
+    }
+    std::unique_ptr<anira_plan_report> report = copy_report(*handler.m_reports.back());
+    for (const uint32_t plan : plans) {
+        report->m_plans[plan].state = static_cast<uint32_t>(ANIRA_PLAN_REMOVED);
+    }
+    handler.m_reports.reserve(handler.m_reports.size() + 1);
+    handler.m_pipeline.m_removed.reserve(handler.m_pipeline.m_removed.size() + 1);
+    finish_removal(handler, variant, plans, std::move(report));
+    ANIRA_LOG_INFO(anira::log_group::k_capi,
+                   "anira_handler_remove_variant: variants[%zu] removed with its %zu plan%s; "
+                   "the handler has %zu variant%s",
+                   variant,
+                   plans.size(),
+                   plans.size() == 1 ? "" : "s",
+                   handler.m_pipeline.num_variants(),
+                   handler.m_pipeline.num_variants() == 1 ? "" : "s");
+}
+
 }  // namespace
 
 namespace anira::capi {
@@ -3700,8 +3887,19 @@ std::vector<anira_backend_id> anira_pipeline::candidate_ids() const {
     return ids;
 }
 
+bool anira_pipeline::has_variant(size_t variant) const noexcept {
+    return variant < m_variants.size() && !std::ranges::binary_search(m_removed, variant);
+}
+
+size_t anira_pipeline::first_variant() const noexcept {
+    size_t first = 0;
+    while (first < m_variants.size() && !has_variant(first)) { ++first; }
+    return first;
+}
+
 anira_pipeline::anira_pipeline(const anira_pipeline& other)
-    : m_candidates(other.m_candidates)
+    : m_removed(other.m_removed)
+    , m_candidates(other.m_candidates)
     , m_default_set(other.m_default_set)
     , m_has_inference(other.m_has_inference)
     , m_processor(other.m_processor)  // the carriers are shared, never cloned
@@ -4421,6 +4619,13 @@ anira_status ANIRA_CALL anira_handler_set_plan(anira_handler* handler,
         rt_refuse(*handler, ANIRA_ERROR_CONFIG, __func__);
         return ANIRA_ERROR_CONFIG;
     }
+    // A plan whose variant was removed keeps its row and its index and is no plan to select.
+    // The check and the store below are inside one lease: a removal publishes the rows with
+    // the plan marked and waits for the leases that saw it ready before it takes the plan out.
+    if (rows->data().m_rows[plan].state != static_cast<uint32_t>(ANIRA_PLAN_READY)) {
+        rt_refuse(*handler, ANIRA_ERROR_NOT_FOUND, __func__);
+        return ANIRA_ERROR_NOT_FOUND;
+    }
     // One relaxed store of the dense index, so concurrent callers cannot tear a pair:
     // get_plan loads the same atomic back. The session's table has the rows' indices, so the
     // range check above is the session's too. The chunk that is already submitted keeps the
@@ -4492,6 +4697,23 @@ anira_status ANIRA_CALL anira_handler_add_variant(anira_handler* handler,
     const size_t index = handler->m_manager != nullptr ? add_variant_live(*handler, *model)
                                                        : add_variant_unprepared(*handler, *model);
     *variant = static_cast<uint32_t>(index);
+    return ANIRA_OK;
+} catch (...) { return translate_exception(err, __func__); }
+
+anira_status ANIRA_CALL anira_handler_remove_variant(anira_handler* handler,
+                                                     uint32_t variant,
+                                                     anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(handler != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "handler: NULL handler");
+    refuse_inside_control(*handler, __func__);
+    const ControlScope control(*handler, ControlScope::Kind::Live);
+    if (handler->m_manager != nullptr) {
+        remove_variant_live(*handler, variant);
+    } else {
+        remove_variant_unprepared(*handler, variant);
+    }
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 

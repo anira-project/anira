@@ -1,7 +1,8 @@
 // The variants of a handler's inference stage, changed at run time: anira_handler_add_variant
 // builds and measures the plans of one more model of the stage's form beside the playing stream
-// and appends them to the plan table (src/capi/handler.cpp, "the variants of a handler"). What
-// the suite pins:
+// and appends them to the plan table, and anira_handler_remove_variant takes a variant's plans
+// out and frees its models (src/capi/handler.cpp, "the variants of a handler"). What the suite
+// pins:
 //
 //   the add             the stream stays ordered and complete while a variant is added; the new
 //                       plans carry figures; a switch to the new variant runs it from the next
@@ -20,7 +21,18 @@
 //                       the budget the stream is sized for, are one Warning each;
 //   the control lock    a control entry and a Static entry called from an engine's prepare
 //                       during a live add are ANIRA_ERROR_INVALID_STATE; from a plain prepare's
-//                       callback a control entry is refused too and a Static entry works.
+//                       callback a control entry is refused too and a Static entry works;
+//   the removal         its refusals (an unknown or removed variant, the last one, the selected
+//                       plan's); the rows of a removed variant stay at their indices, marked,
+//                       no lookup finds them and no entry selects them; the engine's unprepare
+//                       and unload run once, and a model another handler or another variant
+//                       still runs stays loaded; a chunk in flight on the variant is delivered,
+//                       and the call waits for it and for a _wait twin inside its wait; a
+//                       driving thread that never calls again holds nothing back; a selection
+//                       that races a removal ends on a ready plan; a prepare behind removals
+//                       keeps the variant indices and numbers the plans anew, and an add
+//                       behind one gets a new index;
+//   the loop            add, select, remove, fifty times beside a free-running stream.
 //
 // Engine-free: every plan runs on one registered engine whose loaded model is a gain, the factor
 // the number its entry's path spells, so a block of the stream says which variant ran it. The
@@ -126,6 +138,8 @@ struct SetEngine {
     std::atomic<float> m_static_seen{0.0F};
     /// What a prepare runs with its record, on the thread of the control entry, when set.
     std::function<void(const anira_prepare_info&)> m_on_prepare;
+    /// What an unprepare runs, on the thread of the control entry, when set.
+    std::function<void()> m_on_unprepare;
 
     static size_t index_of(float factor) {
         return std::min(static_cast<size_t>(factor), k_max_factor - 1);
@@ -177,7 +191,9 @@ anira_status ANIRA_CALL set_prepare(const anira_prepare_info* info,
 }
 
 void ANIRA_CALL set_unprepare(void* prepared, void* user_data) {
-    static_cast<SetEngine*>(user_data)->m_unprepares.fetch_add(1);
+    auto* engine = static_cast<SetEngine*>(user_data);
+    if (engine->m_on_unprepare) { engine->m_on_unprepare(); }
+    engine->m_unprepares.fetch_add(1);
     delete static_cast<SetEngine::Prepared*>(prepared);
 }
 
@@ -323,6 +339,7 @@ public:
     ~SetRig() {
         m_engine.open_all();
         m_second.open_all();
+        anira_handler_destroy(m_second_handler);
         anira_handler_destroy(m_handler);
         anira_pipeline_destroy(m_pipeline);
     }
@@ -347,6 +364,27 @@ public:
             anira_handler_add_variant(m_handler, model.native(), variant, &err);
         m_message = err.message;
         return status;
+    }
+
+    /// anira_handler_remove_variant: the status, the message kept.
+    anira_status remove(uint32_t variant) {
+        anira_error err = ANIRA_ERROR_INIT;
+        const anira_status status = anira_handler_remove_variant(m_handler, variant, &err);
+        m_message = err.message;
+        return status;
+    }
+
+    /// A second handler over the same pipeline, and so over the same engine objects: a model
+    /// both handlers run is one loaded model of the pool. The rig owns it.
+    anira_handler* second_handler() {
+        if (m_second_handler == nullptr) {
+            anira_error err = ANIRA_ERROR_INIT;
+            EXPECT_EQ(
+                anira_handler_create(m_context.m_context, m_pipeline, &m_second_handler, &err),
+                ANIRA_OK)
+                << err.message;
+        }
+        return m_second_handler;
     }
 
     SetEngine m_engine;  ///< before the handler, which dies first
@@ -374,6 +412,7 @@ private:
     anira_test::Context m_context;
     anira_pipeline* m_pipeline = nullptr;
     anira_handler* m_handler = nullptr;
+    anira_handler* m_second_handler = nullptr;
 };
 
 /// The rows of a plan report.
@@ -397,6 +436,7 @@ struct HandlerState {
         , m_rt_error(anira_handler_rt_error(rig.h()))
         , m_selected(anira_handler_get_plan(rig.h()))
         , m_variants(rig.h()->m_pipeline.m_variants.size())
+        , m_removed(rig.h()->m_pipeline.m_removed.size())
         , m_candidates(rig.h()->m_pipeline.m_candidates.size())
         , m_table(rig.h()->m_plans.size())
         , m_reports(rig.h()->m_reports.size())
@@ -413,6 +453,7 @@ struct HandlerState {
     anira_status m_rt_error;
     uint32_t m_selected;
     size_t m_variants;
+    size_t m_removed;
     size_t m_candidates;
     size_t m_table;
     size_t m_reports;
@@ -431,6 +472,7 @@ void expect_unchanged(const SetRig& rig, const HandlerState& before) {
     EXPECT_EQ(now.m_rt_error, before.m_rt_error);
     EXPECT_EQ(now.m_selected, before.m_selected);
     EXPECT_EQ(now.m_variants, before.m_variants) << "the pipeline copy kept the variant";
+    EXPECT_EQ(now.m_removed, before.m_removed) << "a refused removal removed";
     EXPECT_EQ(now.m_candidates, before.m_candidates) << "the candidate set kept its growth";
     EXPECT_EQ(now.m_table, before.m_table);
     EXPECT_EQ(now.m_reports, before.m_reports);
@@ -1292,4 +1334,741 @@ TEST(VariantSet, TwoAddsOfOneHandlerTakeTurns) {
         if (chunk < first_switch) { return 1.0F; }
         return chunk < second_switch ? 2.0F : 3.0F;
     });
+}
+
+// ==== the removal =============================================================================
+
+namespace {
+
+/// anira_plan_report_find for the plans of one variant: the status, the index through `plan`.
+anira_status find_variant(const anira_plan_report* report, uint32_t variant, uint32_t* plan) {
+    anira_plan_query query = ANIRA_PLAN_QUERY_INIT;
+    query.variant = variant;
+    return anira_plan_report_find(report, &query, plan);
+}
+
+/// The states of a report's rows, in dense-index order.
+std::vector<uint32_t> states_of(const anira_plan_report* report) {
+    std::vector<uint32_t> states;
+    for (const anira_plan_info& row : rows_of(report)) { states.push_back(row.state); }
+    return states;
+}
+
+constexpr uint32_t k_ready = static_cast<uint32_t>(ANIRA_PLAN_READY);
+constexpr uint32_t k_removed = static_cast<uint32_t>(ANIRA_PLAN_REMOVED);
+
+/// One hop of the ramp's block `index` into the input ring (anira_handler_push_data): its chunk
+/// is formed and submitted, nothing is popped.
+anira_status push_hop(anira_handler* handler, size_t index) {
+    const std::vector<float> block = anira_test::ramp(index, k_hop);
+    const std::array<const float*, 1> planes{block.data()};
+    const anira_tensor in = anira_test::planar_f32(planes.data(), 1, k_hop);
+    return anira_handler_push_data(handler, &in, 0);
+}
+
+/// One hop out of the output ring (anira_handler_pop_data), which holds it.
+std::vector<float> pop_hop(anira_handler* handler) {
+    std::vector<float> block(k_hop, -1.0F);
+    const std::array<float*, 1> planes{block.data()};
+    const anira_tensor out = anira_test::planar_f32(planes.data(), 1, k_hop);
+    size_t delivered = 0;
+    EXPECT_EQ(anira_handler_pop_data(handler, &out, 0, &delivered), ANIRA_OK);
+    EXPECT_EQ(delivered, k_hop);
+    return block;
+}
+
+/// The hops of the latency out of the output ring: silence, every sample of them.
+void pop_latency(anira_handler* handler) {
+    const size_t latency = anira_handler_get_latency(handler, 0);
+    ASSERT_EQ(latency % k_hop, 0U) << "the latency is no whole number of hops";
+    for (size_t hop = 0; hop < latency / k_hop; ++hop) {
+        for (const float sample : pop_hop(handler)) { ASSERT_EQ(sample, 0.0F); }
+    }
+}
+
+}  // namespace
+
+// What a removal refuses, and that a refused one changes nothing: an index that names no
+// variant, the variant of the selected plan, a variant that was removed before, and the last
+// variant the handler has. A NULL handler is an argument error.
+TEST(VariantSet, ARemovalRefusesWhatItMustAndChangesNothing) {
+    const anira::ModelConfig one = gain_model("1");
+    const anira::ModelConfig two = gain_model("2");
+    SetRig rig({&one, &two});
+    ASSERT_EQ(rig.prepare(set_contract()), ANIRA_OK) << rig.m_message;
+    EXPECT_EQ(anira_handler_remove_variant(nullptr, 1, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+
+    const HandlerState prepared(rig);
+    EXPECT_EQ(rig.remove(2), ANIRA_ERROR_NOT_FOUND);
+    expect_contains(rig.m_message, "variants[2] is no variant of the handler");
+    expect_unchanged(rig, prepared);
+    EXPECT_EQ(rig.remove(0), ANIRA_ERROR_INVALID_STATE) << "the selected plan's variant";
+    expect_contains(rig.m_message, "variants[0] runs the selected plan 0");
+    expect_unchanged(rig, prepared);
+
+    ASSERT_EQ(anira_handler_set_model(rig.h(), 1), ANIRA_OK);
+    EXPECT_EQ(rig.remove(1), ANIRA_ERROR_INVALID_STATE);
+    ASSERT_EQ(rig.remove(0), ANIRA_OK) << rig.m_message;
+    const HandlerState one_left(rig);
+    EXPECT_EQ(rig.remove(0), ANIRA_ERROR_NOT_FOUND);
+    expect_contains(rig.m_message, "variants[0] was removed from the handler before");
+    expect_unchanged(rig, one_left);
+    EXPECT_EQ(rig.remove(1), ANIRA_ERROR_INVALID_STATE);
+    expect_contains(rig.m_message, "variants[1] is the last variant of the handler");
+    expect_unchanged(rig, one_left);
+    EXPECT_EQ(states_of(anira_handler_plan_report(rig.h())),
+              (std::vector<uint32_t>{k_removed, k_ready}));
+
+    // The stream of the variant that is left.
+    BackgroundDriver driver(rig.h(), k_hop);
+    driver.step(4);
+    ASSERT_TRUE(driver.wait());
+    expect_stream(driver, [](size_t /*chunk*/) { return 2.0F; });
+}
+
+// On an unprepared handler a removal has the same refusals, less the selection's (nothing is
+// selected), and the variant leaves the pipeline copy: the next prepare builds the handler
+// without it, the variants that remain under their own indices, the plans numbered from 0.
+TEST(VariantSet, AVariantRemovedFromAnUnpreparedHandlerIsNotBuilt) {
+    const anira::ModelConfig one = gain_model("1");
+    const anira::ModelConfig two = gain_model("2");
+    const anira::ModelConfig four = gain_model("4");
+    SetRig rig({&one, &two, &four});
+    EXPECT_EQ(rig.remove(3), ANIRA_ERROR_NOT_FOUND);
+    ASSERT_EQ(rig.remove(0), ANIRA_OK) << rig.m_message;
+    EXPECT_EQ(rig.remove(0), ANIRA_ERROR_NOT_FOUND);
+    ASSERT_EQ(rig.remove(2), ANIRA_OK) << rig.m_message;
+    EXPECT_EQ(rig.remove(1), ANIRA_ERROR_INVALID_STATE) << "the last variant";
+    EXPECT_EQ(rig.m_engine.m_loads.load(), 0);
+    EXPECT_EQ(rig.h()->m_pipeline.m_variants.size(), 3U) << "an index left the stage";
+    EXPECT_EQ(rig.h()->m_pipeline.num_variants(), 1U);
+
+    ASSERT_EQ(rig.prepare(set_contract()), ANIRA_OK) << rig.m_message;
+    const std::vector<anira_plan_info> rows = rows_of(anira_handler_plan_report(rig.h()));
+    ASSERT_EQ(rows.size(), 1U);
+    EXPECT_EQ(rows[0].variant, 1U) << "the variant keeps its index";
+    EXPECT_EQ(rows[0].state, k_ready);
+    EXPECT_EQ(anira_handler_get_plan(rig.h()), 0U);
+    EXPECT_EQ(rig.m_engine.m_loads.load(), 1) << "a removed variant's model was loaded";
+
+    BackgroundDriver driver(rig.h(), k_hop);
+    driver.step(4);
+    ASSERT_TRUE(driver.wait());
+    expect_stream(driver, [](size_t /*chunk*/) { return 2.0F; });
+
+    // An add behind the removals continues behind the highest index the stage has had.
+    uint32_t variant = 0;
+    ASSERT_EQ(rig.add(one, &variant), ANIRA_OK) << rig.m_message;
+    EXPECT_EQ(variant, 3U);
+}
+
+// The rows of a removed variant stay where they were, marked: the report of the removal is a
+// new one with every index it had, the report a host took before still reads its own rows, no
+// lookup finds the removed plans and no entry selects them. The engine gives the plan's handle
+// back and unloads its model, once each, and the pool holds one loaded model fewer. The stream
+// of another variant plays through the call; the latency and the entry count do not move. An
+// add behind the removal gets a new index, and a prepare behind both builds the variants the
+// handler has: their indices kept, the plans numbered anew.
+TEST(VariantSet, ARemovedVariantKeepsItsRowsAndGivesItsModelBack) {
+    ASSERT_TRUE(anira_test::fresh_core());
+    const anira::ModelConfig one = gain_model("1");
+    const anira::ModelConfig two = gain_model("2");
+    const anira::ModelConfig four = gain_model("4");
+    const anira::ModelConfig eight = gain_model("8");
+    SetRig rig({&one, &two, &four});
+    ASSERT_EQ(rig.prepare(set_contract()), ANIRA_OK) << rig.m_message;
+    ASSERT_EQ(anira::Core::get_num_loaded_models(), 3U);
+    const HandlerState before(rig);
+    const std::vector<anira_plan_info> rows_before = rows_of(before.m_report);
+
+    BackgroundDriver driver(rig.h(), k_hop);
+    driver.run_free(1U << 20);
+    ASSERT_TRUE(wait_for([&driver] { return driver.done() >= 4; }));
+    ASSERT_EQ(rig.remove(1), ANIRA_OK) << rig.m_message;
+
+    // The engine's side, and the pool's.
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 1);
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 1);
+    EXPECT_EQ(anira::Core::get_num_loaded_models(), 2U) << "the pool kept the removed model";
+
+    // The reports: the old one as it was, the new one with the row marked.
+    const anira_plan_report* const report = anira_handler_plan_report(rig.h());
+    EXPECT_NE(report, before.m_report);
+    EXPECT_EQ(states_of(before.m_report), (std::vector<uint32_t>{k_ready, k_ready, k_ready}));
+    EXPECT_EQ(states_of(report), (std::vector<uint32_t>{k_ready, k_removed, k_ready}));
+    const std::vector<anira_plan_info> rows = rows_of(report);
+    EXPECT_EQ(rows[1].variant, 1U);
+    EXPECT_STREQ(rows[1].engine_id, k_engine);
+    EXPECT_EQ(rows[1].measured_ms, rows_before.at(1).measured_ms)
+        << "a removed row says what it was";
+    uint32_t slots = 0;
+    EXPECT_EQ(anira_plan_report_slots(report, 1, 1, sizeof(anira_plan_slot), &slots, nullptr),
+              ANIRA_OK);
+    EXPECT_EQ(slots, 1U);
+    // A caller whose header ends before the state field gets its rows without it: the bytes
+    // behind its record are not written (room for one row here, so the call says there are
+    // more).
+    anira_plan_info short_row = ANIRA_PLAN_INFO_INIT;
+    short_row.variant = 99;
+    short_row.state = 77;
+    uint32_t count = 1;
+    EXPECT_EQ(anira_plan_report_plans(report,
+                                      static_cast<uint32_t>(offsetof(anira_plan_info, state)),
+                                      &count,
+                                      &short_row),
+              ANIRA_INCOMPLETE);
+    EXPECT_EQ(count, 3U);
+    EXPECT_EQ(short_row.variant, 0U);
+    EXPECT_EQ(short_row.state, 77U) << "a field behind the caller's header was written";
+
+    // No lookup finds a removed plan and no entry selects one; the others are found as ever.
+    uint32_t plan = 99;
+    EXPECT_EQ(find_variant(report, 1, &plan), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(plan, 99U);
+    EXPECT_EQ(find_variant(report, 2, &plan), ANIRA_OK);
+    EXPECT_EQ(plan, 2U);
+    EXPECT_EQ(find_variant(before.m_report, 1, &plan), ANIRA_OK)
+        << "the earlier report is as it was";
+    EXPECT_EQ(anira_handler_set_plan(rig.h(), 1), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(anira_handler_get_plan(rig.h()), 0U) << "a refused selection moved the plan";
+    EXPECT_EQ(anira_handler_rt_error(rig.h()), ANIRA_ERROR_NOT_FOUND) << "the refusal is recorded";
+    EXPECT_EQ(anira_handler_set_model(rig.h(), 1), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(anira_handler_get_plan(rig.h()), 0U);
+
+    // What does not move, and the two tables' one index space.
+    EXPECT_EQ(anira_handler_get_latency(rig.h(), 0), before.m_latency);
+    EXPECT_EQ(anira_handler_num_entries(rig.h()), before.m_entries);
+    {
+        // The session is not held beyond these lines: a prepare below replaces it, and a
+        // reference here would keep its loaded models alive.
+        const std::shared_ptr<SessionElement> session = anira_test::session_of(rig.h());
+        ASSERT_EQ(session->m_plans.size(), 3U);
+        EXPECT_EQ(session->m_plans[1], nullptr);
+    }
+    EXPECT_EQ(rig.h()->m_plans.size(), 3U);
+    EXPECT_FALSE(rig.h()->m_pipeline.has_variant(1));
+    EXPECT_TRUE(rig.h()->m_pipeline.m_variants.at(1).m_models.empty())
+        << "the removed variant's config is still held";
+
+    // The stream played through the removal, and switches to the third variant by its index.
+    driver.stop();
+    ASSERT_TRUE(driver.wait());
+    const size_t switched_at = driver.done();
+    ASSERT_EQ(anira_handler_set_model(rig.h(), 2), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(rig.h()), 2U);
+    driver.step(4);
+    ASSERT_TRUE(driver.wait());
+    expect_stream(driver,
+                  [switched_at](size_t chunk) { return chunk < switched_at ? 1.0F : 4.0F; });
+
+    // An add behind the removal: a new index, the rows appended behind the marked one.
+    uint32_t variant = 0;
+    ASSERT_EQ(rig.add(eight, &variant), ANIRA_OK) << rig.m_message;
+    EXPECT_EQ(variant, 3U) << "a removed variant's index was given out again";
+    EXPECT_EQ(states_of(anira_handler_plan_report(rig.h())),
+              (std::vector<uint32_t>{k_ready, k_removed, k_ready, k_ready}));
+    EXPECT_EQ(anira_test::session_of(rig.h())->m_plans.size(), 4U);
+    EXPECT_EQ(anira::Core::get_num_loaded_models(), 3U);
+
+    // A prepare behind both: three variants under their indices, three plans from 0.
+    ASSERT_EQ(rig.prepare(set_contract()), ANIRA_OK) << rig.m_message;
+    const std::vector<anira_plan_info> prepared = rows_of(anira_handler_plan_report(rig.h()));
+    ASSERT_EQ(prepared.size(), 3U);
+    EXPECT_EQ(prepared[0].variant, 0U);
+    EXPECT_EQ(prepared[1].variant, 2U);
+    EXPECT_EQ(prepared[2].variant, 3U);
+    for (const anira_plan_info& row : prepared) { EXPECT_EQ(row.state, k_ready); }
+    EXPECT_EQ(anira_test::session_of(rig.h())->m_plans.size(), 3U);
+    EXPECT_EQ(anira_handler_set_model(rig.h(), 1), ANIRA_ERROR_NOT_FOUND);
+    ASSERT_EQ(anira_handler_set_model(rig.h(), 3), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(rig.h()), 2U);
+    EXPECT_EQ(rig.m_engine.m_loads.load() - rig.m_engine.m_unloads.load(), 3);
+    EXPECT_EQ(rig.m_engine.m_prepares.load() - rig.m_engine.m_unprepares.load(), 3);
+}
+
+// A removal of the first variant leaves the handler on the variants behind it: the stream's
+// form is the handler's own (the slot signature, the ports), an add is compared with the first
+// variant the handler still has and named after it in a refusal, and a prepare takes that
+// variant's defaults for its initial plan.
+TEST(VariantSet, TheFirstVariantCanBeRemoved) {
+    const anira::ModelConfig one = gain_model("1");
+    const anira::ModelConfig two = gain_model("2");
+    const anira::ModelConfig four = gain_model("4");
+    SetRig rig({&one, &two});
+    ASSERT_EQ(rig.prepare(set_contract()), ANIRA_OK) << rig.m_message;
+    BackgroundDriver driver(rig.h(), k_hop);
+    driver.step(3);
+    ASSERT_TRUE(driver.wait());
+    ASSERT_EQ(anira_handler_set_model(rig.h(), 1), ANIRA_OK);
+    driver.step(3);
+    ASSERT_TRUE(driver.wait());
+    ASSERT_EQ(rig.remove(0), ANIRA_OK) << rig.m_message;
+    driver.step(3);
+    ASSERT_TRUE(driver.wait());
+    expect_stream(driver, [](size_t chunk) { return chunk < 3 ? 1.0F : 2.0F; });
+
+    uint32_t variant = 99;
+    const anira::ModelConfig other_hop = gain_model("4", static_cast<int64_t>(k_hop) / 2);
+    EXPECT_EQ(rig.add(other_hop, &variant), ANIRA_ERROR_CONFIG);
+    expect_contains(rig.m_message, "variants[2]: input slot 0 'in'");
+    expect_contains(rig.m_message, "in variants[1]; every variant");
+    ASSERT_EQ(rig.add(four, &variant), ANIRA_OK) << rig.m_message;
+    EXPECT_EQ(variant, 2U);
+
+    ASSERT_EQ(rig.prepare(set_contract()), ANIRA_OK) << rig.m_message;
+    const std::vector<anira_plan_info> rows = rows_of(anira_handler_plan_report(rig.h()));
+    ASSERT_EQ(rows.size(), 2U);
+    EXPECT_EQ(rows[0].variant, 1U);
+    EXPECT_EQ(rows[1].variant, 2U);
+    EXPECT_EQ(anira_handler_get_plan(rig.h()), 0U);
+    BackgroundDriver again(rig.h(), k_hop);
+    again.step(3);
+    ASSERT_TRUE(again.wait());
+    expect_stream(again, [](size_t /*chunk*/) { return 2.0F; });
+}
+
+// A model that another handler still runs stays loaded when a removal lets it go, and so does
+// one another variant of the same handler runs: the engine's unprepare runs for the removed
+// plan's handle, its unload only with the model's last plan.
+TEST(VariantSet, ARemovalLeavesAModelThatAnotherPlanStillRuns) {
+    const anira::ModelConfig one = gain_model("1");
+    const anira::ModelConfig two = gain_model("2");
+    SetRig rig({&one, &two, &two});
+    anira_handler* const second = rig.second_handler();
+    ASSERT_NE(second, nullptr);
+    const anira::ContractHandle contract = set_contract();
+    ASSERT_EQ(rig.prepare(contract), ANIRA_OK) << rig.m_message;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_handler_prepare(second, contract.native(), &err), ANIRA_OK) << err.message;
+    // Two models for six plans: the two handlers, and the two variants of one model, share.
+    ASSERT_EQ(rig.m_engine.m_loads.load(), 2);
+    ASSERT_EQ(rig.m_engine.m_prepares.load(), 6);
+    ASSERT_EQ(anira::Core::get_num_loaded_models(), 2U);
+
+    // The second variant's model is the third variant's too, and the second handler's.
+    ASSERT_EQ(rig.remove(1), ANIRA_OK) << rig.m_message;
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 1);
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 0);
+    // The last plan of the model in this handler: the second handler still runs it.
+    ASSERT_EQ(rig.remove(2), ANIRA_OK) << rig.m_message;
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 2);
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 0);
+    EXPECT_EQ(anira::Core::get_num_loaded_models(), 2U);
+
+    // The second handler lets its two plans of the model go: with the last one it unloads.
+    ASSERT_EQ(anira_handler_remove_variant(second, 2, &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 0);
+    ASSERT_EQ(anira_handler_remove_variant(second, 1, &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 4);
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 1);
+    EXPECT_EQ(anira::Core::get_num_loaded_models(), 1U);
+
+    // Both handlers still play the model they kept.
+    BackgroundDriver driver(rig.h(), k_hop);
+    BackgroundDriver second_driver(second, k_hop);
+    driver.step(3);
+    second_driver.step(3);
+    ASSERT_TRUE(driver.wait());
+    ASSERT_TRUE(second_driver.wait());
+    expect_stream(driver, [](size_t /*chunk*/) { return 1.0F; });
+    expect_stream(second_driver, [](size_t /*chunk*/) { return 1.0F; });
+}
+
+// A chunk in flight on a removed variant is delivered, and the removal waits for it: with one
+// inference of the variant held inside its engine, the call marks the rows, takes the plan out
+// of the table and then stays where it is, the plan's handle and model untouched, until the
+// inference returns. Then the engine's unprepare and unload run, once each, the call returns,
+// and the held chunk comes out of the stream as its model computed it.
+TEST(VariantSet, AChunkInFlightOnARemovedVariantIsDeliveredAndWaitedFor) {
+    const anira::ModelConfig one = gain_model("1");
+    const anira::ModelConfig two = gain_model("2");
+    SetRig rig({&one, &two});
+    ASSERT_EQ(rig.prepare(set_contract(0)), ANIRA_OK) << rig.m_message;
+    const size_t latency = anira_handler_get_latency(rig.h(), 0);
+
+    // One chunk on the second variant, held inside its engine; the selection back on the
+    // first, so the variant may go.
+    ASSERT_EQ(anira_handler_set_model(rig.h(), 1), ANIRA_OK);
+    rig.m_engine.close(2.0F);
+    ASSERT_EQ(push_hop(rig.h(), 1), ANIRA_OK);
+    ASSERT_TRUE(wait_for([&rig] { return rig.m_engine.held_of(2.0F) == 1; }));
+    ASSERT_EQ(anira_handler_set_model(rig.h(), 0), ANIRA_OK);
+
+    std::atomic<bool> returned{false};
+    anira_status status = ANIRA_ERROR_INTERNAL;
+    std::thread remover([&] {
+        status = anira_handler_remove_variant(rig.h(), 1, nullptr);
+        returned.store(true, std::memory_order_release);
+    });
+    // The rows are marked ahead of the wait: the report says so while the call is inside.
+    ASSERT_TRUE(wait_for([&rig] {
+        return states_of(anira_handler_plan_report(rig.h())) ==
+               std::vector<uint32_t>{k_ready, k_removed};
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_FALSE(returned.load(std::memory_order_acquire))
+        << "the removal returned while an inference of the variant runs";
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 0) << "the handle went back under a running call";
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 0);
+    EXPECT_EQ(anira_handler_set_plan(rig.h(), 1), ANIRA_ERROR_NOT_FOUND);
+
+    rig.m_engine.open(2.0F);
+    remover.join();
+    EXPECT_EQ(status, ANIRA_OK);
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 1);
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 1);
+    EXPECT_EQ(rig.m_engine.calls_of(2.0F), 1);
+
+    // The held chunk is in the stream: the latency's silence, then the hop times its factor.
+    ASSERT_TRUE(wait_for([&] { return anira_test::available(rig.h()) >= latency + k_hop; }));
+    pop_latency(rig.h());
+    const std::vector<float> out = pop_hop(rig.h());
+    const std::vector<float> in = anira_test::ramp(1, k_hop);
+    for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(out[i], in[i] * 2.0F) << "sample " << i; }
+}
+
+// A _wait twin that is inside its wait holds its read lease on the plan table, and a removal
+// waits for the lease, whatever the twin waits for: an entry inside its call may still stamp a
+// chunk from the table it read. With the driving thread parked inside
+// anira_handler_process_wait on a block of the OTHER variant (no chunk of the removed one is
+// in flight), the removal stays inside until the twin returns.
+TEST(VariantSet, ARemovalWaitsForAWaitTwinInsideItsCall) {
+    const anira::ModelConfig one = gain_model("1");
+    const anira::ModelConfig two = gain_model("2");
+    SetRig rig({&one, &two});
+    ASSERT_EQ(rig.prepare(set_contract(0)), ANIRA_OK) << rig.m_message;
+    BackgroundDriver driver(rig.h(), k_hop, BackgroundDriver::Entry::ProcessWait);
+    driver.step(3);
+    ASSERT_TRUE(driver.wait());
+
+    rig.m_engine.close(1.0F);
+    driver.step(1);
+    ASSERT_TRUE(wait_for([&] { return rig.m_engine.held_of(1.0F) == 1 && driver.inside_call(); }));
+
+    std::atomic<bool> returned{false};
+    anira_status status = ANIRA_ERROR_INTERNAL;
+    std::thread remover([&] {
+        status = anira_handler_remove_variant(rig.h(), 1, nullptr);
+        returned.store(true, std::memory_order_release);
+    });
+    ASSERT_TRUE(wait_for([&rig] {
+        return states_of(anira_handler_plan_report(rig.h())) ==
+               std::vector<uint32_t>{k_ready, k_removed};
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_FALSE(returned.load(std::memory_order_acquire))
+        << "the removal did not wait for an entry of the driving thread inside its call";
+    EXPECT_TRUE(driver.inside_call());
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 0);
+    EXPECT_EQ(rig.m_engine.calls_of(2.0F), 0) << "no chunk of the removed variant was in flight";
+
+    rig.m_engine.open(1.0F);
+    remover.join();
+    EXPECT_EQ(status, ANIRA_OK);
+    ASSERT_TRUE(driver.wait());
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 1);
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 1);
+    driver.step(3);
+    ASSERT_TRUE(driver.wait());
+    expect_stream(driver, [](size_t /*chunk*/) { return 1.0F; });
+}
+
+// A driving thread that never calls again holds no removal back. An exclusive handler runs its
+// chunks one at a time, each dispatched when the one before it is done, and a chunk whose turn
+// has come is otherwise sent off by the driving thread's next call: the removal keeps that
+// chain moving itself. Three chunks of the variant are pushed and the driving thread stops;
+// the removal returns once the three ran, and they are delivered when the stream is read.
+TEST(VariantSet, ADrivingThreadThatNeverRunsDoesNotPinARemoval) {
+    const anira::ModelConfig one = state_model("1");
+    const anira::ModelConfig three = state_model("3");
+    SetRig rig({&one, &three});
+    rig.m_engine.m_stateful = true;
+    ASSERT_EQ(rig.prepare(set_contract(0)), ANIRA_OK) << rig.m_message;
+    const size_t latency = anira_handler_get_latency(rig.h(), 0);
+
+    ASSERT_EQ(anira_handler_set_model(rig.h(), 1), ANIRA_OK);
+    rig.m_engine.close(3.0F);
+    for (size_t hop = 1; hop <= 3; ++hop) { ASSERT_EQ(push_hop(rig.h(), hop), ANIRA_OK); }
+    ASSERT_TRUE(wait_for([&rig] { return rig.m_engine.held_of(3.0F) == 1; }));
+    ASSERT_EQ(anira_handler_set_model(rig.h(), 0), ANIRA_OK);
+
+    std::atomic<bool> returned{false};
+    anira_status status = ANIRA_ERROR_INTERNAL;
+    std::thread remover([&] {
+        status = anira_handler_remove_variant(rig.h(), 1, nullptr);
+        returned.store(true, std::memory_order_release);
+    });
+    ASSERT_TRUE(wait_for([&rig] {
+        return states_of(anira_handler_plan_report(rig.h())) ==
+               std::vector<uint32_t>{k_ready, k_removed};
+    }));
+    // No entry of the handler is called from here until the removal has returned.
+    rig.m_engine.open(3.0F);
+    ASSERT_TRUE(wait_for([&returned] { return returned.load(std::memory_order_acquire); }))
+        << "the removal waits for a call of the driving thread";
+    remover.join();
+    EXPECT_EQ(status, ANIRA_OK);
+    EXPECT_EQ(rig.m_engine.calls_of(3.0F), 3) << "a chunk in flight was not run";
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 1);
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 1);
+
+    // The three chunks are in the stream: the state grew by the variant's factor per chunk.
+    ASSERT_TRUE(wait_for([&] { return anira_test::available(rig.h()) >= latency + (3 * k_hop); }));
+    pop_latency(rig.h());
+    for (size_t hop = 0; hop < 3; ++hop) {
+        const std::vector<float> out = pop_hop(rig.h());
+        const std::vector<float> in = anira_test::ramp(hop + 1, k_hop);
+        const float state = 3.0F * static_cast<float>(hop + 1);
+        for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(out[i], in[i] * state) << "hop " << hop; }
+    }
+}
+
+// The callbacks of a removal (an engine's unprepare, its unload) run beside the playing stream
+// on the calling thread: a control entry and a Static entry called from one are refused, and
+// the removal completes.
+TEST(VariantSet, ARemovalRefusesControlAndStaticEntriesFromItsCallbacks) {
+    const anira::ModelConfig one = static_model("1");
+    const anira::ModelConfig two = static_model("2");
+    SetRig rig({&one, &two});
+    ASSERT_EQ(rig.prepare(set_contract()), ANIRA_OK) << rig.m_message;
+    BackgroundDriver driver(rig.h(), k_hop);
+    driver.run_free(1U << 20);
+
+    struct Seen {
+        anira_status m_remove = ANIRA_OK;
+        anira_status m_add = ANIRA_OK;
+        anira_status m_prepare = ANIRA_OK;
+        anira_status m_set_static = ANIRA_OK;
+        uint32_t m_entries = 0;
+        int m_calls = 0;
+    };
+    Seen seen;
+    float written = 9.0F;
+    const std::array<int64_t, 1> shape{1};
+    const anira::ContractHandle contract = set_contract();
+    rig.m_engine.m_on_unprepare = [&] {
+        ++seen.m_calls;
+        seen.m_remove = anira_handler_remove_variant(rig.h(), 0, nullptr);
+        uint32_t index = 0;
+        seen.m_add = anira_handler_add_variant(rig.h(), two.native(), &index, nullptr);
+        seen.m_prepare = anira_handler_prepare(rig.h(), contract.native(), nullptr);
+        const anira_tensor gain = anira_test::whole_f32(&written, shape);
+        seen.m_set_static = anira_handler_set_static_input(rig.h(), 1, &gain);
+        seen.m_entries = anira_handler_num_entries(rig.h());
+    };
+    const uint32_t entries = anira_handler_num_entries(rig.h());
+    ASSERT_EQ(rig.remove(1), ANIRA_OK) << rig.m_message;
+    rig.m_engine.m_on_unprepare = nullptr;
+    EXPECT_EQ(seen.m_calls, 1);
+    EXPECT_EQ(seen.m_remove, ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(seen.m_add, ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(seen.m_prepare, ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(seen.m_set_static, ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(seen.m_entries, entries) << "the getters answer inside a removal's callback";
+    EXPECT_EQ(anira_handler_rt_error(rig.h()), ANIRA_OK);
+    EXPECT_EQ(rig.h()->m_pipeline.num_variants(), 1U);
+
+    const size_t done = driver.done();
+    ASSERT_TRUE(wait_for([&] { return driver.done() >= done + 3; }));
+    driver.stop();
+    ASSERT_TRUE(driver.wait());
+    expect_stream(driver, [](size_t /*chunk*/) { return 1.0F; });
+}
+
+// A selection entry that read the plan rows while a variant's plans were ready may store one
+// of them when the removal is past its refusal: the removal waits for every such entry (its
+// read lease on the rows) and then moves a selection it finds on a removed plan to the first
+// ready one, with one Warning. The racing entry is played by the test: it holds a read lease on
+// the rows, lets the removal publish the marked rows and wait, stores the removed plan as the
+// selection the way anira_handler_set_plan stores inside its lease, and gives the lease back.
+TEST(VariantSet, ASelectionThatRacedARemovalIsMovedToTheFirstReadyPlan) {
+    const anira::ModelConfig one = gain_model("1");
+    const anira::ModelConfig two = gain_model("2");
+    const anira::ModelConfig four = gain_model("4");
+    anira_drain_log();
+    RecordCollector collector;
+    SetRig rig({&one, &two, &four}, nullptr, ANIRA_LOG_WARNING);
+    ASSERT_EQ(rig.prepare(set_contract(0)), ANIRA_OK) << rig.m_message;
+    ASSERT_EQ(anira_handler_set_plan(rig.h(), 2), ANIRA_OK);
+
+    std::atomic<bool> returned{false};
+    anira_status status = ANIRA_ERROR_INTERNAL;
+    std::thread remover;
+    {
+        const auto lease = rig.h()->m_plan_row_readers.claim();
+        if (!lease.has_value()) {
+            FAIL() << "no free reader slot on an idle handler";
+            return;
+        }
+        remover = std::thread([&] {
+            status = anira_handler_remove_variant(rig.h(), 1, nullptr);
+            returned.store(true, std::memory_order_release);
+        });
+        ASSERT_TRUE(wait_for([&rig] {
+            return states_of(anira_handler_plan_report(rig.h())) ==
+                   std::vector<uint32_t>{k_ready, k_removed, k_ready};
+        }));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        EXPECT_FALSE(returned.load(std::memory_order_acquire))
+            << "the removal did not wait for a selection entry inside its call";
+        EXPECT_EQ(rig.m_engine.m_unprepares.load(), 0);
+        // The store of the entry that raced: plan 1 was ready in the rows this lease holds.
+        EXPECT_EQ(lease->data().m_rows.at(1).state, k_ready);
+        rig.h()->m_selected_plan.store(1, std::memory_order_relaxed);
+    }
+    remover.join();
+    EXPECT_EQ(status, ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(rig.h()), 0U) << "the first ready plan";
+    EXPECT_EQ(rig.m_engine.m_unprepares.load(), 1);
+    EXPECT_EQ(rig.m_engine.m_unloads.load(), 1);
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    const char* warning =
+        "anira_handler_remove_variant: plan 1 of variants[1] was selected while the variant was "
+        "being removed; the selection moves to plan 0, the first ready plan";
+    EXPECT_EQ(anira_test::count_records(collector, warning, "native"), 1U);
+#endif
+
+    // The stream runs the plan the selection was moved to.
+    BackgroundDriver driver(rig.h(), k_hop);
+    driver.step(4);
+    ASSERT_TRUE(driver.wait());
+    expect_stream(driver, [](size_t /*chunk*/) { return 1.0F; });
+    EXPECT_EQ(anira_handler_rt_error(rig.h()), ANIRA_OK);
+}
+
+// A selection that races a removal ends on a ready plan. Two threads hammer the selection
+// entries with every index and every variant the handler has had while this one adds a variant
+// and removes it again, round after round, beside a free-running stream. A removal that finds
+// its variant selected is refused and tried again; one that goes through leaves the selection
+// on a plan that is ready, whatever the hammers stored in between; the stream never breaks.
+TEST(VariantSet, ASelectionHammerAgainstRemovalsEndsOnAReadyPlan) {
+    constexpr uint32_t k_rounds = 20;
+    const anira::ModelConfig one = gain_model("1");
+    const anira::ModelConfig two = gain_model("2");
+    SetRig rig({&one});
+    ASSERT_EQ(rig.prepare(set_contract(0)), ANIRA_OK) << rig.m_message;
+    BackgroundDriver driver(rig.h(), k_hop);
+    driver.run_free(1U << 20);
+
+    std::atomic<bool> stop{false};
+    std::atomic<uint32_t> num_rows{1};
+    std::atomic<int> unexpected{0};
+    const auto hammer = [&](uint32_t seed) {
+        uint32_t next = seed;
+        while (!stop.load(std::memory_order_acquire)) {
+            const uint32_t rows = num_rows.load(std::memory_order_acquire);
+            const uint32_t index = next++ % (rows + 1);
+            const anira_status status = (next % 3 == 0) ? anira_handler_set_model(rig.h(), index)
+                                                        : anira_handler_set_plan(rig.h(), index);
+            // A ready plan, a removed one, an index the table does not have, no free reader.
+            if (status != ANIRA_OK && status != ANIRA_ERROR_NOT_FOUND &&
+                status != ANIRA_ERROR_CONFIG && status != ANIRA_ERROR_CAPACITY) {
+                unexpected.fetch_add(1);
+            }
+        }
+    };
+    std::thread first(hammer, 0U);
+    std::thread second(hammer, 7U);
+
+    const auto selection_is_ready = [&rig] {
+        const std::vector<uint32_t> states = states_of(anira_handler_plan_report(rig.h()));
+        const uint32_t selected = anira_handler_get_plan(rig.h());
+        return selected < states.size() && states[selected] == k_ready;
+    };
+    int not_ready = 0;
+    for (uint32_t round = 0; round < k_rounds; ++round) {
+        uint32_t variant = 0;
+        ASSERT_EQ(rig.add(two, &variant), ANIRA_OK) << rig.m_message;
+        ASSERT_EQ(variant, round + 1);
+        num_rows.store(variant + 1, std::memory_order_release);
+        // The hammers select the new plan now and then: the removal is refused while they do.
+        anira_status status = ANIRA_ERROR_INVALID_STATE;
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(anira_test::k_wait_s);
+        while (status == ANIRA_ERROR_INVALID_STATE && std::chrono::steady_clock::now() < deadline) {
+            status = rig.remove(variant);
+        }
+        ASSERT_EQ(status, ANIRA_OK) << rig.m_message;
+        // Behind a removal that returned, every plan a hammer can still store is a ready one.
+        if (!selection_is_ready()) { ++not_ready; }
+    }
+    stop.store(true, std::memory_order_release);
+    first.join();
+    second.join();
+    EXPECT_EQ(not_ready, 0) << "a selection was left on a removed plan";
+    EXPECT_EQ(unexpected.load(), 0);
+    EXPECT_TRUE(selection_is_ready());
+    EXPECT_EQ(anira_handler_get_plan(rig.h()), 0U) << "the one ready plan";
+
+    driver.stop();
+    ASSERT_TRUE(driver.wait());
+    driver.expect_continuous();
+    for (const float factor : driver.factors()) {
+        ASSERT_TRUE(factor == 0.0F || factor == 1.0F || factor == 2.0F) << factor;
+    }
+    EXPECT_EQ(rig.m_engine.m_loads.load() - rig.m_engine.m_unloads.load(), 1);
+    EXPECT_EQ(rig.m_engine.m_prepares.load() - rig.m_engine.m_unprepares.load(), 1);
+    EXPECT_EQ(anira::Core::get_num_loaded_models(), 1U);
+}
+
+// ==== the loop ================================================================================
+
+// Add, select, remove, fifty times beside a free-running stream: every round adds a variant,
+// moves the stream to it and removes the one the stream ran before, whose chunks may still be
+// in flight. The stream never breaks and ends on the last variant; every load has its unload
+// and every prepare its unprepare but the playing plan's; the two tables keep one index space,
+// fifty entries of it empty. (The factors are powers of two: exact however long the ramp runs.)
+TEST(VariantSet, VariantsAddedSelectedAndRemovedBesideAFreeRunningStream) {
+    constexpr uint32_t k_rounds = 50;
+    constexpr std::array<float, 7> k_factors{1.0F, 2.0F, 4.0F, 8.0F, 16.0F, 32.0F, 64.0F};
+    const anira::ModelConfig one = gain_model("1");
+    SetRig rig({&one});
+    ASSERT_EQ(rig.prepare(set_contract()), ANIRA_OK) << rig.m_message;
+    const uint32_t latency = anira_handler_get_latency(rig.h(), 0);
+    const uint32_t entries = anira_handler_num_entries(rig.h());
+    BackgroundDriver driver(rig.h(), k_hop);
+    driver.run_free(1U << 20);
+
+    float last_factor = 1.0F;
+    for (uint32_t round = 0; round < k_rounds; ++round) {
+        last_factor = static_cast<float>(2U << (round % 6));
+        const std::string factor = std::to_string(2U << (round % 6));
+        const anira::ModelConfig model = gain_model(factor.c_str());
+        uint32_t variant = 0;
+        ASSERT_EQ(rig.add(model, &variant), ANIRA_OK) << "round " << round << ": " << rig.m_message;
+        ASSERT_EQ(variant, round + 1);
+        ASSERT_EQ(anira_handler_set_model(rig.h(), variant), ANIRA_OK) << "round " << round;
+        ASSERT_EQ(rig.remove(round), ANIRA_OK) << "round " << round << ": " << rig.m_message;
+        const size_t done = driver.done();
+        ASSERT_TRUE(wait_for([&] { return driver.done() >= done + 2; })) << "round " << round;
+    }
+    driver.stop();
+    ASSERT_TRUE(driver.wait());
+    driver.expect_continuous();
+    float last = 0.0F;
+    for (const float factor : driver.factors()) {
+        if (factor == 0.0F) { continue; }  // the latency's silence
+        ASSERT_TRUE(std::ranges::find(k_factors, factor) != k_factors.end()) << factor;
+        last = factor;
+    }
+    EXPECT_EQ(last, last_factor) << "the stream ends on the last variant";
+    EXPECT_EQ(anira_handler_rt_error(rig.h()), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_plan(rig.h()), k_rounds);
+    EXPECT_EQ(anira_handler_get_latency(rig.h(), 0), latency);
+    EXPECT_EQ(anira_handler_num_entries(rig.h()), entries);
+
+    const std::vector<uint32_t> states = states_of(anira_handler_plan_report(rig.h()));
+    ASSERT_EQ(states.size(), k_rounds + 1);
+    for (uint32_t plan = 0; plan < k_rounds; ++plan) { ASSERT_EQ(states[plan], k_removed) << plan; }
+    EXPECT_EQ(states[k_rounds], k_ready);
+    const std::shared_ptr<SessionElement> session = anira_test::session_of(rig.h());
+    ASSERT_EQ(session->m_plans.size(), k_rounds + 1);
+    for (uint32_t plan = 0; plan < k_rounds; ++plan) { ASSERT_EQ(session->m_plans[plan], nullptr); }
+    EXPECT_NE(session->m_plans[k_rounds], nullptr);
+    EXPECT_EQ(rig.m_engine.m_loads.load() - rig.m_engine.m_unloads.load(), 1);
+    EXPECT_EQ(rig.m_engine.m_prepares.load() - rig.m_engine.m_unprepares.load(), 1);
+    EXPECT_EQ(rig.m_engine.m_loads.load(), static_cast<int>(k_rounds) + 1);
+    EXPECT_EQ(anira::Core::get_num_loaded_models(), 1U);
+    EXPECT_EQ(rig.h()->m_reports.size(), (2U * k_rounds) + 1) << "a report per control call";
 }
