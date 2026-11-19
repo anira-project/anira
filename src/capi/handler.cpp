@@ -3785,19 +3785,14 @@ void check_removable(const anira_handler& handler, size_t variant) {
 // specs are released), and its index joins the removed ones, in order, so that no other
 // variant's index moves and none is given out again; its derivation, where the handler holds
 // one for it, is emptied too (no plan of a later table is its). The caller reserved the room
-// of the list and made the two empty objects the entries become: nothing in here allocates (a
-// container's constructor may, and the debug containers of some standard libraries do, so
-// none is constructed here; a move assignment frees and takes). Control side only: nothing of
-// this is read by another thread.
-void forget_variant(anira_handler& handler,
-                    size_t variant,
-                    anira_model_config&& no_model,
-                    anira::capi::Derived&& no_derivation) noexcept {
+// of the list, so nothing in here allocates: an empty config and an empty derivation are
+// empty containers. Control side only: nothing of this is read by another thread.
+void forget_variant(anira_handler& handler, size_t variant) noexcept {
     anira_pipeline& pipeline = handler.m_pipeline;
-    pipeline.m_variants[variant] = std::move(no_model);
+    pipeline.m_variants[variant] = anira_model_config{};
     pipeline.m_removed.insert(std::ranges::upper_bound(pipeline.m_removed, variant), variant);
     if (variant < handler.m_variant_derived.size()) {
-        handler.m_variant_derived[variant] = std::move(no_derivation);
+        handler.m_variant_derived[variant] = anira::capi::Derived{};
     }
 }
 
@@ -3806,7 +3801,7 @@ void forget_variant(anira_handler& handler,
 void remove_variant_unprepared(anira_handler& handler, size_t variant) {
     check_removable(handler, variant);
     handler.m_pipeline.m_removed.reserve(handler.m_pipeline.m_removed.size() + 1);
-    forget_variant(handler, variant, anira_model_config{}, anira::capi::Derived{});
+    forget_variant(handler, variant);
 }
 
 // What finish_removal publishes and writes to, made while the call can still be refused
@@ -3820,18 +3815,15 @@ struct StagedRemoval {
     /// Room for the slots taken out of the session's list, which finish_removal holds until no
     /// chunk counts on them.
     std::vector<std::shared_ptr<anira::SessionElement::PlanSlot>> m_taken;
-    /// What the variant's entry of the pipeline copy and its derivation become (forget_variant).
-    anira_model_config m_no_model;
-    anira::capi::Derived m_no_derivation;
 };
 
 // Everything finish_removal needs that can fail, which is everything it would have to
 // allocate: the two published versions (the handler's plan rows with the plans of `plans`
 // marked removed and the session's plan table with their entries empty, staged in their RCUs
-// with the room their publication takes), room for the slots it takes out, the empty objects
-// the variant's entries become, and the room of the two lists it appends to (the handler's
-// reports, the removed variants). A throw (std::bad_alloc) leaves the handler and its session
-// as they were, the variant still there and still running.
+// with the room their publication takes), room for the slots it takes out, and the room of
+// the two lists it appends to (the handler's reports, the removed variants). A throw
+// (std::bad_alloc) leaves the handler and its session as they were, the variant still there
+// and still running.
 StagedRemoval stage_removal(anira_handler& handler, const std::vector<uint32_t>& plans) {
     StagedRemoval staged;
     staged.m_rows = stage_plan_rows(handler);
@@ -3878,12 +3870,11 @@ struct MovedSelection {
 //
 // noexcept, and it is: behind the first publication there is no way back, so nothing in here
 // allocates (an engine's unprepare and unload are the engine's own code). Both versions it
-// publishes, the room for the slots it takes and for the two lists it appends to, and the
-// empty entries of step 6 are `staged`'s (stage_removal); a publication is
-// thl::RCU::commit(), which swaps the pointer and retires the old version into room its stage
-// made. `plans` are the dense indices of the variant's plans, `report` the new report,
-// complete. The answer is the selection step 2 moved, if it moved one: the caller logs it,
-// since a log record allocates.
+// publishes and the room for the slots it takes and for the two lists it appends to are
+// `staged`'s (stage_removal); a publication is thl::RCU::commit(), which swaps the pointer and
+// retires the old version into room its stage made. `plans` are the dense indices of the
+// variant's plans, `report` the new report, complete. The answer is the selection step 2
+// moved, if it moved one: the caller logs it, since a log record allocates.
 std::optional<MovedSelection> finish_removal(anira_handler& handler,
                                              size_t variant,
                                              const std::vector<uint32_t>& plans,
@@ -3935,10 +3926,7 @@ std::optional<MovedSelection> finish_removal(anira_handler& handler,
         // The last reference when the pool let the model go: it unloads here.
         loaded.reset();
     }
-    forget_variant(handler,
-                   variant,
-                   std::move(staged.m_no_model),
-                   std::move(staged.m_no_derivation));
+    forget_variant(handler, variant);
     return moved;
 }
 
