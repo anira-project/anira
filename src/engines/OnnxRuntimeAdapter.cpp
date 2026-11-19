@@ -222,7 +222,7 @@ void append_provider(Ort::SessionOptions& options, const Model& model) {
             options.AppendExecutionProvider(name, map);
         }
     } catch (const Ort::Exception& e) {
-        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+        throw StatusError(ort_status(e, ANIRA_ERROR_NOT_SUPPORTED),
                           "onnxruntime: the runtime refused execution provider '" + label + "' (" +
                               name + "): " + e.what());
     }
@@ -270,7 +270,7 @@ protected:
 #endif
         } catch (const Ort::Exception& e) {
             throw StatusError(
-                ANIRA_ERROR_ENGINE,
+                ort_status(e, ANIRA_ERROR_ENGINE),
                 std::string("onnxruntime: the environment could not be created: ") + e.what());
         }
     }
