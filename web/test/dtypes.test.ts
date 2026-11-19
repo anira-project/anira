@@ -3,8 +3,9 @@
 // ring dtype per tensor (ContractHandle.hard's ringDtypes, hardRingDtype), a Static bool8 input
 // converts plain numbers, and the ONNX Runtime Web engine runs every dtype anira names through
 // onnxruntime-web's own C API (the ONNX dtype matrix of extras/models, each model's input
-// doubled through Cast boundaries; probe P7 of PR D). The module instance is a stand-in over a
-// plain heap with the few exports the code under test reads.
+// doubled through Cast boundaries; probe P7 of PR D), each loaded model on a session of its
+// own, which its destroy releases. The module instance is a stand-in over a plain heap with
+// the few exports the code under test reads.
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { test } from 'node:test'
@@ -26,7 +27,7 @@ import { anira_engine_ctx, anira_tensor } from '../src/abi/layout'
 import { ContractHandle } from '../src/ContractHandle'
 import { dtypeBytes } from '../src/dtype'
 import { onnxRuntimeWeb } from '../src/engines/onnxruntime-web'
-import { engineTensors, type ScopeEnv } from '../src/registry'
+import { engineTensors, type Engine, type ScopeEnv } from '../src/registry'
 import { staticInputBytes } from '../src/staticInput'
 
 // A heap and the tensor accessors engineTensors reads: a tensor record's dtype at its dtype
@@ -244,42 +245,112 @@ const encode = (dtype: number, v: number): number | bigint =>
         ? BigInt(v)
         : v
 
-test('the ONNX Runtime Web engine runs every dtype anira names', async (t) => {
-  const matrix = new URL('dtype_matrix_int16.onnx', MATRIX)
-  if (!fs.existsSync(matrix)) {
-    // The fixtures come with `cmake -P extras/fetch-models.cmake`, as the browser test's do.
-    t.skip('extras/models not fetched')
-    return
+// The model entry of a matrix model as a Worker's load receives it: the file's bytes.
+const matrixEntry = (word: string) => ({
+  row: 0,
+  modelBytes: new Uint8Array(
+    fs.readFileSync(new URL(`dtype_matrix_${word}.onnx`, MATRIX))
+  ),
+  modelPath: null,
+})
+const matrixFetched = (t: { skip(message: string): void }): boolean => {
+  if (fs.existsSync(new URL('dtype_matrix_int16.onnx', MATRIX))) return true
+  // The fixtures come with `cmake -P extras/fetch-models.cmake`, as the browser test's do.
+  t.skip('extras/models not fetched')
+  return false
+}
+
+// One call of a matrix model over the small integers of `dtype`: the status, and whether the
+// output is the input doubled (bool: as it went in).
+const runMatrix = (
+  env: ScopeEnv,
+  ctxOf: ReturnType<typeof tensorModule>['ctxOf'],
+  loaded: Engine.Loaded,
+  dtype: number
+) => {
+  const call = ctxOf([[dtype, N]], [[dtype, N]])
+  const { inputs, outputs } = engineTensors(env, call.ctx)
+  const range = dtype === ANIRA_DTYPE_BOOL8 ? 2 : 8
+  const input = inputs[0].data! as unknown as (number | bigint)[]
+  for (let k = 0; k < N; k++) input[k] = encode(dtype, k % range)
+  const status = loaded.process(call.ctx)
+  const output = outputs[0].data! as unknown as (number | bigint)[]
+  let wrong = -1
+  for (let k = 0; k < N && wrong < 0; k++) {
+    const v = k % range
+    if (output[k] !== encode(dtype, dtype === ANIRA_DTYPE_BOOL8 ? v : 2 * v)) wrong = k
   }
+  return { status, wrong }
+}
+
+test('the ONNX Runtime Web engine runs every dtype anira names', async (t) => {
+  if (!matrixFetched(t)) return
   for (const [word, dtype] of DTYPES) {
     const { env, ctxOf } = tensorModule()
-    const engine = onnxRuntimeWeb({
-      model: new Uint8Array(
-        fs.readFileSync(new URL(`dtype_matrix_${word}.onnx`, MATRIX))
-      ),
-      warmup: 1,
-    })(env)
+    const engine = onnxRuntimeWeb({ warmup: 1 })(env)
     await engine.init?.()
-    const call = ctxOf([[dtype, N]], [[dtype, N]])
-    const { inputs, outputs } = engineTensors(env, call.ctx)
-    const range = dtype === ANIRA_DTYPE_BOOL8 ? 2 : 8
-    const input = inputs[0].data!
-    for (let k = 0; k < N; k++)
-      (input as unknown as (number | bigint)[])[k] = encode(dtype, k % range)
-    assert.equal(engine.process(call.ctx), anira_status.ANIRA_OK, word)
-    const output = outputs[0].data!
-    for (let k = 0; k < N; k++) {
-      const v = k % range
-      const want = encode(dtype, dtype === ANIRA_DTYPE_BOOL8 ? v : 2 * v)
-      assert.equal(
-        (output as unknown as (number | bigint)[])[k],
-        want,
-        `${word} sample ${k}`
-      )
-    }
+    const loaded = engine.load(matrixEntry(word))
+    assert.deepEqual(
+      runMatrix(env, ctxOf, loaded, dtype),
+      { status: anira_status.ANIRA_OK, wrong: -1 },
+      word
+    )
     // A tensor of another dtype than the model's element type is a configuration error.
     const other = dtype === ANIRA_DTYPE_F32 ? ANIRA_DTYPE_I32 : ANIRA_DTYPE_F32
     const wrong = ctxOf([[other, N]], [[other, N]])
-    assert.equal(engine.process(wrong.ctx), anira_status.ANIRA_ERROR_CONFIG, word)
+    assert.equal(loaded.process(wrong.ctx), anira_status.ANIRA_ERROR_CONFIG, word)
+    loaded.destroy?.()
   }
+})
+
+test('the ONNX Runtime Web engine keeps a session per loaded model and releases it at destroy', async (t) => {
+  if (!matrixFetched(t)) return
+  const { env, ctxOf } = tensorModule()
+  const engine = onnxRuntimeWeb()(env)
+  await engine.init?.()
+  const OK = { status: anira_status.ANIRA_OK, wrong: -1 }
+  // Two loaded models of one engine, their calls in turn: each runs its own model.
+  const float32 = engine.load(matrixEntry('float32'))
+  const int16 = engine.load(matrixEntry('int16'))
+  for (let round = 0; round < 3; round++) {
+    assert.deepEqual(runMatrix(env, ctxOf, float32, ANIRA_DTYPE_F32), OK, 'float32')
+    assert.deepEqual(runMatrix(env, ctxOf, int16, ANIRA_DTYPE_I16), OK, 'int16')
+  }
+  // One is unloaded: the other runs on, and the released one has no session to run on.
+  float32.destroy?.()
+  assert.deepEqual(runMatrix(env, ctxOf, int16, ANIRA_DTYPE_I16), OK)
+  assert.equal(
+    runMatrix(env, ctxOf, float32, ANIRA_DTYPE_F32).status,
+    anira_status.ANIRA_ERROR_INVALID_STATE
+  )
+  int16.destroy?.()
+  // An entry that is no model fails its load and leaves nothing behind to destroy.
+  assert.throws(
+    () =>
+      engine.load({ row: 0, modelBytes: new Uint8Array(64).fill(0x5a), modelPath: null }),
+    /_OrtCreateSession failed/
+  )
+  assert.throws(
+    () => engine.load({ row: 3, modelBytes: null, modelPath: null }),
+    /model entry 3 has neither bytes nor a path/
+  )
+})
+
+test('with a model of its own the ONNX Runtime Web engine runs every loaded model on it', async (t) => {
+  if (!matrixFetched(t)) return
+  const { env, ctxOf } = tensorModule()
+  const engine = onnxRuntimeWeb({ model: matrixEntry('int16').modelBytes, warmup: 1 })(
+    env
+  )
+  await engine.init?.()
+  const OK = { status: anira_status.ANIRA_OK, wrong: -1 }
+  // Whatever the entries name: the engine's own model runs, on the session of its init,
+  // which no unload releases.
+  const first = engine.load(matrixEntry('float32'))
+  const second = engine.load({ row: 1, modelBytes: null, modelPath: null })
+  assert.equal(first.destroy, undefined)
+  assert.deepEqual(runMatrix(env, ctxOf, first, ANIRA_DTYPE_I16), OK)
+  assert.deepEqual(runMatrix(env, ctxOf, second, ANIRA_DTYPE_I16), OK)
+  first.destroy?.()
+  assert.deepEqual(runMatrix(env, ctxOf, second, ANIRA_DTYPE_I16), OK)
 })

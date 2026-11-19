@@ -513,7 +513,9 @@ the pipeline. On a prepared handler the call, in order:
    unloaded (the engine's ``unload``); one that another handler, or another variant of this one,
    still runs stays loaded.
 
-The call returns when the memory is released. A driver thread that is not running holds nothing
+The call returns when the memory is released (on the web, what a JavaScript engine built for the
+model in the inference Workers follows a moment later, released by each Worker:
+:ref:`web-engine-loaded`). A driver thread that is not running holds nothing
 back. The selection (unless it raced), the entry count and the processor's prepared object do not
 change, and neither does the latency: the handler reports what its last prepare computed, also
 when the removed variant had the largest internal latency.

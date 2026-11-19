@@ -98,6 +98,11 @@ public:
      * returns at once; a call that ran a request on an instance also runs the requests waiting
      * for that model before it returns, so one call may process several.
      *
+     * On WebAssembly the call first releases what the calling thread's JavaScript engines
+     * built for models unloaded since its last call (em::release_unloaded_js_models): such an
+     * object lives in the realm of the thread that runs the engine's calls, so the thread
+     * releases it itself, between two requests; one atomic load when nothing was unloaded.
+     *
      * The method handles:
      * - Dequeuing inference data from the concurrent queue
      * - Processing the inference request through the appropriate session
@@ -119,7 +124,9 @@ public:
      * wait strategy: either the exponential-backoff polling loop or a blocking
      * wait on the queue's semaphore. Under Emscripten, JS Workers call this
      * directly and the loop always polls (blocking is not possible there).
-     * Returns when should_exit() becomes true.
+     * Returns when should_exit() becomes true; on WebAssembly it first releases whatever the
+     * thread's JavaScript engines built for the models still loaded
+     * (em::release_all_js_models): the thread runs no further engine call.
      *
      * Nothing the loop body calls may throw; as a last resort an exception that reaches
      * the loop is logged once per prepare (anira::RtSite::InferenceThreadBodyThrew) and the
@@ -247,7 +254,9 @@ public:
      * told to stop.
      *
      * Called after every enqueue into the inference queue (Core::enqueue_inference_or_drop, a
-     * stateful session's next dispatch, the drain's requeue) and by request_stop() and stop().
+     * stateful session's next dispatch, the drain's requeue), by request_stop() and stop(), and
+     * on WebAssembly by the unload of a JavaScript engine's model, whose objects each thread
+     * releases at its next execute() (src/platform/emscripten/em_hooks.cpp).
      * On WebAssembly it increments a process-wide word and wakes every Worker parked on it
      * (memory.atomic.notify): run_loop()'s last backoff phase parks on the word for at most
      * 5 ms (memory.atomic.wait32) instead of yielding and sleeping, which in that libc spins

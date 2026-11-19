@@ -8,14 +8,21 @@ export const DOUBLE_ENGINE = 'org.anira-example.double'
 
 defineEngine(DOUBLE_ENGINE, (env) => ({
   async init() {
-    // An engine loads its model here; the Worker enters its loop once this resolved.
+    // What the engine needs for its Worker's life comes here (a runtime to instantiate); the
+    // Worker enters its loop once this resolved.
   },
-  process(ctx: number): number {
-    const { inputs, outputs } = engineTensors(env, ctx)
-    const audio = inputs[0]?.f32
-    const out = outputs[0]?.f32
-    if (!audio || !out) return anira_status.ANIRA_ERROR_NOT_SUPPORTED
-    for (let i = 0; i < out.length; i++) out[i] = 2 * audio[i]
-    return anira_status.ANIRA_OK
-  },
+  // Once per loaded model, in each Worker that runs it: an engine with a model file reads it
+  // here (info.modelBytes) and returns the object that holds what it loaded. This one needs
+  // no model.
+  load: () => ({
+    process(ctx: number): number {
+      const { inputs, outputs } = engineTensors(env, ctx)
+      const audio = inputs[0]?.f32
+      const out = outputs[0]?.f32
+      if (!audio || !out) return anira_status.ANIRA_ERROR_NOT_SUPPORTED
+      for (let i = 0; i < out.length; i++) out[i] = 2 * audio[i]
+      return anira_status.ANIRA_OK
+    },
+    // destroy() would release what load built, when the model is unloaded.
+  }),
 }))

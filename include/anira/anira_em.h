@@ -32,9 +32,19 @@
  * the prepared pointer in unprepare; a the anira_init_info in init; both 0 in release. For an
  * engine, a is the anira_engine_ctx and b the prepared pointer in ANIRA_PHASE_INFERENCE and
  * ANIRA_PHASE_RESET; a the anira_init_info and b the address of the uint64_t provider mask in
- * ANIRA_PHASE_QUERY. The hook returns an anira_status (a void slot ignores it). A hook that
- * throws, and a scope without a registry, are caught in the trampoline: the exception is
- * reported with console.error (rate-limited, not through the anira log, which may be what
+ * ANIRA_PHASE_QUERY. The prepared pointer of an engine call is anira's record of the call's
+ * loaded model, five 32-bit words: the entry's row, the address and the size of its bytes (0
+ * without), the address of its path (0 without), and the loaded model's serial, a number no
+ * other loaded model of the module's life has. An engine's own object of a loaded model lives
+ * in the scope that runs its calls: the registry builds it from the record at the scope's first
+ * call for the model, keeps it under the serial, and releases it in ANIRA_PHASE_UNLOAD, the one
+ * engine call without an engine (key 0): a the address of the uint32_t serials of the models
+ * loaded now, b their count, and whatever the scope built for another model goes. A thread that
+ * runs engine calls makes that call between two of its jobs once a model was unloaded since its
+ * last one, and with no serial at all when it leaves its inference loop; a registry that knows
+ * no such phase returns from it. The hook returns an anira_status (a void slot ignores it). A
+ * hook that throws, and a scope without a registry, are caught in the trampoline: the exception
+ * is reported with console.error (rate-limited, not through the anira log, which may be what
  * threw) and the call returns ANIRA_ERROR_UNKNOWN (a processor) or ANIRA_ERROR_ENGINE (an
  * engine), which fails the chunk the usual way (zeros, the real-time error latched); no
  * JavaScript exception unwinds through a C frame. The trampolines keep {js_key, the engine id}
@@ -66,7 +76,8 @@ extern "C" {
  * globalThis[Symbol.for('anira.registry')]): the functions the trampolines call and
  * their arguments. Appended to, never reordered. 2: the processor hook bits are 1u <<
  * ANIRA_PHASE_* (one index space with anira.hpp's Processor::k_* phase bits); 1 numbered
- * them 1u << n in their own order.
+ * them 1u << n in their own order. Appended under 2: the engine function's call in
+ * ANIRA_PHASE_UNLOAD.
  */
 #define ANIRA_EM_HOOKS_VERSION 2u
 
@@ -205,11 +216,21 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipel
  * behind user_data without crossing into JavaScript. The init slot stays NULL: a
  * JavaScript engine is ready when its Worker's registry booted (its init resolved),
  * before the Worker enters its loop. load, unload, prepare and unprepare are C
- * trampolines that never cross into JavaScript: load reads the entry's model record once
- * on the control thread (its row, its path copied, its bytes borrowed), unload frees it,
- * prepare hands it to every process and reset call as their prepared pointer (what the
- * package's engineModel reads), and unprepare does nothing. edge answers the statement
- * of the slot's direction where one was given and leaves the provider rule of that
+ * trampolines that never cross into JavaScript, since the engine lives in the scopes of
+ * the threads that run its calls and not on the control thread: load builds anira's
+ * record of the loaded model (the entry's row, its path copied, its bytes borrowed, a
+ * serial) and enters the model in the list of the loaded ones, prepare hands the record
+ * to every process and reset call as their prepared pointer, unprepare does nothing, and
+ * unload takes the model out of the list, frees the record and wakes the inference
+ * threads. The engine's own object of a loaded model (what its load returns in the
+ * package, the twin of anira::Engine::Loaded) is built in each scope at the scope's
+ * first call for the model and released there behind the unload, by the registry's
+ * engine in ANIRA_PHASE_UNLOAD: at once on a thread parked in its loop, behind the
+ * inference it is running on a thread inside one (of another model: the unload comes
+ * behind the model's last inference), at its next call on a thread that drives
+ * anira_inference_thread_execute itself. The unload does not wait for them: the control
+ * entry that unloads returns before the scopes released. edge answers the statement of
+ * the slot's direction where one was given and leaves the provider rule of that
  * direction where none was, and stays NULL when neither was given. flags is
  * engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before
  * anira_custom_engine_create. A descriptor that is never created keeps its record.

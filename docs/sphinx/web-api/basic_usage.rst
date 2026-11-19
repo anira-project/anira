@@ -89,7 +89,7 @@ model entry whose engine the module compiled in (the ONNX Runtime one) or a Java
 fetches the entry's file relative to the config's URL and attaches it as bytes
 (``anira_model_config_set_model_bytes``); the other entries (a LibTorch or a TFLite one) keep
 their paths unfetched. A JavaScript engine reads its entry's bytes from that memory in every
-Worker (``load(model)``, :doc:`custom_inference_backends`; the ONNX Runtime Web engine does), so
+Worker (``load(info)``, :doc:`custom_inference_backends`; the ONNX Runtime Web engine does), so
 each model file is fetched once. Serve the model files beside the config the way its paths say. A contract
 file may leave the Hard host blocks to the host: :js:func:`~renderGeometry.measureRenderGeometry` gives them, blocks
 from the render quantum up to the context's burst at the context's rate. A live context renders

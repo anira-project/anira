@@ -3,8 +3,9 @@
 // removeVariant, which block it, and the pool's Workers run the stream's inferences and the
 // warm-up of each added variant side by side. The models are the three variant gain models
 // (y = w * x, w = 0.5, 2 and -1) on the module's built-in ONNX Runtime engine, each with a
-// second entry for a JavaScript engine that computes half of that with what its Worker loaded
-// last (variants-worker.js), so the stream names the variant and the backend of every chunk.
+// second entry for a JavaScript engine that computes half of that on the object its Worker
+// loaded for the model (variants-worker.js), so the stream names the variant and the backend
+// of every chunk.
 // One OfflineAudioContext is rendered through the handler's node and steered through the gate
 // (variants-support.js): held at a chunk where the page selects, so the stream is known sample
 // for sample, and running at a chunk per two milliseconds while the page adds and removes.
@@ -13,8 +14,9 @@
 // handler's entry (the plans appended, a new report, the earlier report object as it was, the
 // selection, the latency and the entry count unchanged, the processor not prepared again); a
 // variant whose warm-up takes its time, added while the stream plays on the JavaScript engine,
-// which loads the two models in turn on its Workers (the page counts the loads): chunks are
-// formed during the call; a removal while the stream plays (the rows marked, find and the
+// whose Workers load the added model beside the playing one (the page counts the loads: each
+// Worker loads a model once): chunks are formed during the call; a removal while the stream
+// plays (the rows marked, find and the
 // selection entries past them, every refusal with its status); two adds that fail, a model of
 // another window and one that does not load, which leave the report as it was; then rounds of
 // add, select, remove the one before, each on a model of its own with two mebibytes of model
@@ -45,7 +47,7 @@ import {
   WORKER_MODULE,
   gateOfLastPrepare,
   gatePrepares,
-  loadCounter,
+  modelCounts,
   modelWithEngine,
   ramp,
   refusal,
@@ -192,6 +194,8 @@ const beforeTheWorkersRun = async (anira, check, models) => {
 const underARenderingNode = async (anira, check, models, counters) => {
   const context = Context.create(anira, { threads: THREADS, workerModule: WORKER_MODULE })
   await context.ready()
+  // What the Workers of the contexts before this one loaded of the model that plays below.
+  const loadedElsewhere = counters.double.loads()
   const contract = warmingContract(anira)
   const handler = handlerOf(anira, context, [models.half])
   handler.prepare(contract)
@@ -269,8 +273,10 @@ const underARenderingNode = async (anira, check, models, counters) => {
       const before = { playing: counters.double.loads(), added: counters.slow.loads() }
       const index = handler.addVariant(models.slow)
       const during = gate.formed() - formed
-      // The Workers hold one model each: the warm-up of the added one and the chunks of the
-      // playing one take turns on them, and each turn is a load.
+      // A Worker holds an object of each model it ran: the warm-up of the added one and the
+      // chunks of the playing one take turns on the Workers, and a Worker loads a model at its
+      // first turn of it alone. The playing model was loaded by the Workers that ran it
+      // before the call (its own warm-up, the chunks since); one that had not loads it now.
       const loaded = {
         playing: counters.double.loads() - before.playing,
         added: counters.slow.loads() - before.added,
@@ -281,13 +287,16 @@ const underARenderingNode = async (anira, check, models, counters) => {
           during >= 2 &&
           handler.planReport().numPlans() === 6 &&
           loaded.added >= 1 &&
-          loaded.added <= WARMUP &&
-          loaded.playing <= WARMUP + THREADS - 1,
+          loaded.added <= THREADS &&
+          before.playing - loadedElsewhere + loaded.playing <= THREADS &&
+          counters.double.reloads() === 0 &&
+          counters.slow.reloads() === 0,
         `a variant whose warm-up sleeps ${WARMUP} x ${SLOW_MS} ms on the JavaScript engine is ` +
           `added while the stream plays on that engine: ${during} chunks were formed during ` +
-          `the call, and it is variant ${index}; the ${THREADS} Workers loaded the added ` +
-          `model ${loaded.added} times for its ${WARMUP} warm-up inferences and the playing ` +
-          `one ${loaded.playing} times in between`
+          `the call, and it is variant ${index}; of the ${THREADS} Workers ${loaded.added} ` +
+          `loaded the added model for its ${WARMUP} warm-up inferences, each once, and ` +
+          `${loaded.playing} loaded the playing one during the call ` +
+          `(${before.playing - loadedElsewhere} had before): no Worker loads a model twice`
       )
     }
     selectAt(await gate.holdNext(), () => handler.setPlan(4))
@@ -358,8 +367,8 @@ const underARenderingNode = async (anira, check, models, counters) => {
     // ---- rounds of add, select, remove -----------------------------------------------------
     // Each round adds a model of its own, BALLAST bytes of it, and removes the one before, so
     // each loads one model and unloads one, and the handler's copy is all that holds a
-    // round's bytes. The first half plays on the JavaScript engine, whose Workers hold what
-    // they loaded last.
+    // round's bytes. The first half plays on the JavaScript engine, whose Workers hold an
+    // object of every model they ran until its variant is removed.
     let previous = 2
     const cycle = ['half', 'double', 'invert']
     for (let round = 0; round < ROUNDS; round++) {
@@ -437,12 +446,12 @@ const run = async () => {
   const anira = await Anira.create()
   anira.setLogSink((record) => console.log(`[anira ${record.group}] ${record.message}`))
   // What the Workers' weight engines load of the two models that share them during an add.
-  const counters = { double: loadCounter(anira), slow: loadCounter(anira) }
+  const counters = { double: modelCounts(anira), slow: modelCounts(anira) }
   const models = {
     half: await variant(anira, 'half'),
-    double: await variant(anira, 'double', { counter: counters.double }),
+    double: await variant(anira, 'double', { counts: counters.double }),
     invert: await variant(anira, 'invert'),
-    slow: await variant(anira, 'invert', { sleepMs: SLOW_MS, counter: counters.slow }),
+    slow: await variant(anira, 'invert', { sleepMs: SLOW_MS, counts: counters.slow }),
     // A model of another form: half the window. And one whose ONNX Runtime entry is no model.
     otherWindow: await variant(anira, 'half', {
       edit: (json) => {

@@ -6,10 +6,13 @@ defineEngine('org.anira-test.slow-init', (env) => ({
   async init() {
     await new Promise((resolve) => setTimeout(resolve, 150))
   },
-  process(ctx) {
-    const { inputs, outputs } = engineTensors(env, ctx)
-    if (!inputs[0]?.f32 || !outputs[0]?.f32) return anira_status.ANIRA_ERROR_NOT_SUPPORTED
-    outputs[0].f32.set(inputs[0].f32)
-    return anira_status.ANIRA_OK
-  },
+  load: () => ({
+    process(ctx) {
+      const { inputs, outputs } = engineTensors(env, ctx)
+      if (!inputs[0]?.f32 || !outputs[0]?.f32)
+        return anira_status.ANIRA_ERROR_NOT_SUPPORTED
+      outputs[0].f32.set(inputs[0].f32)
+      return anira_status.ANIRA_OK
+    },
+  }),
 }))

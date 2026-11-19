@@ -6,7 +6,8 @@
 //
 // It loads onnxruntime-web's wasm module in each Worker and calls its C API synchronously from
 // the Worker's loop, mirroring the built-in ONNX Runtime engine (src/engines/OnnxRuntimeAdapter.cpp):
-// one ORT tensor per model tensor of the call, of the tensor's dtype (the spec's: every dtype anira
+// one session per loaded model (its load creates it, the model's unload releases it), and per
+// call one ORT tensor per model tensor, of the tensor's dtype (the spec's: every dtype anira
 // names, as ONNX's element type), shaped by the session's metadata (a single dynamic dimension
 // resolved from the element count), the outputs copied into the call's tensors. The data is
 // copied both ways: anira's module and onnxruntime-web's are two wasm memories.
@@ -31,7 +32,7 @@ import {
   engineTensors,
   type Engine,
   type EngineFactory,
-  type EngineModel,
+  type EngineLoadInfo,
   type ScopeEnv,
 } from '../registry'
 
@@ -44,10 +45,12 @@ export { ONNXRUNTIME_WEB_ENGINE_ID, ONNXRUNTIME_WEB_ENGINE_EDGES } from './ids'
 
 export type OnnxRuntimeWebOptions = {
   /**
-   * The model: a URL the engine fetches in its init, or the bytes. Default: the model entry the
-   * engine runs (its bytes, which `ModelConfig.fromUrl` attached on the main thread, so the
-   * model is fetched once; or its path, fetched synchronously by the Worker, absolute or
-   * relative to the module's glue).
+   * The model: a URL the engine fetches in its init, or the bytes. The engine then holds one
+   * session of its own from its init for its Worker's life, and every loaded model of the
+   * engine runs on it, whatever its entry names. Default: each loaded model is its own
+   * session, created from the model entry (its bytes, which `ModelConfig.fromUrl` attached on
+   * the main thread, so the model is fetched once; or its path, fetched synchronously by the
+   * Worker, absolute or relative to the module's glue) and released when the model is unloaded.
    */
   model?: string | URL | Uint8Array
   /**
@@ -69,8 +72,8 @@ export type OnnxRuntimeWebOptions = {
    * onnxruntime-web's first-run setup. Default 0. anira's warm-up (a contract's
    * `"warmup": { "fixed": n }`) runs on its built-in engines only; a JavaScript engine warms
    * itself. With `model` the session, and so the warm-up, comes in the engine's init, before
-   * the inference Worker's loop; over the model entry it comes with the entry, at the first
-   * call.
+   * the inference Worker's loop; over a model entry it comes with the entry's load, at the
+   * Worker's first call for that model.
    */
   warmup?: number
 }
@@ -189,73 +192,22 @@ const resolveDims = (dims: number[], elements: number): number[] => {
   return dims.map((d) => (d === -1 ? Math.floor(elements / fixed) : d))
 }
 
-class OnnxRuntimeWebEngine implements Engine {
+/**
+ * One session of onnxruntime-web: a loaded model of the engine in one Worker. Created from the
+ * model's bytes (copied into ORT's own heap, a separate module); `destroy` gives the session,
+ * its run options and the names of its tensors back to ORT.
+ */
+class OnnxRuntimeWebLoaded implements Engine.Loaded {
   private readonly env: ScopeEnv
-  private readonly options: OnnxRuntimeWebOptions
-  private ort: OrtWasmModule | null = null
+  private readonly ort: OrtWasmModule
   private session = 0
   private runOptions = 0
   private inputs: TensorMeta[] = []
   private outputs: TensorMeta[] = []
 
-  constructor(env: ScopeEnv, options: OnnxRuntimeWebOptions) {
+  constructor(env: ScopeEnv, ort: OrtWasmModule, bytes: Uint8Array, warmup: number) {
     this.env = env
-    this.options = options
-  }
-
-  async init(): Promise<void> {
-    const numThreads = this.options.numThreads ?? 1
-    if (!Number.isInteger(numThreads) || numThreads < 1) {
-      throw new Error(
-        `onnxruntime-web: numThreads must be a whole number of at least 1, not ${numThreads}`
-      )
-    }
-    const warmup = this.options.warmup ?? 0
-    if (!Number.isInteger(warmup) || warmup < 0) {
-      throw new Error(
-        `onnxruntime-web: warmup must be a whole number of at least 0, not ${warmup}`
-      )
-    }
-    if (ortRuntime !== null && ortRuntime.numThreads !== numThreads) {
-      throw new Error(
-        `onnxruntime-web: this Worker's runtime runs ${ortRuntime.numThreads} thread(s); an ` +
-          `engine of the same worker module asked for ${numThreads}`
-      )
-    }
-    const bytes = this.options.model ? await readModel(this.options.model) : null
-    ortRuntime ??= { module: startRuntime(numThreads), numThreads }
-    this.ort = await ortRuntime.module
-    if (bytes) this.createSession(bytes)
-  }
-
-  /**
-   * The model entry the calls run: without an explicit `model`, the session is created from the
-   * entry's bytes (copied into ORT's own heap, a separate module) or its fetched path.
-   */
-  load(model: EngineModel): number {
-    if (this.options.model) return anira_status.ANIRA_OK
-    if (this.session !== 0) this.releaseSession()
-    const bytes = model.bytes ?? (model.path !== null ? fetchSync(model.path) : null)
-    if (!bytes) {
-      throw new Error(
-        `onnxruntime-web: model entry ${model.row} has neither bytes nor a path, and no ` +
-          'model was given to onnxRuntimeWeb()'
-      )
-    }
-    this.createSession(bytes)
-    return anira_status.ANIRA_OK
-  }
-
-  private releaseSession(): void {
-    const ort = this.ort!
-    ort._OrtReleaseSession(this.session)
-    if (this.runOptions !== 0) ort._OrtReleaseRunOptions(this.runOptions)
-    this.session = 0
-    this.runOptions = 0
-  }
-
-  private createSession(bytes: Uint8Array): void {
-    const ort = this.ort!
+    this.ort = ort
     const sessionOptions = ort._OrtCreateSessionOptions(99, 1, 1, 0, 0, 0, 0, 3, 0, 0)
     if (sessionOptions === 0)
       throw new Error('onnxruntime-web: _OrtCreateSessionOptions failed')
@@ -267,17 +219,35 @@ class OnnxRuntimeWebEngine implements Engine {
     if (this.session === 0) {
       throw new Error(`onnxruntime-web: _OrtCreateSession failed: ${this.lastError()}`)
     }
-    this.runOptions = ort._OrtCreateRunOptions(2, 0, 0, 0)
-    const sp = ort.stackSave()
-    const counts = ort.stackAlloc(2 * ort.PTR_SIZE)
-    const word = ort.PTR_SIZE === 4 ? 'i32' : 'i64'
-    ort._OrtGetInputOutputCount(this.session, counts, counts + ort.PTR_SIZE)
-    const numInputs = Number(ort.getValue(counts, word))
-    const numOutputs = Number(ort.getValue(counts + ort.PTR_SIZE, word))
-    ort.stackRestore(sp)
-    this.inputs = this.metadata(0, numInputs)
-    this.outputs = this.metadata(numInputs, numOutputs)
-    this.warmUp(this.options.warmup ?? 0)
+    // From here on a throw gives back what was created: nobody holds the object yet.
+    try {
+      this.runOptions = ort._OrtCreateRunOptions(2, 0, 0, 0)
+      const sp = ort.stackSave()
+      const counts = ort.stackAlloc(2 * ort.PTR_SIZE)
+      const word = ort.PTR_SIZE === 4 ? 'i32' : 'i64'
+      ort._OrtGetInputOutputCount(this.session, counts, counts + ort.PTR_SIZE)
+      const numInputs = Number(ort.getValue(counts, word))
+      const numOutputs = Number(ort.getValue(counts + ort.PTR_SIZE, word))
+      ort.stackRestore(sp)
+      this.metadata(this.inputs, 0, numInputs)
+      this.metadata(this.outputs, numInputs, numOutputs)
+      this.warmUp(warmup)
+    } catch (error) {
+      this.destroy()
+      throw error
+    }
+  }
+
+  /** The session, its run options and its tensors' names (ORT allocated them) go back to ORT. */
+  destroy(): void {
+    const ort = this.ort
+    for (const meta of [...this.inputs, ...this.outputs]) ort._OrtFree(meta.namePtr)
+    this.inputs = []
+    this.outputs = []
+    if (this.runOptions !== 0) ort._OrtReleaseRunOptions(this.runOptions)
+    this.runOptions = 0
+    if (this.session !== 0) ort._OrtReleaseSession(this.session)
+    this.session = 0
   }
 
   // `iterations` runs over zeros of the inputs' shapes (a dynamic extent taken as 1) and the
@@ -305,7 +275,7 @@ class OnnxRuntimeWebEngine implements Engine {
 
   process(ctx: number): number {
     const ort = this.ort
-    if (!ort || this.session === 0) return anira_status.ANIRA_ERROR_INVALID_STATE
+    if (this.session === 0) return anira_status.ANIRA_ERROR_INVALID_STATE
     const { inputs, outputs } = engineTensors(this.env, ctx)
     const unsupported = (t: { data: unknown; dtype: number }) =>
       t.data === null || !ONNX_TYPES.has(t.dtype)
@@ -352,7 +322,7 @@ class OnnxRuntimeWebEngine implements Engine {
   // element type shaped `dims`, the output tensors handed to `read` before they are released.
   // False when ORT fails.
   private run(inputs: RunInput[], read: (results: number[]) => void): boolean {
-    const ort = this.ort!
+    const ort = this.ort
     const tensors: number[] = []
     const buffers: number[] = []
     const P = ort.PTR_SIZE
@@ -417,7 +387,7 @@ class OnnxRuntimeWebEngine implements Engine {
   }
 
   private lastError(): string {
-    const ort = this.ort!
+    const ort = this.ort
     const sp = ort.stackSave()
     const out = ort.stackAlloc(2 * ort.PTR_SIZE)
     ort._OrtGetLastError(out, out + ort.PTR_SIZE)
@@ -426,10 +396,11 @@ class OnnxRuntimeWebEngine implements Engine {
     return message ? ort.UTF8ToString(message) : ''
   }
 
-  private metadata(start: number, count: number): TensorMeta[] {
-    const ort = this.ort!
+  // Appends the metadata of `count` tensors from `start` on to `into`: each name is the
+  // object's from there (destroy frees it), also when a later tensor throws.
+  private metadata(into: TensorMeta[], start: number, count: number): void {
+    const ort = this.ort
     const P = ort.PTR_SIZE
-    const result: TensorMeta[] = []
     for (let i = 0; i < count; i++) {
       const sp = ort.stackSave()
       const out = ort.stackAlloc(2 * P)
@@ -454,15 +425,73 @@ class OnnxRuntimeWebEngine implements Engine {
       // The first word: the ONNX element type (0 for a value that is no tensor).
       const onnxType = ort.HEAP32[meta >> 2]
       ort._OrtFree(meta)
-      result.push({ namePtr, dims, onnxType })
+      into.push({ namePtr, dims, onnxType })
     }
-    return result
+  }
+}
+
+class OnnxRuntimeWebEngine implements Engine {
+  private readonly env: ScopeEnv
+  private readonly options: OnnxRuntimeWebOptions
+  private ort: OrtWasmModule | null = null
+  /** The session over `options.model`, the engine's for its Worker's life; null without one. */
+  private own: OnnxRuntimeWebLoaded | null = null
+
+  constructor(env: ScopeEnv, options: OnnxRuntimeWebOptions) {
+    this.env = env
+    this.options = options
+  }
+
+  async init(): Promise<void> {
+    const numThreads = this.options.numThreads ?? 1
+    if (!Number.isInteger(numThreads) || numThreads < 1) {
+      throw new Error(
+        `onnxruntime-web: numThreads must be a whole number of at least 1, not ${numThreads}`
+      )
+    }
+    const warmup = this.options.warmup ?? 0
+    if (!Number.isInteger(warmup) || warmup < 0) {
+      throw new Error(
+        `onnxruntime-web: warmup must be a whole number of at least 0, not ${warmup}`
+      )
+    }
+    if (ortRuntime !== null && ortRuntime.numThreads !== numThreads) {
+      throw new Error(
+        `onnxruntime-web: this Worker's runtime runs ${ortRuntime.numThreads} thread(s); an ` +
+          `engine of the same worker module asked for ${numThreads}`
+      )
+    }
+    const bytes = this.options.model ? await readModel(this.options.model) : null
+    ortRuntime ??= { module: startRuntime(numThreads), numThreads }
+    this.ort = await ortRuntime.module
+    if (bytes) this.own = new OnnxRuntimeWebLoaded(this.env, this.ort, bytes, warmup)
+  }
+
+  /**
+   * One loaded model: a session of its own, created from the entry's bytes (copied into ORT's
+   * own heap, a separate module) or its fetched path, and released by the object's `destroy`
+   * when the model is unloaded. With an explicit `model` every loaded model runs on the
+   * engine's own session instead, which no unload releases.
+   */
+  load(info: EngineLoadInfo): Engine.Loaded {
+    if (!this.ort) throw new Error('onnxruntime-web: load before the engine initialised')
+    const own = this.own
+    if (own) return { process: (ctx) => own.process(ctx) }
+    const bytes =
+      info.modelBytes ?? (info.modelPath !== null ? fetchSync(info.modelPath) : null)
+    if (!bytes) {
+      throw new Error(
+        `onnxruntime-web: model entry ${info.row} has neither bytes nor a path, and no ` +
+          'model was given to onnxRuntimeWeb()'
+      )
+    }
+    return new OnnxRuntimeWebLoaded(this.env, this.ort, bytes, this.options.warmup ?? 0)
   }
 }
 
 /**
- * The factory of `defineEngine` for an ONNX Runtime Web engine: over the model entry it runs
- * (the default), or over `options.model`.
+ * The factory of `defineEngine` for an ONNX Runtime Web engine: a session per loaded model,
+ * over the model entries it runs (the default), or one session over `options.model`.
  */
 export const onnxRuntimeWeb =
   (options: OnnxRuntimeWebOptions = {}): EngineFactory =>

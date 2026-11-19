@@ -146,20 +146,28 @@ const fetchOnce = async (url) => {
 }
 
 /**
- * An int32 in the module's memory that the weight engine counts the loads of a model in (a
- * model made with `counter`): what the Workers' engines were told to load, read by the page.
+ * Three int32 in the module's memory that the weight engine counts a model in (a model made
+ * with `counts`): the loads of the model, one per Worker that ran it; the destroys of the
+ * objects those loads returned; and the loads by a Worker that held an object of the model
+ * already. What the Workers' engines built and released, read by the page.
  */
-export const loadCounter = (anira) => {
-  const address = anira.module._malloc(4)
+export const modelCounts = (anira) => {
+  const address = anira.module._malloc(12)
   const words = () => heap(anira.module).HEAP32
-  Atomics.store(words(), address >>> 2, 0)
-  return { address, loads: () => Atomics.load(words(), address >>> 2) }
+  words().fill(0, address >>> 2, (address >>> 2) + 3)
+  const read = (index) => Atomics.load(words(), (address >>> 2) + index)
+  return {
+    address,
+    loads: () => read(0),
+    destroys: () => read(1),
+    reloads: () => read(2),
+  }
 }
 
 /**
  * A bundled model config with one entry more, for a JavaScript engine of variants-worker.js,
  * whose bytes begin with the float32 values `floats` (what that engine computes with), go on
- * with the address of `counter` (a `loadCounter`, for the weight engine) where one is given,
+ * with the address of `counts` (a `modelCounts`, for the weight engine) where one is given,
  * and end with `ballast` zero bytes (what a model of that size weighs in the heap while it is
  * loaded). `edit` may change the parsed file first.
  */
@@ -168,7 +176,7 @@ export const modelWithEngine = async (
   file,
   engine,
   floats,
-  { edit = (json) => json, ballast = 0, counter = null } = {}
+  { edit = (json) => json, ballast = 0, counts = null } = {}
 ) => {
   const json = edit(JSON.parse(await (await fetchOnce(new URL(file, MODELS))).text()))
   json.models.push({ engine })
@@ -177,9 +185,9 @@ export const modelWithEngine = async (
     fetch: fetchOnce,
   })
   const head = 4 * floats.length
-  const bytes = new Uint8Array(head + (counter === null ? 0 : 4) + ballast)
+  const bytes = new Uint8Array(head + (counts === null ? 0 : 4) + ballast)
   bytes.set(new Uint8Array(new Float32Array(floats).buffer))
-  if (counter !== null) new DataView(bytes.buffer).setUint32(head, counter.address, true)
+  if (counts !== null) new DataView(bytes.buffer).setUint32(head, counts.address, true)
   return model.setModelBytes(json.models.length - 1, bytes)
 }
 

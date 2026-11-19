@@ -1,14 +1,14 @@
-// A JavaScript engine is told its model whenever a call runs another loaded model than the one
-// it loaded last, also when the new model's record lies where the old one's did. Handlers come
-// and go on one context of one Worker, each over a model of its own on the JavaScript engine of
-// weight-worker.js (y = weight * x with the weight its Worker loaded last, as an engine that
-// keeps one session does), each with another weight: a handler is prepared, an
-// OfflineAudioContext is rendered through its node, the handler is destroyed, and the next one
-// is made, whose model record the allocator then places where the last one's was, every few
-// rounds. Every render must be the input times its own handler's weight. (Before the registry
-// told loaded models apart by a serial of their record, it compared the record's address: a
-// handler whose record took a freed one's place rendered the weight of a handler before it,
-// in seven of this page's 48 rounds.) The verdict is window.anira_test_result.
+// A JavaScript engine loads every loaded model into an object of its own, also a model whose
+// record lies where an unloaded one's did. Handlers come and go on one context of one Worker,
+// each over a model of its own on the JavaScript engine of weight-worker.js (y = weight * x on
+// the object its Worker loaded for the model, as an engine that keeps a session per model
+// does), each with another weight: a handler is prepared, an OfflineAudioContext is rendered
+// through its node, the handler is destroyed, and the next one is made, whose model record the
+// allocator then places where the last one's was, every few rounds. Every render must be the
+// input times its own handler's weight. (The registry tells loaded models apart by a serial of
+// their record; when it compared the record's address, a handler whose record took a freed
+// one's place rendered the weight of a handler before it, in seven of this page's 48 rounds.)
+// The verdict is window.anira_test_result.
 import {
   Anira,
   Context,

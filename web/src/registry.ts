@@ -40,37 +40,98 @@ export interface Processor {
 }
 
 /**
- * The model entry a JavaScript engine runs, what a C engine's load reads of its row
- * (`anira_engine_load_info.row`, `anira_model_config_model_bytes` / `_model_path`): the
- * entry's bytes as a view of the shared memory (no copy; valid while the loaded model lives,
- * so copy what must outlive the call), or its path when it carries no bytes, or neither for an
- * engine that declares `ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL`. `ModelConfig.fromUrl` attaches the
- * bytes of a JavaScript engine's entry, so the model is fetched once, on the main thread.
+ * What a JavaScript engine's `load` receives, the web twin of `anira::EngineLoadInfo`: the
+ * model entry the engine loads, as a C engine's load reads it of its row
+ * (`anira_engine_load_info.row`, `anira_model_config_model_bytes` / `_model_path`).
+ * `ModelConfig.fromUrl` attaches the bytes of a JavaScript engine's entry, so the model is
+ * fetched once, on the main thread. Where the web differs: the C load record lives for the
+ * load call on the main thread, and a Worker loads later, at its first call for the model, from
+ * what anira keeps of the loaded model: its row, that row's path and that row's bytes. The
+ * templates, the names, the instances, the provider and the variant's other entries of
+ * `anira::EngineLoadInfo` are not carried.
  */
-export type EngineModel = {
-  /** The entry's position in the model config's models list. */
+export type EngineLoadInfo = {
+  /** This engine's entry in the variant's model list (`row()`). */
   row: number
-  /** The entry's bytes, a view of the shared memory, or null. */
-  bytes: Uint8Array | null
-  /** The entry's path when it has no bytes, else null. */
-  path: string | null
+  /**
+   * The entry's bytes (`model_bytes(row())`), or null for a path entry: a view of the shared
+   * memory, no copy, valid until the model is unloaded. `destroy` runs behind the unload and
+   * must not read them, so copy what the object needs then.
+   */
+  modelBytes: Uint8Array | null
+  /** The entry's path (`model_path(row())`) when it has no bytes, else null. */
+  modelPath: string | null
 }
 
 /**
- * A JavaScript engine, constructed once per inference Worker: `init` (optional, may be async)
- * runs before the Worker enters its loop; `load` (optional, synchronous) receives the model
- * entry the calls run, on the inference Worker before the first call on a loaded model (and
- * again when a later call runs another one); `process` once per inference (`ctx` an
- * `anira_engine_ctx`, read with `engineTensors`; `prepared` the loaded model's record, which
- * `engineModel` reads), `reset` at a new stream (with `ANIRA_EM_ENGINE_HOOK_RESET`), `query` on
- * the main thread (with `ANIRA_EM_ENGINE_HOOK_QUERY`).
+ * A JavaScript engine, the web twin of `anira::Engine`: `init`, then `load` once per loaded
+ * model, which returns the object the model's inferences run on (`Engine.Loaded`); `query` on
+ * the main thread (with `ANIRA_EM_ENGINE_HOOK_QUERY`). Where the web differs, and why:
+ *
+ * - **One engine per realm.** A Worker is a realm of its own, so `defineEngine`'s factory
+ *   builds one engine in each inference Worker, and `load` runs in each: a loaded model is one
+ *   `Engine.Loaded` per Worker, built at that Worker's first call for the model, inside the
+ *   call (the main thread, where anira loads, cannot reach a Worker's realm). A `load` that
+ *   throws fails that call (`ANIRA_ERROR_ENGINE`: zeros, the real-time error latched) and is
+ *   tried again at the Worker's next call for the model; natively it fails the prepare.
+ * - **`init` has no record and runs at the Worker's boot**, before its loop (it may be
+ *   async), instead of at the first prepare that reaches the engine.
+ * - **No `release`, `flags`, `consumed_kinds`, `providers` and no id:** the engine lives as
+ *   long as its Worker; the id is `defineEngine`'s, the flags and the edge statements are
+ *   `Pipeline.addEngine`'s, on the main thread, which adds the engine before a Worker exists.
  */
 export interface Engine {
+  /** Before the Worker's loop; may be async. What the engine keeps for its Worker's life. */
   init?(): void | Promise<void>
-  load?(model: EngineModel): number | void
-  process(ctx: number, prepared: number): number | void
-  reset?(ctx: number, prepared: number): void
-  query?(initInfo: number, outAvailable: number): number | void
+  /**
+   * Loads the entry's model and returns the object its inferences run on, which anira owns
+   * from then on and destroys when the model is unloaded. Synchronous (the Worker's event
+   * loop does not run). It may throw; returning nothing is an error.
+   */
+  load(info: EngineLoadInfo): Engine.Loaded
+  /**
+   * Which of the engine's providers are usable here, as a bitmask over the list
+   * (`anira::Engine::query`); `initInfo` is the `anira_init_info`. On the main thread, with
+   * `ANIRA_EM_ENGINE_HOOK_QUERY`.
+   */
+  query?(initInfo: number): bigint
+}
+
+// The namespace beside the interface gives the object's type its native name, `Engine.Loaded`
+// for `anira::Engine::Loaded`; it holds a type alone and compiles to nothing.
+export declare namespace Engine {
+  /**
+   * One loaded model of a JavaScript engine in one Worker, the web twin of
+   * `anira::Engine::Loaded`: what `Engine.load` returns. The model's inferences on that Worker
+   * run on it, each over the call's `anira_engine_ctx` (`ctx`, read with `engineTensors`), one
+   * at a time. Where the web differs, and why:
+   *
+   * - **`process` and `reset` are members of the `Loaded`: there is no `Prepared`.** Natively
+   *   `prepare` returns one `Prepared` per handler, which holds what that handler keeps per
+   *   stream. A handler's inferences run on whichever Worker takes them, so an object per
+   *   handler in one Worker's realm would see only some of them and could keep nothing of a
+   *   stream: what a model keeps between calls is its declared State pair, in the shared
+   *   memory. `reset` (with `ANIRA_EM_ENGINE_HOOK_RESET`) runs where the native one does,
+   *   before the first inference of a new stream of an exclusive handler and of a fresh
+   *   variant state, on the Worker that takes that inference.
+   * - **`destroy` stands for the destructor**, as on every class of the package. anira calls
+   *   it once the model is unloaded (the last handler that held it was re-prepared or
+   *   destroyed, or removed its variant), on the object's own Worker: at once when the Worker
+   *   is parked, else behind the inference it is running (of another model: the unload comes
+   *   behind the model's last inference). The control call that unloads returns without
+   *   waiting for it, where the native one returns with the memory released. A Worker that
+   *   leaves its loop destroys what it holds; one that is terminated where it stands (an
+   *   engine call that does not return within 5 s of the stop) runs no `destroy`.
+   * - **No `edge`:** the main thread states the edges per direction (`Pipeline.addEngine`).
+   */
+  interface Loaded {
+    /** One inference; returns an `anira_status` (nothing is `ANIRA_OK`). */
+    process(ctx: number): number | void
+    /** A new stream begins with the inference that follows on this Worker (see above). */
+    reset?(ctx: number): void
+    /** Releases what `load` built for the model. Must not read `EngineLoadInfo.modelBytes`. */
+    destroy?(): void
+  }
 }
 
 export type ProcessorFactory = (env: ScopeEnv) => Processor
@@ -224,7 +285,15 @@ export class Registry {
     )
   }
 
-  /** The engine trampoline's target. */
+  /**
+   * The engine trampoline's target. `ANIRA_PHASE_INFERENCE` and `ANIRA_PHASE_RESET` run on the
+   * scope's object of the call's loaded model (`a` the `anira_engine_ctx`, `b` the model's
+   * record), built by the engine's `load` at the scope's first call for the model.
+   * `ANIRA_PHASE_QUERY` writes the engine's answer to the mask at `b`. `ANIRA_PHASE_UNLOAD`
+   * (`key` 0) releases the scope's objects of unloaded models: `a` is the address of the
+   * serials of the models loaded now, `b` their count, and every object of another model is
+   * destroyed.
+   */
   engine(
     module: AbiModule,
     key: number,
@@ -233,38 +302,79 @@ export class Registry {
     b: number,
     idPtr: number
   ): number {
-    const engine = this.engineOf(heap(module), key, idPtr)
     const p = anira_phase
     switch (phase) {
-      case p.ANIRA_PHASE_INFERENCE: {
-        const loaded = this.loadOnce(module, engine, b)
-        return loaded !== anira_status.ANIRA_OK ? loaded : status(engine.process(a, b))
-      }
+      case p.ANIRA_PHASE_INFERENCE:
+        return status(this.loadedOf(heap(module), key, idPtr, b).process(a))
       case p.ANIRA_PHASE_RESET:
-        if (this.loadOnce(module, engine, b) === anira_status.ANIRA_OK)
-          engine.reset?.(a, b)
+        this.loadedOf(heap(module), key, idPtr, b).reset?.(a)
         return anira_status.ANIRA_OK
-      case p.ANIRA_PHASE_QUERY:
-        return status(engine.query?.(a, b))
+      case p.ANIRA_PHASE_QUERY: {
+        const available = this.engineOf(heap(module), key, idPtr).query?.(a)
+        if (available !== undefined) heap(module).HEAPU64[b >>> 3] = available
+        return anira_status.ANIRA_OK
+      }
+      case p.ANIRA_PHASE_UNLOAD:
+        this.unload(new Set(heap(module).HEAPU32.subarray(a >>> 2, (a >>> 2) + b)))
+        return anira_status.ANIRA_OK
     }
     throw new Error(`JavaScript engine ${key}: phase ${phase} is not an engine phase`)
   }
 
-  /** @hidden The serial of the loaded model each engine of this scope loaded last. */
-  private readonly loadedModels = new WeakMap<Engine, number>()
+  /**
+   * @hidden What this scope's engines loaded: the object of each loaded model one of its
+   * calls ran here, by the model's serial.
+   */
+  private readonly loaded = new Map<number, Engine.Loaded>()
 
-  /** @hidden */
-  private loadOnce(module: AbiModule, engine: Engine, model: number): number {
-    if (!engine.load || model === 0) return anira_status.ANIRA_OK
+  /**
+   * @hidden The scope's object of the loaded model whose record is `record`: the engine's
+   * `load` at the first call for the model, the same object at every later one.
+   */
+  private loadedOf(
+    module: AbiModule,
+    key: number,
+    idPtr: number,
+    record: number
+  ): Engine.Loaded {
     // The record's serial names the loaded model. Its address does not: the record of a model
     // loaded later may lie where the record of an unloaded one lay (a handler destroyed, a
-    // variant removed), and the engine must not run the new model with what it loaded for
-    // the old one.
-    const serial = heap(module).HEAPU32[(model + ENGINE_MODEL_SERIAL) >>> 2]
-    if (this.loadedModels.get(engine) === serial) return anira_status.ANIRA_OK
-    const loaded = status(engine.load(engineModel(this.envOf(module), model)))
-    if (loaded === anira_status.ANIRA_OK) this.loadedModels.set(engine, serial)
+    // variant removed), and the new model must not run on the object of the old one.
+    const serial = record === 0 ? 0 : module.HEAPU32[(record + ENGINE_MODEL_SERIAL) >>> 2]
+    const known = this.loaded.get(serial)
+    if (known !== undefined) return known
+    const engine = this.engineOf(module, key, idPtr)
+    if (record === 0) {
+      throw new Error(
+        `JavaScript engine ${key}: a call without its loaded model's record`
+      )
+    }
+    const loaded = engine.load(engineLoadInfo(module, record))
+    if (!loaded) {
+      throw new Error(
+        `JavaScript engine ${key}: load returned no object: nothing can run the inference`
+      )
+    }
+    this.loaded.set(serial, loaded)
     return loaded
+  }
+
+  /**
+   * @hidden Destroys the scope's object of every model whose serial is not in `stillLoaded`.
+   * Every object goes, also behind a `destroy` that throws; the first throw is passed on.
+   */
+  private unload(stillLoaded: ReadonlySet<number>): void {
+    const thrown: unknown[] = []
+    for (const [serial, loaded] of this.loaded) {
+      if (stillLoaded.has(serial)) continue
+      this.loaded.delete(serial)
+      try {
+        loaded.destroy?.()
+      } catch (error) {
+        thrown.push(error)
+      }
+    }
+    if (thrown.length > 0) throw thrown[0]
   }
 
   /** The log hook's target. */
@@ -291,8 +401,9 @@ export const defineProcessor = (name: string, factory: ProcessorFactory): number
 
 /**
  * Define a JavaScript engine under its reverse-URI `id` in this scope: in the inference Workers'
- * module (`process`, `reset`; built and `init`ed before each Worker's loop) and, for `query`,
- * on the main thread. Returns the engine's key (`keyOf`).
+ * module (built and `init`ed before each Worker's loop; `load` and the loaded models' `process`,
+ * `reset` and `destroy` run there) and, for `query`, on the main thread. Returns the engine's
+ * key (`keyOf`).
  */
 export const defineEngine = (id: string, factory: EngineFactory): number =>
   scopeRegistry().defineEngine(id, factory)
@@ -355,26 +466,26 @@ export const engineTensors = (
   }
 }
 
-// The record a JavaScript engine's calls receive as `prepared` (src/platform/emscripten/
-// em_hooks.cpp, EngineModel): five 32-bit words, the row, the bytes, their size, the path, and
-// the loaded model's serial, which no other loaded model of the module's life has.
+// anira's record of a loaded model of a JavaScript engine, which the engine trampoline hands
+// to every call (src/platform/emscripten/em_hooks.cpp, EngineModel): five 32-bit words, the
+// row, the bytes, their size, the path, and the loaded model's serial, which no other loaded
+// model of the module's life has.
 const ENGINE_MODEL_ROW = 0
 const ENGINE_MODEL_BYTES = 4
 const ENGINE_MODEL_SIZE = 8
 const ENGINE_MODEL_PATH = 12
 const ENGINE_MODEL_SERIAL = 16
 
-/** The model entry of an engine call's `prepared` record (see `EngineModel`). */
-export const engineModel = (env: ScopeEnv, prepared: number): EngineModel => {
-  const m = env.module
-  const word = (offset: number) => heap(m).HEAPU32[(prepared + offset) >>> 2]
+// What an engine's load receives of the loaded model's record (see `EngineLoadInfo`).
+const engineLoadInfo = (m: AbiModule, record: number): EngineLoadInfo => {
+  const word = (offset: number) => heap(m).HEAPU32[(record + offset) >>> 2]
   const bytes = word(ENGINE_MODEL_BYTES)
   const size = word(ENGINE_MODEL_SIZE)
   const path = word(ENGINE_MODEL_PATH)
   return {
     row: word(ENGINE_MODEL_ROW),
-    bytes: bytes === 0 ? null : new Uint8Array(heap(m).HEAPU8.buffer, bytes, size),
-    path: path === 0 ? null : m.UTF8ToString(path),
+    modelBytes: bytes === 0 ? null : new Uint8Array(heap(m).HEAPU8.buffer, bytes, size),
+    modelPath: path === 0 ? null : m.UTF8ToString(path),
   }
 }
 

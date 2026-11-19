@@ -262,7 +262,9 @@ export class InferenceHandler {
    * has returned and until the variant's inferences in flight have ended, without a timeout
    * (their chunks are delivered; a node that is not rendering holds nothing back), and releases
    * the models: a model no other plan of any handler runs is unloaded. It returns when the
-   * memory is released.
+   * module's memory is released; what a JavaScript engine loaded for the model in the Workers
+   * (its `Engine.Loaded` objects) is destroyed by each Worker at its next look at the queue, at
+   * once for a parked one, which this call does not wait for.
    *
    * The variant's index is never given out again (`addVariant` continues behind the highest
    * index the stage has had); a later prepare keeps the indices of the variants that remain and

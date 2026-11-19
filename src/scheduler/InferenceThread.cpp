@@ -29,6 +29,7 @@
 
 #include <string>
 
+#include "../platform/emscripten/em_hooks.h"
 #include "../platform/emscripten/em_worker.h"
 #endif
 
@@ -295,6 +296,12 @@ void InferenceThread::run_loop() {
                                     "continues");
         }
     }
+#ifdef __EMSCRIPTEN__
+    // This thread runs no further engine call: what its JavaScript engines built for the
+    // models still loaded goes here, on its own thread, while the object still counts as
+    // inside its loop (stop() waits for the Worker to leave and terminates it behind this).
+    em::release_all_js_models();
+#endif
 }
 
 #ifndef __EMSCRIPTEN__
@@ -351,6 +358,14 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 }
 
 bool InferenceThread::execute() {
+#ifdef __EMSCRIPTEN__
+    // WebAssembly: a JavaScript engine's object of a loaded model lives in the realm of the
+    // thread that runs its calls, so the model's unload cannot release it from the control
+    // thread. This thread releases its own here, between two jobs: one atomic load while no
+    // model was unloaded since its last look (the unload bumps the wake word, so a parked
+    // Worker gets here at once).
+    em::release_unloaded_js_models();
+#endif
     // Non-tokenized dequeue: scans all producer sub-queues, so a task enqueued
     // via any producer token is reliably found even by a single consumer, and
     // it never allocates (see issue #77).

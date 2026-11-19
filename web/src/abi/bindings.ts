@@ -7176,12 +7176,22 @@ export class AniraBindings {
    * behind user_data without crossing into JavaScript. The init slot stays NULL: a
    * JavaScript engine is ready when its Worker's registry booted (its init resolved),
    * before the Worker enters its loop. load, unload, prepare and unprepare are C
-   * trampolines that never cross into JavaScript: load reads the entry's model record
-   * once on the control thread (its row, its path copied, its bytes borrowed), unload
-   * frees it, prepare hands it to every process and reset call as their prepared pointer
-   * (what the package's engineModel reads), and unprepare does nothing. edge answers the
-   * statement of the slot's direction where one was given and leaves the provider rule of
-   * that direction where none was, and stays NULL when neither was given. flags is
+   * trampolines that never cross into JavaScript, since the engine lives in the scopes of
+   * the threads that run its calls and not on the control thread: load builds anira's
+   * record of the loaded model (the entry's row, its path copied, its bytes borrowed, a
+   * serial) and enters the model in the list of the loaded ones, prepare hands the record
+   * to every process and reset call as their prepared pointer, unprepare does nothing,
+   * and unload takes the model out of the list, frees the record and wakes the inference
+   * threads. The engine's own object of a loaded model (what its load returns in the
+   * package, the twin of anira::Engine::Loaded) is built in each scope at the scope's
+   * first call for the model and released there behind the unload, by the registry's
+   * engine in ANIRA_PHASE_UNLOAD: at once on a thread parked in its loop, behind the
+   * inference it is running on a thread inside one (of another model: the unload comes
+   * behind the model's last inference), at its next call on a thread that drives
+   * anira_inference_thread_execute itself. The unload does not wait for them: the control
+   * entry that unloads returns before the scopes released. edge answers the statement of
+   * the slot's direction where one was given and leaves the provider rule of that
+   * direction where none was, and stays NULL when neither was given. flags is
    * engine_flags; providers stay empty (the CPU path alone), for a C caller to fill
    * before anira_custom_engine_create. A descriptor that is never created keeps its
    * record.
