@@ -1,4 +1,4 @@
-// The worker module of engine-reload.html, which variants-worker.js imports too: every
+// The worker module of engine-loaded.html, which variants-worker.js imports too: every
 // inference Worker of the pages' contexts imports it before its loop. A JavaScript engine whose
 // model is a weight: its `load` reads the weight from the model entry and returns the object
 // that computes with it, one per loaded model and Worker, as an engine that keeps a session per

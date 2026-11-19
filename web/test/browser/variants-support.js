@@ -149,7 +149,8 @@ const fetchOnce = async (url) => {
  * Three int32 in the module's memory that the weight engine counts a model in (a model made
  * with `counts`): the loads of the model, one per Worker that ran it; the destroys of the
  * objects those loads returned; and the loads by a Worker that held an object of the model
- * already. What the Workers' engines built and released, read by the page.
+ * already. What the Workers' engines built and released, read by the page. `held()` is the
+ * objects the Workers hold now.
  */
 export const modelCounts = (anira) => {
   const address = anira.module._malloc(12)
@@ -161,7 +162,23 @@ export const modelCounts = (anira) => {
     loads: () => read(0),
     destroys: () => read(1),
     reloads: () => read(2),
+    held: () => read(0) - read(1),
   }
+}
+
+/**
+ * Waits until `done()` holds and says how many milliseconds that took, or null when it did
+ * not within `timeoutMs`. A Worker destroys what it loaded for a model at its next look at its
+ * queue behind the model's unload, a moment after the call that unloaded returned: the page
+ * looks, and nothing it does in between runs on a Worker.
+ */
+export const eventually = async (done, timeoutMs = 2000) => {
+  const from = performance.now()
+  while (!done()) {
+    if (performance.now() - from > timeoutMs) return null
+    await delay(0)
+  }
+  return performance.now() - from
 }
 
 /**

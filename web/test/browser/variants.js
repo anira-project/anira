@@ -21,7 +21,8 @@
 // Last, what a variant switch costs a JavaScript engine: nothing. Each Worker loads a variant's
 // model once, at its first chunk of it, into an object of its own, so on a context of one
 // Worker a stream that goes to and fro between two variants is one load of each, and a backend
-// switch away from the engine and back is none. The verdict is window.anira_test_result.
+// switch away from the engine and back is none; the Worker keeps both objects while the handler
+// lives and destroys them when it is destroyed. The verdict is window.anira_test_result.
 import {
   Anira,
   Context,
@@ -44,6 +45,7 @@ import {
   RATE,
   WEIGHT_ENGINE,
   WORKER_MODULE,
+  eventually,
   gateOfLastPrepare,
   modelCounts,
   modelWithEngine,
@@ -389,7 +391,21 @@ const engineLoads = async (anira, check) => {
       `${wrong.join(' ') || 'none'})`
   )
 
+  // The handler's destroy unloads both models. The Worker is parked: the unload wakes it, and
+  // it destroys its two objects at its next look at its queue, with no inference behind it.
+  const heldWhileLoaded = counters.map((counter) => counter.held()).join('+')
   handler.destroy()
+  const releasedAfter = await eventually(() => counters.every((c) => c.held() === 0))
+  check(
+    heldWhileLoaded === '1+1' &&
+      releasedAfter !== null &&
+      counters.every((c) => c.loads() === 1 && c.destroys() === 1 && c.reloads() === 0),
+    `the Worker holds its object of each variant while the handler lives (${heldWhileLoaded} ` +
+      `behind the render) and destroys both once the handler is destroyed, parked, without ` +
+      `a further inference (destroys ${counters.map((c) => c.destroys()).join('+')}, seen ` +
+      `${releasedAfter === null ? 'never' : `${releasedAfter.toFixed(1)} ms`} behind the ` +
+      `destroy)`
+  )
   contract.destroy()
   context.destroy()
 }

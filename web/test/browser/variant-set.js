@@ -16,14 +16,17 @@
 // variant whose warm-up takes its time, added while the stream plays on the JavaScript engine,
 // whose Workers load the added model beside the playing one (the page counts the loads: each
 // Worker loads a model once): chunks are formed during the call; a removal while the stream
-// plays (the rows marked, find and the
-// selection entries past them, every refusal with its status); two adds that fail, a model of
+// plays (the rows marked, find and the selection entries past them, every refusal with its
+// status; every Worker that loaded the removed variant's model on the JavaScript engine
+// destroys its object, between two inferences of the stream); two adds that fail, a model of
 // another window and one that does not load, which leave the report as it was; then rounds of
 // add, select, remove the one before, each on a model of its own with two mebibytes of model
 // bytes, half of them on the JavaScript engine: the whole stream is what the selected plan
-// computes, and the heap does not grow by a model per round. First, before any of it: a
+// computes, the heap does not grow by a model per round, and every round's model is loaded by
+// a Worker once and destroyed by every Worker that loaded it. First, before any of it: a
 // prepare whose plans have their figures needs no Worker, an add of a model without one does,
-// and is refused with ANIRA_ERROR_INVALID_STATE until the Workers run. The verdict is
+// and is refused with ANIRA_ERROR_INVALID_STATE until the Workers run; and a context
+// destroyed behind its handler leaves nothing loaded on its Workers. The verdict is
 // window.anira_test_result.
 import {
   Anira,
@@ -45,6 +48,7 @@ import {
   RATE,
   WEIGHT_ENGINE,
   WORKER_MODULE,
+  eventually,
   gateOfLastPrepare,
   gatePrepares,
   modelCounts,
@@ -134,7 +138,7 @@ const heapTop = (anira) => {
 // An add needs a Worker in its loop exactly when it measures: the figures of the first
 // context's prepare let the second context's handler prepare before its Workers run, and the
 // variant added to it, a model without a figure, is refused until they do.
-const beforeTheWorkersRun = async (anira, check, models) => {
+const beforeTheWorkersRun = async (anira, check, models, counters) => {
   const contract = warmingContract(anira)
   const first = Context.create(anira, { threads: 2, workerModule: WORKER_MODULE })
   await first.ready()
@@ -186,9 +190,23 @@ const beforeTheWorkersRun = async (anira, check, models) => {
       `${plans.map((p) => p.variant).join(' ')}, warm-up inferences ` +
       `${plans.map((p) => p.warmupIterations).join(' ')})`
   )
+  // The added variant's warm-up ran on the weight engine: its Workers loaded the model. The
+  // handler and its context go one behind the other, and a Worker that leaves its loop
+  // destroys what it holds before it does: nothing is left when the call returns.
+  const held = counters.double.held()
   handler.destroy()
   contract.destroy()
   context.destroy()
+  check(
+    held >= 1 &&
+      held <= 2 &&
+      counters.double.held() === 0 &&
+      counters.double.reloads() === 0,
+    `a context destroyed right behind its handler leaves nothing loaded: its Workers held ` +
+      `${held} object(s) of the added variant's model on the JavaScript engine ` +
+      `(${counters.double.loads()} loads) and had destroyed them when the destroy returned ` +
+      `(${counters.double.destroys()} destroys)`
+  )
 }
 
 const underARenderingNode = async (anira, check, models, counters) => {
@@ -225,6 +243,9 @@ const underARenderingNode = async (anira, check, models, counters) => {
 
   let top = { warm: 0, end: 0 }
   let used = 0
+  // The counts of each round's model, what the Workers load and destroy of it: allocated
+  // here, so that the rounds allocate their models alone.
+  const roundCounts = Array.from({ length: ROUNDS }, () => modelCounts(anira))
   gate.allow(2)
   const rendered = await renderThrough(handler, gate, [samples], async () => {
     // ---- an add while the render callback is inside the handler's entry --------------------
@@ -330,7 +351,25 @@ const underARenderingNode = async (anira, check, models, counters) => {
         refusal(() => handler.removeVariant(9)),
         refusal(() => handler.removeVariant(2)),
       ]
+      // The second variant played on the JavaScript engine: the Workers that ran it hold an
+      // object of its model. Its removal unloads the model, and each of them destroys its
+      // object at its next look at its queue, between two inferences of the stream, which
+      // plays on (on the built-in engine).
+      const heldOfRemoved = counters.double.held()
+      const formedAtRemoval = gate.formed()
       handler.removeVariant(1)
+      const releasedAfter = await eventually(() => counters.double.held() === 0)
+      check(
+        heldOfRemoved >= 1 &&
+          heldOfRemoved <= THREADS &&
+          releasedAfter !== null &&
+          counters.double.reloads() === 0,
+        `the Workers held ${heldOfRemoved} object(s) of the second variant's model on the ` +
+          `JavaScript engine, and each destroyed its own behind the variant's removal while ` +
+          `the stream played on (seen ` +
+          `${releasedAfter === null ? 'never' : `${releasedAfter.toFixed(1)} ms`} and ` +
+          `${gate.formed() - formedAtRemoval} chunks behind the call)`
+      )
       const last = refusal(() => handler.removeVariant(2))
       check(
         refused.slice(0, 5).every((status) => status === NOT_FOUND) &&
@@ -373,7 +412,12 @@ const underARenderingNode = async (anira, check, models, counters) => {
     const cycle = ['half', 'double', 'invert']
     for (let round = 0; round < ROUNDS; round++) {
       const name = cycle[round % cycle.length]
-      const model = await variant(anira, name, { ballast: BALLAST })
+      // The model's counts make its bytes its own: a model without a figure, so the add
+      // measures it on the JavaScript engine too, and a Worker loads it.
+      const model = await variant(anira, name, {
+        ballast: BALLAST,
+        counts: roundCounts[round],
+      })
       gate.open(PACE_MS)
       const index = handler.addVariant(model)
       model.destroy()
@@ -389,6 +433,24 @@ const underARenderingNode = async (anira, check, models, counters) => {
       if (round === ROUNDS / 2 - 1) top.warm = heapTop(anira)
     }
     top.end = heapTop(anira)
+    // Every round but the last removed the model of the round before: each Worker that loaded
+    // one destroys its object, and the last round's model stays loaded.
+    const removed = roundCounts.slice(0, -1)
+    const last = roundCounts[ROUNDS - 1]
+    const roundsReleased = await eventually(() => removed.every((c) => c.held() === 0))
+    const loads = roundCounts.map((c) => c.loads())
+    check(
+      roundsReleased !== null &&
+        loads.every((count) => count >= 1 && count <= THREADS) &&
+        roundCounts.every((c) => c.reloads() === 0) &&
+        last.destroys() === 0,
+      `each of the ${ROUNDS} rounds' models was loaded on the JavaScript engine by 1 to ` +
+        `${THREADS} Workers, each once (loads per round: ${loads.join(' ')}), and every ` +
+        `Worker that loaded a removed one destroyed its object ` +
+        `(${removed.reduce((sum, c) => sum + c.destroys(), 0)} destroys for ` +
+        `${removed.reduce((sum, c) => sum + c.loads(), 0)} loads of the ${ROUNDS - 1} ` +
+        `removed models); the last round's model stays loaded (${last.held()} held)`
+    )
     used = gate.formed()
     const plans = handler.planReport().plans()
     check(
@@ -434,7 +496,18 @@ const underARenderingNode = async (anira, check, models, counters) => {
       `variant's models back (kept, they were ${(ROUNDS / 2) * (BALLAST / MIB)} MiB)`
   )
 
+  // The handler's destroy unloads what is still loaded: the Workers are parked by now (the
+  // render is over) and destroy their last objects without a further inference.
+  const all = [counters.double, counters.slow, ...roundCounts]
+  const heldAtTheEnd = all.reduce((sum, c) => sum + c.held(), 0)
   handler.destroy()
+  const lastReleased = await eventually(() => all.every((c) => c.held() === 0))
+  check(
+    heldAtTheEnd >= 1 && heldAtTheEnd <= THREADS && lastReleased !== null,
+    `the handler's destroy releases what its Workers still held of its models on the ` +
+      `JavaScript engine (${heldAtTheEnd} object(s)), seen ` +
+      `${lastReleased === null ? 'never' : `${lastReleased.toFixed(1)} ms`} behind the destroy`
+  )
   contract.destroy()
   context.destroy()
 }
@@ -468,7 +541,7 @@ const run = async () => {
     ),
   }
 
-  await beforeTheWorkersRun(anira, check, models)
+  await beforeTheWorkersRun(anira, check, models, counters)
   await underARenderingNode(anira, check, models, counters)
 
   Object.values(models).forEach((model) => model.destroy())
