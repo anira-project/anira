@@ -1,13 +1,16 @@
-// PlanReport.find on a report of two plans: the bundled gain config
+// PlanReport.find on a report of two variants with two plans each: the bundled gain config
 // (extras/models/model-pool/gain.model.json) with one entry more, for the JavaScript engine of
-// pool-worker.js (input times 2 * gain), prepared on a pool of one Wasm Worker that imports it.
-// Its ONNX Runtime entry runs on the module's built-in engine, so the report holds a built-in plan
-// and a custom one. find answers a JavaScript engine by its id, a built-in engine by its kind, a
-// provider alone, every field left out, null for a query no plan matches, and throws for a query
-// against the pair rule. Then setPlan on the plan found for the JavaScript engine, and an
-// OfflineAudioContext rendered through the handler's audio node: the output must be the input
-// times 2 * the gain after the handler's latency, the JavaScript engine's (the built-in plan's
-// would be the gain alone). The verdict is window.anira_test_result.
+// pool-worker.js (input times 2 * gain), twice as the two variants of one inference stage,
+// prepared on a pool of one Wasm Worker that imports the engine. The ONNX Runtime entry runs on
+// the module's built-in engine, so each variant has a built-in plan and a custom one, and the
+// report holds them in variant order. find answers a JavaScript engine by its id, a built-in
+// engine by its kind, a provider alone, every field left out (the first plan each time, variant
+// 0's), a variant alone and a variant with a backend, null for a query no plan matches, and
+// throws for a query against the pair rule. Then setPlan on the plan found for the second
+// variant on the JavaScript engine, and an OfflineAudioContext rendered through the handler's
+// audio node: the output must be the input times 2 * the gain after the handler's latency, the
+// JavaScript engine's (the built-in plan's would be the gain alone). The verdict is
+// window.anira_test_result.
 import {
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
   Anira,
@@ -19,6 +22,7 @@ import {
   Pipeline,
   anira_engine,
   anira_memory_kind,
+  anira_plan_state,
   anira_provider,
   anira_status,
   anira_budget_kind,
@@ -54,6 +58,10 @@ const run = async () => {
   const model = await ModelConfig.fromJson(anira, JSON.stringify(json), {
     baseUrl: MODELS,
   })
+  // The same model again: a variant differs in what it computes at most, and here in nothing.
+  const second = await ModelConfig.fromJson(anira, JSON.stringify(json), {
+    baseUrl: MODELS,
+  })
   const contract = (
     await ContractHandle.fromUrl(anira, new URL('gain.contract.json', MODELS))
   )
@@ -67,7 +75,7 @@ const run = async () => {
     workerModule: new URL('./pool-worker.js', import.meta.url),
   })
   const pipeline = Pipeline.create(anira)
-    .addInference(model)
+    .addInference([model, second])
     .addEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
   const handler = InferenceHandler.create(context, pipeline)
   const report = handler.prepare(contract)
@@ -81,13 +89,22 @@ const run = async () => {
     (p) => p.engine === anira_engine.ANIRA_ENGINE_CUSTOM && p.engineId === ENGINE_ID
   )
   check(
-    plans.length === 2 && builtIn >= 0 && custom >= 0,
+    plans.length === 4 && builtIn >= 0 && builtIn < 2 && custom >= 0 && custom < 2,
     `the report holds the built-in ONNX Runtime plan (${builtIn}) and the JavaScript ` +
-      `engine's (${custom}) of ${plans.length}`
+      `engine's (${custom}) of each variant, ${plans.length} plans`
+  )
+  check(
+    plans.map((p) => p.variant).join(' ') === '0 0 1 1' &&
+      plans[builtIn + 2].engine === plans[builtIn].engine &&
+      plans[custom + 2].engineId === ENGINE_ID &&
+      plans.every((p) => p.state === anira_plan_state.ANIRA_PLAN_READY),
+    `the rows are in variant order, each variant's plans in the same order, every one ` +
+      `ready (variants ${plans.map((p) => p.variant).join(' ')}, states ` +
+      `${plans.map((p) => p.state).join(' ')})`
   )
   check(
     plans.every((p) => p.memoryKind === anira_memory_kind.ANIRA_MEMORY_UNIFIED),
-    `both plans run on the CPU path, in host memory (memory kinds ` +
+    `every plan runs on the CPU path, in host memory (memory kinds ` +
       `${plans.map((p) => p.memoryKind).join(', ')}, read at the wasm32 tail offset 44)`
   )
 
@@ -114,7 +131,21 @@ const run = async () => {
     engine: anira_engine.ANIRA_ENGINE_CUSTOM,
     engineId: 'org.anira-test.none',
   })
-  const missVariant = report.find({ variant: 1 })
+  const missVariant = report.find({ variant: 2 })
+  const ofSecond = [
+    report.find({ variant: 1 }),
+    report.find({ variant: 1, engine: anira_engine.ANIRA_ENGINE_ONNXRUNTIME }),
+    report.find({
+      variant: 1,
+      engine: anira_engine.ANIRA_ENGINE_CUSTOM,
+      engineId: ENGINE_ID,
+    }),
+  ]
+  check(
+    ofSecond[0] === 2 && ofSecond[1] === builtIn + 2 && ofSecond[2] === custom + 2,
+    `the second variant is found by its index: its first plan (${ofSecond[0]}), its plan ` +
+      `on the built-in engine (${ofSecond[1]}) and on the JavaScript engine (${ofSecond[2]})`
+  )
   check(
     missKind === null && missId === null && missVariant === null,
     `a query no plan matches is null (an engine kind ${missKind}, an engine id ${missId}, ` +
@@ -131,8 +162,11 @@ const run = async () => {
       `id beside a built-in engine: ${strayId})`
   )
 
-  handler.setPlan(byId)
-  check(handler.getPlan() === custom, `setPlan selected plan ${handler.getPlan()}`)
+  handler.setPlan(ofSecond[2])
+  check(
+    handler.getPlan() === custom + 2,
+    `setPlan selected plan ${handler.getPlan()}, the second variant's on the JavaScript engine`
+  )
   const latency = handler.getLatency()
   await context.ready()
 
@@ -164,6 +198,7 @@ const run = async () => {
   handler.destroy()
   contract.destroy()
   model.destroy()
+  second.destroy()
   context.destroy()
   return { checks }
 }

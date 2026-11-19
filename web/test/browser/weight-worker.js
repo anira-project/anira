@@ -1,6 +1,7 @@
-// The worker module of engine-reload.html: every inference Worker of the page's context imports
-// it before its loop. A JavaScript engine that reads what it computes from the model entry its
-// Worker loaded last, as an engine that keeps one loaded model per Worker does (the ONNX
+// The worker module of engine-reload.html, which variants-worker.js imports too: every
+// inference Worker of the pages' contexts imports it before its loop. A JavaScript engine that
+// reads what it computes from the model entry its Worker loaded last, as an engine that keeps
+// one loaded model per Worker does (the ONNX
 // Runtime Web engine keeps one session). `load` runs before the first call on a loaded model
 // and again when a later call runs another one, and `process` computes with what the last
 // `load` read, never with anything of the call's own entry. So a call that ran without the
