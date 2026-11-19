@@ -12,6 +12,12 @@ Paths are relative to `/home/faressc/.claude/jobs/2cde6077/tmp/src/<tree>` (`ani
 > - The Hard entries take one `const anira_tensor*` per slot and return a status (no float, `_separate`, `_typed` or `_f32` entries); the Static pair moves whole tensors; the Hard "geometry" is the host blocks (`host_block_min`, `host_block_max`, `host_rate`, `anira_contract_hard_set_host_blocks`, the JSON keys likewise); under overload every ready hop is dropped and filled under `on_miss` at its stream position, `rt_error` recording `ANIRA_ERROR_CAPACITY` (#227).
 > - The core's C++ is private and libanira exports the `anira_*` entries alone; tanh-lib, concurrentqueue and nlohmann_json are absorbed and never installed; the soname is the ABI major (`libanira.so.0` through the pre-releases); a static ELF libanira is one prelinked object; the committed tables are `abi/layout-0.txt` and `abi/symbols-0.txt` until the freeze.
 
+> **As built by M2b's model variants (2026-11-19).** The record's passages on variants and on the selection (the pipeline's "variant sets", `anira_handler_set_model` / `anira_handler_get_model`, `thl::RCU` as the selection candidate natively only, the M5 row of the milestone table) are the plan; what PR V built differs, and sections 6 and 7 of `docs/anira-v3-architecture.md` describe it:
+> - A variant is a model of the identical stream form, and all variants of an inference stage run in one stream; a model of another form is another handler. `anira_pipeline_add_inference` takes the list of variants.
+> - The selection is `anira_handler_set_plan` and two entries by axis, `anira_handler_set_model(handler, variant)` and `anira_handler_set_backend(handler, &backend)`, each a compare-and-swap on the one atomic `anira_handler_get_plan` reads; there is no `anira_handler_get_model`. A variant switch clears nothing of the stream: what it does to the model's state is the Hard option `anira_contract_hard_set_variant_state` (fresh by default, keep).
+> - `thl::RCU` publishes the plan table and the handler's plan rows, natively and on Wasm, read through the reader slots of tanh-lib v0.5.1, which register no thread; the selection stays one atomic. `anira_handler_add_variant` and `anira_handler_remove_variant` change the set of variants on a playing handler, serialised with prepare and destroy by one control lock per handler.
+> - The tags (revised 2026-11-05): `alpha.3` falls inside M2b, after PR 4; M2b exits with `alpha.4` and M3 with `alpha.5`.
+
 ---
 
 ## 1. Principles

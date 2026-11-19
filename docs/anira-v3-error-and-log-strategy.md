@@ -79,8 +79,9 @@ status (every Hard entry returns an `anira_status`; the count is an out-paramete
 failure; `ANIRA_MISSED`, a block the miss policy filled, is a success and none of this
 applies to it); stores the status into the handler's relaxed atomic `rt_error` when it is a contract
 violation (`WRONG_CONTRACT`, `NOT_PREPARED`, `CONFIG` for a dtype or axis mismatch,
-`INVALID_STATE`); pushes one fixed-size record into the core's lock-free queue. `CAPACITY`
-(no free ticket, a full ring) is back-pressure, not a violation: return value only, never
+`INVALID_STATE`, `NOT_FOUND` for a selection that has no plan); pushes one fixed-size record
+into the core's lock-free queue. `CAPACITY` (no free ticket, a full ring, every reader slot of
+a handler's plan table busy) is back-pressure, not a violation: return value only, never
 `rt_error`, never a record. `rt_error` is last-wins, cleared by `prepare` and `reset`, readable
 from a crash handler and a core dump, which is why it exists beside the best-effort record.
 
