@@ -31,7 +31,10 @@ namespace anira {
 /// The status kinds anira_handler_rt_error latches: one bit each. ANIRA_ERROR_CAPACITY as an
 /// entry's return is back-pressure and never latches; a hop the scheduler dropped for want of a
 /// free inference slot, or of room in a queue of the core, latches it under its own kind
-/// (RtLatch::record_drop).
+/// (RtLatch::record_drop). ANIRA_ERROR_CONCURRENT_CALL has a kind, and who records it decides:
+/// a driver-thread entry that overlapped another one does (two threads drive one handler, a
+/// contract violation), a selection entry that overlapped another one does not (a legal
+/// overlap: the caller calls again).
 enum class RtKind : uint32_t {
     WrongContract = 1U << 0,
     NotPrepared = 1U << 1,
@@ -43,6 +46,8 @@ enum class RtKind : uint32_t {
     Other = 1U << 7,     ///< any other status, through record_any only (a processor callback's)
     Dropped = 1U << 8,   ///< ANIRA_ERROR_CAPACITY: a hop dropped, through record_drop only
     NotFound = 1U << 9,  ///< ANIRA_ERROR_NOT_FOUND: a selection that names no plan
+    /// ANIRA_ERROR_CONCURRENT_CALL: a driver-thread entry that overlapped another one
+    ConcurrentCall = 1U << 10,
 };
 
 /// The kind bit of a status; 0 for a status that never latches.
@@ -56,6 +61,7 @@ constexpr uint32_t rt_kind_bit(anira_status status) noexcept {
         case ANIRA_ERROR_ENGINE: return static_cast<uint32_t>(RtKind::Engine);
         case ANIRA_ERROR_NOT_SUPPORTED: return static_cast<uint32_t>(RtKind::NotSupported);
         case ANIRA_ERROR_NOT_FOUND: return static_cast<uint32_t>(RtKind::NotFound);
+        case ANIRA_ERROR_CONCURRENT_CALL: return static_cast<uint32_t>(RtKind::ConcurrentCall);
         default: return 0;
     }
 }

@@ -1898,7 +1898,7 @@ TEST(VariantSet, ASelectionThatRacedARemovalIsMovedToTheFirstReadyPlan) {
     anira_status status = ANIRA_ERROR_INTERNAL;
     std::thread remover;
     {
-        const auto lease = rig.h()->m_plan_row_readers.claim();
+        const auto lease = rig.h()->m_plan_row_reader.claim();
         if (!lease.has_value()) {
             FAIL() << "no free reader slot on an idle handler";
             return;
@@ -1964,9 +1964,10 @@ TEST(VariantSet, ASelectionHammerAgainstRemovalsEndsOnAReadyPlan) {
             const uint32_t index = next++ % (rows + 1);
             const anira_status status = (next % 3 == 0) ? anira_handler_set_model(rig.h(), index)
                                                         : anira_handler_set_plan(rig.h(), index);
-            // A ready plan, a removed one, an index the table does not have, no free reader.
+            // A ready plan, a removed one, an index the table does not have, another selection
+            // entry inside the handler.
             if (status != ANIRA_OK && status != ANIRA_ERROR_NOT_FOUND &&
-                status != ANIRA_ERROR_CONFIG && status != ANIRA_ERROR_CAPACITY) {
+                status != ANIRA_ERROR_CONFIG && status != ANIRA_ERROR_CONCURRENT_CALL) {
                 unexpected.fetch_add(1);
             }
         }

@@ -31,6 +31,7 @@ export const anira_status = {
   ANIRA_ERROR_DEVICE: -21,
   ANIRA_ERROR_EXTENSION_VERSION: -22,
   ANIRA_ERROR_NOT_FOUND: -23,
+  ANIRA_ERROR_CONCURRENT_CALL: -24,
   ANIRA_ERROR_INTERNAL: -100,
 } as const
 /** @internal */

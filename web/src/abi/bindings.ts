@@ -6061,10 +6061,11 @@ export class AniraBindings {
    *   ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_CONFIG for an index
    *   out of range; ANIRA_ERROR_NOT_FOUND for the index of a removed plan
    *   (ANIRA_PLAN_REMOVED: the selection unchanged, recorded in anira_handler_rt_error);
-   *   ANIRA_ERROR_CAPACITY when more than four calls of anira_handler_set_plan,
-   *   anira_handler_set_model and anira_handler_set_backend overlap on the handler (they
-   *   read its plan rows through four reader slots): back-pressure, the selection unchanged
-   *   and nothing recorded; call again. A failed status throws an AniraError.
+   *   ANIRA_ERROR_CONCURRENT_CALL while another call of anira_handler_set_plan,
+   *   anira_handler_set_model or anira_handler_set_backend is inside the handler (the three
+   *   read its plan rows through one reader slot): the selection unchanged and nothing
+   *   recorded; call again, a real-time caller with its next block. A failed status throws
+   *   an AniraError.
    * Thread: [thread-safe] ANIRA_NONBLOCKING
    */
   anira_handler_set_plan(handler: number, plan: number): number {
@@ -6097,15 +6098,16 @@ export class AniraBindings {
    * selection (the one atomic value anira_handler_get_plan reads): the plan is resolved
    * against the plan selected at that moment and stored only while that plan is still
    * selected, so a set_model and a set_backend from two threads both land, in either
-   * order, and a call never undoes the other's axis. What a switch between variants does
-   * to the model's state is the contract's (anira_contract_hard_set_variant_state); a
-   * chunk queued or in flight finishes on its plan, and nothing restarts. When the
-   * variant has no plan on that backend (its entries run on other engines or providers,
-   * the index names no variant, or the variant was removed: a row marked
-   * ANIRA_PLAN_REMOVED is no plan) the selection stays as it is: a no-op recorded as
-   * ANIRA_ERROR_NOT_FOUND in anira_handler_rt_error. A call on an unprepared handler is a
-   * no-op recorded as ANIRA_ERROR_NOT_PREPARED. No allocation, no lock. Not while
-   * anira_handler_prepare runs (prepare is the quiescence point).
+   * order, and a call never undoes the other's axis; one that finds the other inside the
+   * handler returns ANIRA_ERROR_CONCURRENT_CALL and lands when it is called again. What a
+   * switch between variants does to the model's state is the contract's
+   * (anira_contract_hard_set_variant_state); a chunk queued or in flight finishes on its
+   * plan, and nothing restarts. When the variant has no plan on that backend (its entries
+   * run on other engines or providers, the index names no variant, or the variant was
+   * removed: a row marked ANIRA_PLAN_REMOVED is no plan) the selection stays as it is: a
+   * no-op recorded as ANIRA_ERROR_NOT_FOUND in anira_handler_rt_error. A call on an
+   * unprepared handler is a no-op recorded as ANIRA_ERROR_NOT_PREPARED. No allocation, no
+   * lock. Not while anira_handler_prepare runs (prepare is the quiescence point).
    *
    * @param handler The handler.
    * @param variant The variant to run: its index in the inference stage's list
@@ -6113,9 +6115,9 @@ export class AniraBindings {
    * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler;
    *   ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_NOT_FOUND when the
    *   variant has no plan on the selected plan's backend (the selection unchanged);
-   *   ANIRA_ERROR_CAPACITY as anira_handler_set_plan, and when the handler's plan rows were
-   *   replaced under every read of them (the selection unchanged, nothing recorded; call
-   *   again). A failed status throws an AniraError.
+   *   ANIRA_ERROR_CONCURRENT_CALL as anira_handler_set_plan, and when a control entry
+   *   replaced the handler's plan rows under every read of them (the selection unchanged,
+   *   nothing recorded; call again). A failed status throws an AniraError.
    * Thread: [thread-safe] ANIRA_NONBLOCKING
    */
   anira_handler_set_model(handler: number, variant: number): number {
@@ -6154,8 +6156,8 @@ export class AniraBindings {
    *   ANIRA_PROVIDER_CUSTOM without a provider_id or a provider_id beside another
    *   provider); ANIRA_ERROR_NOT_PREPARED before a successful prepare;
    *   ANIRA_ERROR_NOT_FOUND when the selected plan's variant has no plan on that backend
-   *   (the selection unchanged); ANIRA_ERROR_CAPACITY as anira_handler_set_model. A failed
-   *   status throws an AniraError.
+   *   (the selection unchanged); ANIRA_ERROR_CONCURRENT_CALL as anira_handler_set_model. A
+   *   failed status throws an AniraError.
    * Thread: [thread-safe] ANIRA_NONBLOCKING
    */
   anira_handler_set_backend(handler: number, backend: number): number {
@@ -6760,14 +6762,16 @@ export class AniraBindings {
    * ANIRA_ERROR_WRONG_CONTRACT, ANIRA_ERROR_CONFIG, ANIRA_ERROR_INVALID_STATE,
    * ANIRA_ERROR_INVALID_ARGUMENT, ANIRA_ERROR_NOT_SUPPORTED for a host tensor with a flag
    * this library does not know, ANIRA_ERROR_NOT_FOUND for an anira_handler_set_model or
-   * anira_handler_set_backend whose pair has no plan) or ANIRA_ERROR_ENGINE after a
-   * failed inference (its output is zeros), or ANIRA_ERROR_CAPACITY after a hop the
-   * scheduler dropped because no inference slot was free (its output is the miss policy's
-   * fill, at its stream position) or because a queue of the core had no room for its
-   * chunk (its output is zeros at its stream position: an inference thread stalled inside
-   * its dequeue while the handler's other chunks went round the room its prepare
-   * reserved, or no memory for a drain's requeue). An entry's ANIRA_ERROR_CAPACITY return
-   * is back-pressure and never lands here. Last-wins; cleared by prepare and reset. Each
+   * anira_handler_set_backend whose pair has no plan, ANIRA_ERROR_CONCURRENT_CALL for a
+   * driver-thread entry that overlapped another one) or ANIRA_ERROR_ENGINE after a failed
+   * inference (its output is zeros), or ANIRA_ERROR_CAPACITY after a hop the scheduler
+   * dropped because no inference slot was free (its output is the miss policy's fill, at
+   * its stream position) or because a queue of the core had no room for its chunk (its
+   * output is zeros at its stream position: an inference thread stalled inside its
+   * dequeue while the handler's other chunks went round the room its prepare reserved, or
+   * no memory for a drain's requeue). An entry's ANIRA_ERROR_CAPACITY return is
+   * back-pressure and never lands here, and neither does the ANIRA_ERROR_CONCURRENT_CALL
+   * of a selection entry, a legal overlap. Last-wins; cleared by prepare and reset. Each
    * kind is logged once per prepare or reset through the real-time queue (a violation
    * flagged ANIRA_LOG_RECORD_CONTRACT_VIOLATION), later occurrences are counted and the
    * drain reports a persisting condition at most every 10 seconds. One relaxed load:
@@ -6794,7 +6798,10 @@ export class AniraBindings {
    * noticed at the next poll, one leaving during a semaphore wait at the timeout. A host
    * that pumps anira_inference_thread_execute itself is not counted and uses the
    * ANIRA_NONBLOCKING entries. Accepts a planar tensor. Legal from the driver thread only
-   * if the host accepts a wait there; on WebAssembly every wait spins.
+   * if the host accepts a wait there; on WebAssembly every wait spins. Whatever thread
+   * calls it is the handler's driver thread for the length of the call, the wait
+   * included: a _wait twin never overlaps another driver-thread entry or _wait twin of
+   * the same handler (ANIRA_ERROR_CONCURRENT_CALL).
    *
    * @param handler The handler.
    * @param in_ The input block of in_slot, as in anira_handler_process.

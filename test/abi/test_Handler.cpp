@@ -535,7 +535,9 @@ TEST(AbiHandler, SetPlanSwitchesTheRunningPlan) {
 // The selection is one atomic value (the dense plan index, held by the session), so callers
 // on several threads cannot leave get_plan and the running engine in disagreement: with an
 // index beside a backend, two interleaved calls could store the index of one plan and the
-// backend of the other.
+// backend of the other. A call that finds the other thread's call inside the handler stores
+// nothing and returns ANIRA_ERROR_CONCURRENT_CALL (the selection entries share one reader
+// slot): a legal overlap, which records nothing.
 TEST(AbiHandler, ConcurrentSetPlanLeavesOneSelection) {
     const Context context;
     const anira::ModelConfig model = gain_with_custom();
@@ -548,14 +550,24 @@ TEST(AbiHandler, ConcurrentSetPlanLeavesOneSelection) {
     if (info.size() < 2) { GTEST_SKIP() << "one plan: no engine in this build"; }
 
     // No audio runs: only the selection is exercised.
-    const auto hammer = [h](uint32_t plan) {
-        for (int i = 0; i < 20000; ++i) { EXPECT_EQ(anira_handler_set_plan(h, plan), ANIRA_OK); }
+    std::atomic<uint64_t> taken{0};
+    const auto hammer = [h, &taken](uint32_t plan) {
+        for (int i = 0; i < 20000; ++i) {
+            const anira_status status = anira_handler_set_plan(h, plan);
+            if (status == ANIRA_OK) {
+                taken.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                EXPECT_EQ(status, ANIRA_ERROR_CONCURRENT_CALL);
+            }
+        }
     };
     for (int round = 0; round < 20; ++round) {
         std::thread first(hammer, 0U);
         std::thread second(hammer, 1U);
         first.join();
         second.join();
+        EXPECT_GT(taken.load(), 0U) << "round " << round;
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "round " << round;
         const uint32_t selected = anira_handler_get_plan(h);
         ASSERT_LT(selected, 2U) << "round " << round;
         EXPECT_EQ(h->m_manager->get_plan(), selected) << "round " << round;

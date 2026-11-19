@@ -24,7 +24,8 @@
 //   the selection       anira_handler_set_model moves the variant and keeps the backend,
 //                       anira_handler_set_backend the reverse; a pair without a plan changes
 //                       nothing (ANIRA_ERROR_NOT_FOUND, latched); the two on two threads both
-//                       land;
+//                       land, one that meets the other inside the handler when it is called
+//                       again (ANIRA_ERROR_CONCURRENT_CALL);
 //   the measurement     every plan of every variant is warmed up, and the session runs the
 //                       slowest figure;
 //   real models         a bundled model file twice, as two variants, and the three bundled
@@ -1809,7 +1810,10 @@ TEST(Variants, ASelectionWithoutAPlanChangesNothing) {
 
 // A set_model on one thread against a set_backend on another: both land, whichever comes first,
 // since each resolves its plan from the selected one and stores it only while that plan is still
-// selected. From (variant 0, cpu) the two calls end on (variant 1, npu), and back.
+// selected. The selection entries share one reader slot, so a call that finds the other inside
+// the handler returns ANIRA_ERROR_CONCURRENT_CALL with the selection as it is, and lands when
+// it is called again: each thread calls until its call is taken. From (variant 0, cpu) the two
+// calls end on (variant 1, npu), and back. A legal overlap records nothing.
 TEST(Variants, ConcurrentSetModelAndSetBackendBothLand) {
     const anira::ModelConfig first = factor_model("2");
     const anira::ModelConfig second = factor_model("4");
@@ -1827,17 +1831,25 @@ TEST(Variants, ConcurrentSetModelAndSetBackendBothLand) {
     };
     const std::array<Move, 2> moves{{{.m_from = 0, .m_variant = 1, .m_backend = &npu, .m_to = 3},
                                      {.m_from = 3, .m_variant = 0, .m_backend = &cpu, .m_to = 0}}};
+    // What a caller does with ANIRA_ERROR_CONCURRENT_CALL: the same call again.
+    const auto until_taken = [](const auto& call) {
+        anira_status status = call();
+        while (status == ANIRA_ERROR_CONCURRENT_CALL) { status = call(); }
+        return status;
+    };
     for (int round = 0; round < 300; ++round) {
         const Move& move = moves.at(static_cast<size_t>(round % 2));
         ASSERT_EQ(anira_handler_get_plan(h), move.m_from) << "round " << round;
         std::atomic<bool> go{false};
         std::thread model([&] {
             while (!go.load()) {}
-            EXPECT_EQ(anira_handler_set_model(h, move.m_variant), ANIRA_OK);
+            EXPECT_EQ(until_taken([&] { return anira_handler_set_model(h, move.m_variant); }),
+                      ANIRA_OK);
         });
         std::thread backend([&] {
             while (!go.load()) {}
-            EXPECT_EQ(anira_handler_set_backend(h, move.m_backend), ANIRA_OK);
+            EXPECT_EQ(until_taken([&] { return anira_handler_set_backend(h, move.m_backend); }),
+                      ANIRA_OK);
         });
         go.store(true);
         model.join();

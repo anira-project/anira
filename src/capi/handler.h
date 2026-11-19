@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "../scheduler/InferenceManager.h"
-#include "../utils/RcuReaders.h"
+#include "../utils/RcuReaderSlot.h"
 #include "../utils/RtLatch.h"
 #include "engine.h"
 #include "handles.h"
@@ -61,7 +61,7 @@ struct Plan {
  * anira_handler_set_plan, _set_model and _set_backend run on any thread while the stream
  * runs, and a control thread replaces the handler's plan table (anira_handler::m_plans, the
  * control side). So the rows they resolve a selection in are published through a thl::RCU and
- * read through a lease (anira_handler::m_plan_rows, m_plan_row_readers): a version is
+ * read through a lease (anira_handler::m_plan_rows, m_plan_row_reader): a version is
  * immutable, and it owns everything it names. The rows are the report's plan rows by value,
  * and the two id strings a row points at are the version's own (m_strings), not the report's:
  * a lease keeps a version alive, not the report it was made from. Moved, never copied (a copy's
@@ -273,11 +273,15 @@ struct anira_handler {
     /// The plan rows the selection entries read (anira::capi::PlanRows), published from
     /// m_plans by the control thread: at the end of a prepare, before the handler is runnable,
     /// behind every change of the table by a later control entry, and empty by unprepare. Read
-    /// through a lease of m_plan_row_readers, never directly.
+    /// through the lease of m_plan_row_reader, never directly.
     thl::RCU<anira::capi::PlanRows> m_plan_rows{anira::capi::PlanRows{}};
-    /// The reader slots of m_plan_rows, added once, with the handler: a selection entry claims
-    /// one for its call (all busy: ANIRA_ERROR_CAPACITY). Declared behind the rows it reads.
-    anira::RcuReaders<anira::capi::PlanRows> m_plan_row_readers{m_plan_rows};
+    /// The reader slot of m_plan_rows, the selection entries', added once, with the handler: a
+    /// selection entry claims it for its call, and one that finds another selection entry
+    /// inside answers ANIRA_ERROR_CONCURRENT_CALL (its calls are short: the caller calls
+    /// again). The driving thread's entries read another RCU through a slot of their own
+    /// (SessionElement::claim_plans), so neither group holds the other up. Declared behind the
+    /// rows it reads.
+    anira::RcuReaderSlot<anira::capi::PlanRows> m_plan_row_reader{m_plan_rows};
     /**
      * @brief The selected plan: the dense index the next submitted chunk is stamped with.
      *

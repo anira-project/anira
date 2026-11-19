@@ -466,7 +466,7 @@ struct Snapshot {
 
     /// The version of the handler's plan rows a selection entry would read now.
     static const void* published_rows(const Rig& rig) {
-        const auto lease = rig.h()->m_plan_row_readers.claim();
+        const auto lease = rig.h()->m_plan_row_reader.claim();
         return lease.has_value() ? &lease->data() : nullptr;
     }
     /// The version of the session's plan table the driving thread would stamp from now.
@@ -613,7 +613,7 @@ TEST(VariantSetAllocation, TheCommitOfAnAddAllocatesNothing) {
 
     {
         const auto table = rig.session().claim_plans();
-        const auto rows = rig.h()->m_plan_row_readers.claim();
+        const auto rows = rig.h()->m_plan_row_reader.claim();
         if (!table.has_value() || !rows.has_value()) {
             FAIL() << "no free reader slot on an idle handler";
             return;
@@ -676,7 +676,7 @@ TEST(VariantSetAllocation, TheTailOfARemovalThatMovesASelectionAllocatesNothing)
     CommitCount counted;
     std::thread remover;
     {
-        const auto lease = rig.h()->m_plan_row_readers.claim();
+        const auto lease = rig.h()->m_plan_row_reader.claim();
         if (!lease.has_value()) {
             FAIL() << "no free reader slot on an idle handler";
             return;

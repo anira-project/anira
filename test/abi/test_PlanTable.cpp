@@ -1,11 +1,12 @@
 // The plan table of a running stream, replaced by a control thread (src/scheduler/
 // SessionElement.h: PlanTable, publish_plans, synchronize_plans, claim_plans; src/utils/
-// RcuReaders.h). The driving thread stamps every chunk from a published version of the table,
-// read through a lease it holds for one entry; a control thread changes the list that owns the
-// plan slots (Core::add_plan_slot, take_plan_slot), publishes it again, waits for the leases
-// and for the chunks that still count on a slot it took out, and frees that slot itself.
+// RcuReaderSlot.h). The driving thread stamps every chunk from a published version of the
+// table, read through the lease it holds for one entry; a control thread changes the list that
+// owns the plan slots (Core::add_plan_slot, take_plan_slot), publishes it again, waits for the
+// lease and for the chunks that still count on a slot it took out, and frees that slot itself.
 //
-// No C entry adds or removes a plan yet: the writer here is the test, white-box, over a
+// The writer here is the test, white-box (the C entries that add and remove a variant have a
+// suite of their own, test_VariantSet.cpp), over a
 // handler with two custom rows on two engines that multiply by a factor of their own, so the
 // stream says which engine ran every chunk, and a processor that records what every chunk was
 // stamped with. The slots the test appends are built by hand on the loaded model of one of the
@@ -44,7 +45,7 @@
 #include "scheduler/Core.h"
 #include "scheduler/InferenceManager.h"
 #include "scheduler/SessionElement.h"
-#include "utils/RcuReaders.h"
+#include "utils/RcuReaderSlot.h"
 
 namespace {
 
@@ -62,7 +63,6 @@ constexpr float k_factor_a = 1.0F;  // what engine A multiplies its input by
 constexpr float k_factor_b = 2.0F;  // and engine B
 /// The variant a slot built by hand reports: this plus its number.
 constexpr uint32_t k_first_marker = 100;
-constexpr size_t k_num_slots = anira::RcuReaders<SessionElement::PlanTable>::k_num_slots;
 
 /// An engine whose output is its input times a factor of its own: the stream names the engine
 /// that ran a chunk.
@@ -303,53 +303,42 @@ anira_status push_hop(anira_handler* handler, float value) {
     return anira_handler_push_data(handler, &in, 0);
 }
 
-// A lease is neither copied nor moved, so the tests that hold every slot of a pool hold four
-// leases by name.
-static_assert(k_num_slots == 4, "the tests below hold every slot of a pool: four leases by name");
-
 }  // namespace
 
-// ==== the reader pool =========================================================================
+// ==== the reader slot =========================================================================
 
 // A lease is the version of its claim for as long as it lives, and the next claim sees the
-// newest one. A pool has k_num_slots slots: one more lease than that is none, and a lease that
-// dies gives its slot back.
-TEST(RcuReaders, ALeaseHoldsTheVersionOfItsClaimAndEverySlotBusyGivesNone) {
+// newest one. There is one slot: while a lease is out a second claim gets none, and a lease
+// that dies gives the slot back.
+TEST(RcuReaderSlot, ALeaseHoldsTheVersionOfItsClaimAndASecondClaimGetsNone) {
     thl::RCU<int> published(1);
-    const anira::RcuReaders<int> readers(published);
+    const anira::RcuReaderSlot<int> reader(published);
     {
-        const auto first = readers.claim();
+        const auto first = reader.claim();
         if (!first.has_value()) {
-            ADD_FAILURE() << "no lease on a pool nobody reads";
+            ADD_FAILURE() << "no lease on a slot nobody holds";
             return;
         }
         EXPECT_EQ(first->data(), 1);
         published.replace([](int& value) { value = 2; });
         EXPECT_EQ(first->data(), 1) << "the version of the claim";
-        const auto second = readers.claim();
-        if (!second.has_value()) {
-            ADD_FAILURE() << "no second lease";
-            return;
-        }
-        EXPECT_EQ(second->data(), 2) << "the newest version";
+        EXPECT_FALSE(reader.claim().has_value()) << "the slot is held";
+        EXPECT_FALSE(reader.claim().has_value());
     }
     for (int round = 0; round < 3; ++round) {
         SCOPED_TRACE("round " + std::to_string(round));
-        {
-            const auto a = readers.claim();
-            const auto b = readers.claim();
-            const auto c = readers.claim();
-            const auto d = readers.claim();
-            ASSERT_TRUE(a.has_value() && b.has_value() && c.has_value() && d.has_value());
-            EXPECT_FALSE(readers.claim().has_value()) << "every slot is busy";
-            EXPECT_FALSE(readers.claim().has_value());
+        const auto next = reader.claim();
+        if (!next.has_value()) {
+            ADD_FAILURE() << "the lease before did not give the slot back";
+            return;
         }
-        EXPECT_TRUE(readers.claim().has_value()) << "the leases gave their slots back";
+        EXPECT_EQ(next->data(), 2) << "the newest version";
+        EXPECT_FALSE(reader.claim().has_value()) << "the slot is held";
     }
     // Nothing is out: synchronize has nobody to wait for.
     published.replace([](int& value) { value = 3; });
     published.synchronize();
-    const auto last = readers.claim();
+    const auto last = reader.claim();
     if (!last.has_value()) {
         ADD_FAILURE() << "no lease behind the synchronize";
         return;
@@ -357,12 +346,12 @@ TEST(RcuReaders, ALeaseHoldsTheVersionOfItsClaimAndEverySlotBusyGivesNone) {
     EXPECT_EQ(last->data(), 3);
 }
 
-// More readers than slots, on threads that come and go between the slots, beside a writer that
-// frees what it published by hand behind synchronize(), as a plan slot is freed: a reader
-// never sees a freed object (the address sanitizer's report, and the flag here), a claim that
-// finds every slot busy gets none and tries again, and the thread sanitizer sees no race on a
-// slot's hand-over.
-TEST(RcuReaders, ManyReadersOverFewSlotsNeverSeeAFreedObject) {
+// Many readers over the one slot, on threads that take turns on it, beside a writer that frees
+// what it published by hand behind synchronize(), as a plan slot is freed: a reader never sees
+// a freed object (the address sanitizer's report, and the flag here), a claim that finds the
+// slot held gets none and tries again, and the thread sanitizer sees no race on the slot's
+// hand-over.
+TEST(RcuReaderSlot, ManyReadersOverTheOneSlotNeverSeeAFreedObject) {
     constexpr int k_readers = 8;
     constexpr int k_publications = 2000;
     struct Heavy {
@@ -374,7 +363,7 @@ TEST(RcuReaders, ManyReadersOverFewSlotsNeverSeeAFreedObject) {
     };
     auto current = std::make_unique<Heavy>();
     thl::RCU<Published> published(Published{.m_heavy = current.get()});
-    const anira::RcuReaders<Published> readers(published);
+    const anira::RcuReaderSlot<Published> slot(published);
 
     std::atomic<bool> stop{false};
     std::atomic<int> freed_seen{0};
@@ -387,7 +376,7 @@ TEST(RcuReaders, ManyReadersOverFewSlotsNeverSeeAFreedObject) {
         threads.emplace_back([&, reader] {
             while (!stop.load(std::memory_order_acquire)) {
                 {
-                    const auto lease = readers.claim();
+                    const auto lease = slot.claim();
                     if (lease.has_value()) {
                         const Heavy* const heavy = lease->data().m_heavy;
                         if (!heavy->m_alive.load(std::memory_order_acquire) || heavy->m_value < 0) {
@@ -453,15 +442,18 @@ TEST(PlanTable, ALeaseHoldsTheTableOfItsClaim) {
         EXPECT_EQ(slots_before.size(), 2U) << "the table of the claim";
         EXPECT_TRUE(session->select_plan(2)) << "the newest table has the index";
         EXPECT_TRUE(session->select_plan(0));
+        EXPECT_FALSE(session->claim_plans().has_value()) << "the table's one reader slot is held";
+    }
+    {
         const auto behind = session->claim_plans();
         if (!behind.has_value()) {
-            ADD_FAILURE() << "no second lease";
+            ADD_FAILURE() << "no lease behind the first one";
             return;
         }
         ASSERT_EQ(behind->data().m_slots.size(), 3U);
         EXPECT_EQ(behind->data().m_slots[2], appended_address);
     }
-    // The leases are back: the entry is emptied and the leases waited for.
+    // The lease is back: the entry is emptied and the lease waited for.
     std::shared_ptr<PlanSlot> taken = rig.empty(2);
     ASSERT_EQ(taken.get(), appended_address);
     EXPECT_EQ(session->m_plans.size(), 3U) << "the index stays";
@@ -746,9 +738,10 @@ TEST(PlanTable, TheTableIsReplacedBesideARunningStream) {
 
 // The getters and the selection entries beside a table that is replaced under a running
 // stream: eight threads call them all while this one appends and empties slots nobody selects.
-// A getter never answers the unprepared value; a selection entry returns ANIRA_OK or, when
-// more of them overlap than the plan rows have reader slots, ANIRA_ERROR_CAPACITY; the stream
-// stays ordered and complete on the two plans the entries select.
+// A getter never answers the unprepared value; a selection entry returns ANIRA_OK or, when it
+// finds another one inside the handler (the plan rows have one reader slot),
+// ANIRA_ERROR_CONCURRENT_CALL; the stream stays ordered and complete on the two plans the
+// entries select.
 TEST(PlanTable, TheGettersAndTheSelectionEntriesBesideAReplacedTable) {
     constexpr int k_threads = 8;
     constexpr uint32_t k_cycles = 40;
@@ -782,7 +775,7 @@ TEST(PlanTable, TheGettersAndTheSelectionEntriesBesideAReplacedTable) {
             const auto count = [&](anira_status status) {
                 if (status == ANIRA_OK) {
                     selected.fetch_add(1, std::memory_order_relaxed);
-                } else if (status == ANIRA_ERROR_CAPACITY) {
+                } else if (status == ANIRA_ERROR_CONCURRENT_CALL) {
                     busy.fetch_add(1, std::memory_order_relaxed);
                 } else {
                     wrong.fetch_add(1);
@@ -835,18 +828,31 @@ TEST(PlanTable, TheGettersAndTheSelectionEntriesBesideAReplacedTable) {
         EXPECT_EQ(rig.recorder().m_marker_chunks.at(cycle).load(), 0U)
             << "nobody selected the slot of cycle " << cycle;
     }
-    // Back-pressure is a return value: nothing of it reaches the latch.
-    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << busy.load() << " calls found no slot";
+    // Two selection entries that meet are a legal overlap, a return value: nothing of it
+    // reaches the latch. (Eight threads on one slot meet all the time.)
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << busy.load() << " calls found the slot held";
+    EXPECT_GT(busy.load(), 0U);
 }
 
-// Every reader slot busy is ANIRA_ERROR_CAPACITY, behind the checks and before anything moved.
-// With k_num_slots leases on the session's table out, every entry of the driving thread that
-// has a status returns it, delivers nothing and leaves the stream as it was; with the leases
-// back the same calls run. The same for the selection entries over the plan rows, the other
-// pool. It is back-pressure: nothing is recorded in the latch. reset has no status and reads
-// no table: it resets all the same. A selection by axis whose selected plan is no row of the
-// rows it reads gives up after a few reads, with the same status.
-TEST(PlanTable, EveryReaderSlotBusyIsCapacity) {
+// An entry that finds the reader slot of its group held is ANIRA_ERROR_CONCURRENT_CALL, behind
+// the checks and before anything moved. The two groups have a slot each and say different
+// things with the status.
+//
+// With the lease on the session's table out, every entry of the driving thread that has a
+// status returns it, delivers nothing and leaves the stream as it was. That is a second
+// driving thread, which the thread contract forbids: the status is recorded in the latch and
+// logged once, as a contract violation. reset has no status and reads no table: it resets all
+// the same. With the lease back the same calls run.
+//
+// With the lease on the handler's plan rows out, the selection entries return the status and
+// leave the selection as it was. That is a legal overlap: nothing is recorded, and the caller
+// calls again. A selection by axis whose selected plan is no row of the rows it reads gives up
+// after a few reads, with the same status and nothing recorded.
+//
+// Neither group holds the other up.
+TEST(PlanTable, AnEntryThatFindsItsReaderSlotHeldIsAConcurrentCall) {
+    anira_drain_log();
+    RecordCollector collector;
     const TableRig rig;
     anira_handler* const h = rig.handler();
     const std::shared_ptr<SessionElement>& session = rig.session();
@@ -857,72 +863,82 @@ TEST(PlanTable, EveryReaderSlotBusyIsCapacity) {
     const size_t primed = anira_test::available(h);
 
     {
-        // Every reader slot of the session's table is out.
-        const auto a = session->claim_plans();
-        const auto b = session->claim_plans();
-        const auto c = session->claim_plans();
-        const auto d = session->claim_plans();
-        ASSERT_TRUE(a.has_value() && b.has_value() && c.has_value() && d.has_value());
+        // The reader slot of the session's table is held, as by an entry of another driving
+        // thread inside its call.
+        const auto held = session->claim_plans();
+        ASSERT_TRUE(held.has_value());
         EXPECT_FALSE(session->claim_plans().has_value());
         size_t delivered = 77;
-        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_ERROR_CAPACITY);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered),
+                  ANIRA_ERROR_CONCURRENT_CALL);
         EXPECT_EQ(delivered, 0U);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_CONCURRENT_CALL)
+            << "a second driving thread is recorded";
         delivered = 77;
-        EXPECT_EQ(anira_handler_process_multi(h, &io, 1, &io, 1, &delivered), ANIRA_ERROR_CAPACITY);
+        EXPECT_EQ(anira_handler_process_multi(h, &io, 1, &io, 1, &delivered),
+                  ANIRA_ERROR_CONCURRENT_CALL);
         EXPECT_EQ(delivered, 0U);
-        EXPECT_EQ(anira_handler_push_data(h, &io, 0), ANIRA_ERROR_CAPACITY);
-        EXPECT_EQ(anira_handler_push_data_multi(h, &io, 1), ANIRA_ERROR_CAPACITY);
-        EXPECT_EQ(anira_handler_pop_data(h, &io, 0, &delivered), ANIRA_ERROR_CAPACITY);
-        EXPECT_EQ(anira_handler_pop_data_multi(h, &io, 1, &delivered), ANIRA_ERROR_CAPACITY);
+        EXPECT_EQ(anira_handler_push_data(h, &io, 0), ANIRA_ERROR_CONCURRENT_CALL);
+        EXPECT_EQ(anira_handler_push_data_multi(h, &io, 1), ANIRA_ERROR_CONCURRENT_CALL);
+        EXPECT_EQ(anira_handler_pop_data(h, &io, 0, &delivered), ANIRA_ERROR_CONCURRENT_CALL);
+        EXPECT_EQ(anira_handler_pop_data_multi(h, &io, 1, &delivered), ANIRA_ERROR_CONCURRENT_CALL);
         EXPECT_EQ(anira_handler_process_wait(h, &io, 0, &io, 0, &delivered, 0.0),
-                  ANIRA_ERROR_CAPACITY);
+                  ANIRA_ERROR_CONCURRENT_CALL);
         EXPECT_EQ(anira_handler_process_multi_wait(h, &io, 1, &io, 1, &delivered, 0.0),
-                  ANIRA_ERROR_CAPACITY);
-        EXPECT_EQ(anira_handler_pop_data_wait(h, &io, 0, &delivered, 0.0), ANIRA_ERROR_CAPACITY);
+                  ANIRA_ERROR_CONCURRENT_CALL);
+        EXPECT_EQ(anira_handler_pop_data_wait(h, &io, 0, &delivered, 0.0),
+                  ANIRA_ERROR_CONCURRENT_CALL);
         EXPECT_EQ(anira_handler_pop_data_multi_wait(h, &io, 1, &delivered, 0.0),
-                  ANIRA_ERROR_CAPACITY);
+                  ANIRA_ERROR_CONCURRENT_CALL);
         size_t count = 77;
-        EXPECT_EQ(anira_handler_get_available_samples(h, 0, 0, &count), ANIRA_ERROR_CAPACITY);
+        EXPECT_EQ(anira_handler_get_available_samples(h, 0, 0, &count),
+                  ANIRA_ERROR_CONCURRENT_CALL);
         EXPECT_EQ(count, 0U);
-        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "back-pressure is not recorded";
-        // A check that fails is still the first answer, and is recorded as ever.
+        // A check that fails is still the first answer, and the last record wins as ever.
         EXPECT_EQ(anira_handler_push_data(h, &io, 5), ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
-        // reset has no status to refuse with and reads no table: it runs.
+        EXPECT_EQ(anira_handler_push_data(h, &io, 0), ANIRA_ERROR_CONCURRENT_CALL);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_CONCURRENT_CALL);
+        anira_drain_log();
+#ifdef ENABLE_LOGGING
+        EXPECT_EQ(anira_test::count_records(collector, "concurrent call", "rt"), 1U)
+            << "twelve refusals of one kind are one record";
+#else
+        static_cast<void>(collector);
+#endif
+        // reset has no status to refuse with and reads no table: it runs, and re-arms the latch.
         anira_handler_reset(h);
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
-        // The selection entries read the plan rows, another pool: they run.
+        // The selection entries read the plan rows through the other slot: they run.
         EXPECT_EQ(anira_handler_set_plan(h, 1), ANIRA_OK);
         EXPECT_EQ(anira_handler_set_model(h, 0), ANIRA_OK);
     }
     EXPECT_EQ(rig.m_a.m_calls.load() + rig.m_b.m_calls.load(), 0) << "nothing was submitted";
-    EXPECT_EQ(anira_test::available(h), primed) << "nothing moved, and the leases are back";
+    EXPECT_EQ(anira_test::available(h), primed) << "nothing moved, and the lease is back";
     EXPECT_EQ(anira_handler_push_data(h, &io, 0), ANIRA_OK);
 
     {
-        // Every reader slot of the handler's plan rows is out.
-        const auto a = h->m_plan_row_readers.claim();
-        const auto b = h->m_plan_row_readers.claim();
-        const auto c = h->m_plan_row_readers.claim();
-        const auto d = h->m_plan_row_readers.claim();
-        ASSERT_TRUE(a.has_value() && b.has_value() && c.has_value() && d.has_value());
-        EXPECT_EQ(anira_handler_set_plan(h, 0), ANIRA_ERROR_CAPACITY);
-        EXPECT_EQ(anira_handler_set_model(h, 0), ANIRA_ERROR_CAPACITY);
+        // The reader slot of the handler's plan rows is held, as by another selection entry
+        // inside its call.
+        const auto held = h->m_plan_row_reader.claim();
+        ASSERT_TRUE(held.has_value());
+        EXPECT_EQ(anira_handler_set_plan(h, 0), ANIRA_ERROR_CONCURRENT_CALL);
+        EXPECT_EQ(anira_handler_set_model(h, 0), ANIRA_ERROR_CONCURRENT_CALL);
         anira_backend_id backend = ANIRA_BACKEND_ID_INIT;
         backend.engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
         backend.engine_id = k_engine_a;
-        EXPECT_EQ(anira_handler_set_backend(h, &backend), ANIRA_ERROR_CAPACITY);
+        EXPECT_EQ(anira_handler_set_backend(h, &backend), ANIRA_ERROR_CONCURRENT_CALL);
         EXPECT_EQ(anira_handler_get_plan(h), 1U) << "the selection as it was";
-        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "a legal overlap is not recorded";
         // A check that fails is the first answer here too.
         EXPECT_EQ(anira_handler_set_backend(h, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
-        // The getters read no table, and the driving thread's entries the other pool.
+        // The getters read no table, and the driving thread's entries the other slot.
         EXPECT_GT(anira_handler_get_latency(h, 0), 0U);
         EXPECT_NE(anira_handler_plan_report(h), nullptr);
         size_t count = 0;
         EXPECT_EQ(anira_handler_get_available_samples(h, 0, 0, &count), ANIRA_OK);
     }
-    EXPECT_EQ(anira_handler_set_plan(h, 0), ANIRA_OK);
+    EXPECT_EQ(anira_handler_set_plan(h, 0), ANIRA_OK) << "the same call again lands";
     EXPECT_EQ(anira_handler_get_plan(h), 0U);
     anira_handler_reset(h);
 
@@ -930,7 +946,7 @@ TEST(PlanTable, EveryReaderSlotBusyIsCapacity) {
     // only a table published behind the read can have such a selection): the entry reads again,
     // then gives up. set_plan reads no selection and runs.
     h->m_selected_plan.store(9);
-    EXPECT_EQ(anira_handler_set_model(h, 0), ANIRA_ERROR_CAPACITY);
+    EXPECT_EQ(anira_handler_set_model(h, 0), ANIRA_ERROR_CONCURRENT_CALL);
     EXPECT_EQ(anira_handler_get_plan(h), 9U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
     EXPECT_EQ(anira_handler_set_plan(h, 0), ANIRA_OK);

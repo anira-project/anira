@@ -209,9 +209,9 @@ public:
      * the session's plan table, read through a lease (SessionElement::claim_plans). `plans` is
      * that version: a C entry claims the lease first, holds it for its whole call and passes
      * its table, so every chunk of the call is stamped from one version and the entry can
-     * refuse before anything moved when no reader slot is free. A caller that holds no lease
+     * refuse before anything moved when the reader slot is held. A caller that holds no lease
      * (a white-box caller of the stems) passes NULL: the stem claims one for its submission,
-     * and when every reader slot is busy it submits nothing in this call: the hops stay in the
+     * and when another caller holds the slot it submits nothing in this call: the hops stay in the
      * send rings, and the next call submits them.
      */
     ///@{
@@ -222,7 +222,7 @@ public:
      * SessionElement::claim_plans(): what a C entry claims before its stem, holds until it
      * returns, and passes the stem as `plans` (`&lease->data()`).
      *
-     * @return The lease, or nothing when every reader slot is busy
+     * @return The lease, or nothing while another caller holds the reader slot
      */
     std::optional<SessionElement::PlanLease> claim_plans() const noexcept ANIRA_NONBLOCKING {
         return m_session->claim_plans();
@@ -761,7 +761,7 @@ private:
      * @brief Submits what the call made ready: Core::new_data_submitted() over a plan table
      *
      * `plans` when the caller holds a lease (a C entry's, for its whole call); else a lease
-     * claimed here for the submission alone. When every reader slot is busy then, nothing is
+     * claimed here for the submission alone. When another caller holds the slot then, nothing is
      * submitted: the hops stay in the send rings, and the next call submits them.
      *
      * @param plans The plan table of the caller's lease, or NULL

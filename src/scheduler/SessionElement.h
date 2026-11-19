@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "../utils/RcuReaders.h"
+#include "../utils/RcuReaderSlot.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
@@ -673,23 +673,24 @@ public:
     };
 
     /// A read lease on the published plan table: the version of the claim, for the lease's
-    /// life (RcuReaders::Lease).
-    using PlanLease = RcuReaders<PlanTable>::Lease;
+    /// life (RcuReaderSlot::Lease).
+    using PlanLease = RcuReaderSlot<PlanTable>::Lease;
 
     /**
-     * @brief Claims a read lease on the published plan table
+     * @brief Claims the read lease on the published plan table
      *
      * What every entry of the driving thread holds for the whole call (the six Hard entries,
-     * their _wait twins, the ring state, reset) and stamps its chunks from: the first free
-     * reader slot by compare-and-swap, the others in turn, so the driving thread need not be
-     * one thread, and two calls that overlap each read through a slot of their own. No
+     * their _wait twins, the ring state, reset) and stamps its chunks from: the table's one
+     * reader slot, claimed by compare-and-swap, so the driving thread need not always be the
+     * same thread. One slot, because the driving thread's entries never overlap on one
+     * session: a claim that finds the slot held has met a second driving thread. No
      * allocation, no lock.
      *
-     * @return The lease, or nothing when every slot is busy (ANIRA_ERROR_CAPACITY; with one
-     * driving thread it does not happen)
+     * @return The lease, or nothing while another entry holds the slot
+     * (ANIRA_ERROR_CONCURRENT_CALL; with one driving thread it does not happen)
      */
     std::optional<PlanLease> claim_plans() const noexcept ANIRA_NONBLOCKING {
-        return m_plan_readers.claim();
+        return m_plan_reader.claim();
     }
 
     /**
@@ -1116,9 +1117,10 @@ private:
     /// The published plan table: what publish_plans() replaces and a read lease holds a
     /// version of. Empty until Core::create_session publishes the list it built.
     thl::RCU<PlanTable> m_plan_table;
-    /// The reader slots of m_plan_table, added once, here, on the control thread that makes
-    /// the session; claim_plans() hands out the leases. Declared behind the table it reads.
-    RcuReaders<PlanTable> m_plan_readers{m_plan_table};
+    /// The reader slot of m_plan_table, the driving thread's, added once, here, on the control
+    /// thread that makes the session; claim_plans() hands out its lease. Declared behind the
+    /// table it reads.
+    RcuReaderSlot<PlanTable> m_plan_reader{m_plan_table};
     /// The entries of the table published last (its indices, the empty ones included): what
     /// select_plan checks an index against, from any thread. Stored by publish_plans().
     std::atomic<uint32_t> m_num_published_plans{0};

@@ -349,7 +349,7 @@ void InferenceManager::submit(const SessionElement::PlanTable* plans) {
     }
     // A caller without a lease: one for this submission.
     const std::optional<SessionElement::PlanLease> lease = m_session->claim_plans();
-    // Every reader slot busy: nothing is stamped in this call. What the call made ready stays
+    // The reader slot is held: nothing is stamped in this call. What the call made ready stays
     // in the send rings, and the next call submits it.
     if (!lease.has_value()) { return; }
     Core::new_data_submitted(m_session, lease->data());
