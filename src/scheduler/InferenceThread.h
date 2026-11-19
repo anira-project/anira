@@ -446,8 +446,13 @@ private:
      * position, the gate is released and the next pending dispatch claimed in its
      * turn, until one is in the queue or none is pending: no task is left waiting
      * behind a free gate. Shared continuation of every session-exclusive task
-     * boundary except the uninitialized skip, which must not dispatch new work
-     * into a drain's window.
+     * boundary except the uninitialized skip, where the chain stops and the
+     * pending tasks are left to the session's drainer. That exception shortens a
+     * drain; it is not what makes one safe. Every dispatch counts its task on the
+     * session before the enqueue, while the job that dispatches still counts
+     * itself, so a drain never sees the session's count at zero in between: the
+     * end of a job and the stale skip dispatch into a drain's window on that
+     * ground, without a test of the session's initialized flag (process_job).
      *
      * @param session Session whose dispatch chain to continue
      */

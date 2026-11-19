@@ -1720,8 +1720,13 @@ void Core::try_dispatch_stateful(const std::shared_ptr<SessionElement>& session)
     // dispatches (InferenceThread::dispatch_next_pending): a chunk the queue refuses is dropped,
     // the gate freed, and the pending queue looked at again, the look every release of the gate
     // owes while the session runs (SessionElement::try_acquire_next_dispatch). One turn per
-    // parked chunk at most; nothing in a turn blocks or allocates, and a drop logs at its
-    // rate-limited site alone (enqueue_inference_or_drop).
+    // parked chunk: on the driving thread at most the chunks parked at the call, since that
+    // thread is the pending queue's one producer. On a control thread that kicks a running
+    // session (wait_until_unused, another session's drain) the driving thread can park more
+    // meanwhile, never more than the struct pool holds at once: it forms a chunk only in a
+    // free struct, and gets a dropped chunk's struct back only by collecting it. Nothing in a
+    // turn blocks or allocates, and a drop logs at its rate-limited site alone
+    // (enqueue_inference_or_drop).
     while (auto next = session->try_acquire_next_dispatch()) {
         // The gate's token, ahead of the chunk's done signal on the drop path.
         const uint64_t gate_token = next->m_dispatch_epoch;
@@ -2074,12 +2079,15 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                         // The other session runs: the chunks parked behind the dropped one are
                         // dispatched from here, or they would wait for its driving thread's next
                         // call. Whoever takes the gate may use the session's producer token,
-                        // whose blocks were reserved, and this thread holds no lock. The dropped
-                        // job still counts on that session (its count goes back below), as an
-                        // inference thread's job does while it dispatches a successor, so a
-                        // drain of that session waits for this dispatch too. And as for a job
-                        // that finds its session uninitialised: no successor then, the pending
-                        // entries are that session's drainer's.
+                        // whose blocks were reserved, and this thread holds no lock. What makes
+                        // the dispatch safe against a drain of that session is the order: it
+                        // counts the successor on the session before the enqueue, and the
+                        // dropped job's count goes back below, behind it, so that drain never
+                        // reads zero in between (as with an inference thread's job that
+                        // dispatches a successor). The flag is not what makes it safe: it stops
+                        // the chain at a session that is uninitialised, whose parked chunks its
+                        // drainer takes in one step, as a job that finds its session so does
+                        // (InferenceThread::process_job).
                         if (other.m_session->m_initialized.load(std::memory_order::seq_cst)) {
                             try_dispatch_stateful(other.m_session);
                         }

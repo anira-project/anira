@@ -596,10 +596,23 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
         } else {
             // Session momentarily uninitialized (prepare/release drain in progress).
             // Complete as silence so the struct is not stranded without a completion
-            // signal, and end the exclusive task's turn on the chain — but NEVER
-            // dispatch a successor here: new work injected into the drain's window
-            // would let drain_inference_queue() return before quiescence. Pending
-            // entries are the drainer's job (force_reset_dispatch_chain in prepare).
+            // signal, and end the exclusive task's turn on the chain without a successor:
+            // the chain stops here. That is what the flag is for in this branch, and all it
+            // is for: a successor would only travel through the inference queue to be
+            // completed as zeros by the drain or by a job like this one, and the drain would
+            // wait for each, while the drainer takes what stays parked in one step
+            // (force_reset_dispatch_chain in prepare, the loop of release_session).
+            //
+            // The flag is NOT what makes a drain safe, and a dispatch needs no test of it for
+            // that. The count is: every dispatch counts its chunk on m_active_inferences
+            // before the enqueue (dispatch_next_pending, Core::enqueue_inference_or_drop),
+            // and the job that dispatches still holds its own count, which the guard above
+            // gives back behind this body. So Core::drain_inference_queue, which returns at a
+            // count of zero, never reads zero between the end of a job and the count of its
+            // successor. The end of a job (do_inference) and the stale skip above dispatch
+            // on that ground alone, into a drain's window too, and no test is missing there.
+            // Once the flag is false it stays false for the job's life: it is set again
+            // behind the drain, which waits for the job.
             session->complete_with_zeros(thread_safe_struct);
             signalled = true;
             if (session->exclusive()) { session->release_dispatch(gate_token); }
@@ -609,8 +622,10 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
         // stranded without its done signal, and never signalled twice. The exclusive task's
         // turn on the chain ends here as at the end of a job: the gate is freed and the next
         // parked chunk dispatched, so the chunks behind this one do not wait for the driving
-        // thread's next call. Under the rule of the branch above: no successor for a session
-        // that is uninitialised by now, whose pending entries are its drainer's.
+        // thread's next call. The test of the flag is the one of the branch above, for its
+        // reason alone: the chain stops at a session that is uninitialised by now, whose
+        // parked chunks its drainer takes. The dispatch would be safe without the test: this
+        // job still counts on the session (see there).
         if (!signalled) {
             session->complete_with_zeros(thread_safe_struct);
             if (session->exclusive()) {
@@ -634,7 +649,10 @@ void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement
     // at again, which is what every release of the gate owes while the session runs
     // (SessionElement::try_acquire_next_dispatch). To leave behind the freed gate would keep
     // the chunks behind the dropped one parked until the driving thread's next call. One turn
-    // per parked chunk at most, each a chunk of the session's struct pool.
+    // per parked chunk. Their number is not fixed at the entry here, as it is when the driving
+    // thread runs this loop (Core::try_dispatch_stateful): that thread can park more while
+    // this one loops. Never more than the struct pool holds at once, though: it forms a chunk
+    // only in a free struct, and gets a dropped chunk's struct back only by collecting it.
     while (auto next = session->try_acquire_next_dispatch()) {
         // The gate's token, ahead of the chunk's done signal on the drop path below.
         const uint64_t gate_token = next->m_dispatch_epoch;
