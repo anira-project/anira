@@ -12,15 +12,10 @@
 include_guard(GLOBAL)
 
 set(ANIRA_TANH_LIB_REPOSITORY https://github.com/tanh-lab/tanh-lib.git)
-# NOT A RELEASE: the head of tanh-lab/tanh-lib#101 (branch feat/rcu-staged-publish), an open
-# pull request, which is tanh-lib's main (v0.5.1 and what was merged since) plus the publication
-# of thl::RCU in two steps. The pin moves to the release tag once the maintainer has merged #101
-# and tagged the release that carries it, and the pull request that introduces this pin cannot
-# merge before that: until then this commit is reachable only through the pull request's branch.
-#
-# Needed from #101: thl::RCU's publication in two steps (RCU::stage_update() / stage_replace(),
-# which build the next version and reserve what its publication needs and may throw, and
-# RCU::commit(Staged&&), which is noexcept and allocates nothing), through which
+# v0.6.0 (tanh-lab/tanh-lib#101). Needed since v0.6.0: thl::RCU's publication in two steps
+# (RCU::stage_update() / stage_replace(), which build the next version and reserve what its
+# publication needs and may throw, and RCU::commit(Staged&&), which is noexcept and allocates
+# nothing), through which
 # anira_handler_add_variant and anira_handler_remove_variant publish a session's plan table and
 # a handler's plan rows together, behind everything that can fail. Needed since v0.5.1
 # (tanh-lab/tanh-lib#68): thl::RCU's reader slots (RCU::add_reader(), read_scope(Reader)), a read
@@ -34,4 +29,4 @@ set(ANIRA_TANH_LIB_REPOSITORY https://github.com/tanh-lab/tanh-lib.git)
 # since v0.3.0: the logger carriers (tanh-lab/tanh-lib#37: platform identity, per-record flags,
 # the drop count on the record) and the compiled log ceiling (#38). tanh-tooling v0.3.0, the
 # same tooling tag this tree pins.
-set(ANIRA_TANH_LIB_COMMIT bdd9111764619b46a6f4ed987643af3c1402545a)
+set(ANIRA_TANH_LIB_COMMIT 63f9ff67d7b96cccfb0d886b874c6f403e7f9d4d)
