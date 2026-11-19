@@ -5,7 +5,7 @@
 // which every C entry's firewall turns into ANIRA_ERROR_OUT_OF_MEMORY.
 //
 // The page fills the heap with _malloc blocks of halving sizes down to the allocator's smallest,
-// until not one byte can be allocated (it checks that malloc(1) returns 0), and asks three times
+// until not one byte can be allocated (it checks that malloc(1) returns 0), and asks four times
 // for a handler on the bundled gain config (the built-in ONNX Runtime engine). Each time the
 // answer is an AniraError with ANIRA_ERROR_OUT_OF_MEMORY, from an allocation the page chose:
 // - the heap full: the handler's creation fails at its first allocation;
@@ -13,7 +13,10 @@
 // - the heap full but for one hole of 1 MiB, under a contract of host blocks of 2^20 frames: the
 //   handler is created and its model loaded in the hole (the two take under 64 KiB), and the
 //   session's rings, 4 MiB and more each, cannot be made: the prepare fails behind the model's
-//   load and gives the session and the loaded model back.
+//   load and gives the session and the loaded model back;
+// - the heap full, the handler prepared before: its next prepare fails at its first allocation
+//   and releases the session of the prepare before it with not a byte to spare; the handler is
+//   unprepared afterwards and prepares again once the memory is back.
 // So no refusal depends on where the free memory lies. Behind a fill that stops at a larger
 // block it does: such a fill leaves up to one block less a byte free in every free region, and a
 // handler on the gain model takes about 89 KiB in allocations of 8 KiB and less (its context's
@@ -210,6 +213,39 @@ const run = async () => {
     handler?.destroy()
     release(m, filler)
     pipeline.destroy()
+  }
+
+  // Not one byte free, the handler prepared before: its next prepare fails at its first
+  // allocation, ahead of anything it builds, and gives back what the prepare before it built
+  // (the session with its rings, the plans, the loaded model) while the heap is still full.
+  // The handler is unprepared afterwards, and prepares again once the fill is freed.
+  {
+    const handler = handlerOn(anira, context, model, contract)
+    const latency = handler.getLatency()
+    const filler = fill(m)
+    const wasFull = full(m)
+    const refused = thrownBy(() => handler.prepare(contract))
+    const left = {
+      report: handler.planReport().native(),
+      latency: handler.getLatency(),
+      entries: handler.numEntries(),
+    }
+    release(m, filler)
+    const again = thrownBy(() => handler.prepare(contract))
+    check(
+      wasFull &&
+        isOutOfMemory(refused) &&
+        left.report === 0 &&
+        left.latency === 0 &&
+        left.entries === 0 &&
+        again === null &&
+        handler.getLatency() === latency,
+      `with the heap full a prepared handler is not prepared again: ` +
+        `${refused?.message ?? 'prepared'}; it is unprepared behind the refusal (report ` +
+        `${left.report}, latency ${left.latency}, ${left.entries} entries) and prepares once ` +
+        `the memory is back (${again?.message ?? `latency ${handler.getLatency()}`})`
+    )
+    handler.destroy()
   }
 
   // Memory back: the next handler prepares, and the refused ones left nothing behind.
