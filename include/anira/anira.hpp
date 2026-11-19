@@ -4246,11 +4246,11 @@ public:
      * not change before the next prepare, also when the removed variant had the largest
      * internal latency. Read get_plan() again: a selection of one of the variant's plans that
      * raced the call was moved to the first ready plan.
-     * @throws Error, the handler as it was: ANIRA_ERROR_NOT_FOUND for an index that names no
-     * variant of the handler, or one that was removed; ANIRA_ERROR_INVALID_STATE for the last
-     * variant the handler has, for the variant of the selected plan (select a plan of another
-     * variant first: set_model), and when called from inside a callback of a control entry of
-     * this handler.
+     * @throws Error with the handler as it was: ANIRA_ERROR_NOT_FOUND for an index that names
+     * no variant of the handler, or one that was removed; ANIRA_ERROR_INVALID_STATE for the
+     * last variant the handler has, for the variant of the selected plan (select a plan of
+     * another variant first: set_model), and when called from inside a callback of a control
+     * entry of this handler.
      */
     void remove_variant(uint32_t variant) {
         anira_error err{};
