@@ -3511,7 +3511,8 @@ size_t add_variant_live(anira_handler& handler, const anira_model_config& added)
                                   variant + 1,
                                   contract.m_edge_cost,
                                   k_entry)) {
-        const std::unique_ptr<anira::InferenceManager> first = std::move(build.m_manager);
+        // Alive until the second session holds the loaded models: none loads twice.
+        const std::unique_ptr<anira::InferenceManager> over_cost = std::move(build.m_manager);
         build.m_manager = make_session();
     }
     anira::SessionElement& built = build.m_manager->session();
