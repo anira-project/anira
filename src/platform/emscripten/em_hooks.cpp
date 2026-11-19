@@ -16,6 +16,7 @@
 #include <emscripten/em_js.h>
 #include <emscripten/em_macros.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -250,18 +251,26 @@ void ANIRA_CALL processor_release(void* user_data) noexcept {
 // (its path, copied, and its bytes, borrowed: the loaded model holds them while it lives, and
 // this record goes with its unload), and handed to every process and reset call as their
 // `prepared` pointer (the descriptor's prepare returns it). The layout is the package's
-// (web/src/registry.ts engineModel reads it): four 32-bit words on wasm32.
+// (web/src/registry.ts reads it, engineModel the first four): five 32-bit words on wasm32.
 struct EngineModel {
     uint32_t m_row = 0;
     const void* m_bytes = nullptr;  ///< the entry's bytes, or NULL
     uint32_t m_size = 0;            ///< their size, 0 without
     const char* m_path = nullptr;   ///< into m_path_storage, or NULL for an entry without one
+    /// Which loaded model this is: a number no other loaded model of the module's life has. A
+    /// Worker's registry keeps the serial of the model its engine loaded last and tells by it
+    /// whether a call runs that model. The record's address does not tell: the record of a
+    /// model loaded later may be allocated where an unloaded one's was.
+    uint32_t m_serial = 0;
     std::string m_path_storage;
 };
 static_assert(sizeof(void*) == 4 && offsetof(EngineModel, m_row) == 0 &&
                   offsetof(EngineModel, m_bytes) == 4 && offsetof(EngineModel, m_size) == 8 &&
-                  offsetof(EngineModel, m_path) == 12,
-              "registry.ts engineModel reads these four words");
+                  offsetof(EngineModel, m_path) == 12 && offsetof(EngineModel, m_serial) == 16,
+              "registry.ts reads these five words");
+
+// The serial of the next loaded model: counted up by every load, on whichever thread it runs.
+std::atomic<uint32_t> s_next_model_serial{1};
 
 anira_status ANIRA_CALL engine_load(const anira_engine_load_info* info,
                                     void* /*user_data*/,
@@ -269,6 +278,7 @@ anira_status ANIRA_CALL engine_load(const anira_engine_load_info* info,
     try {
         auto model = std::make_unique<EngineModel>();
         model->m_row = info->row;
+        model->m_serial = s_next_model_serial.fetch_add(1, std::memory_order_relaxed);
         if (const char* path = anira_model_config_model_path(info->model, info->row)) {
             model->m_path_storage = path;
             model->m_path = model->m_path_storage.c_str();

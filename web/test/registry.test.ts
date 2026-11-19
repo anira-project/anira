@@ -114,16 +114,16 @@ test('an engine is built and initialised at the boot, before its first call', as
 
 test("an engine's load sees its model entry before the first call on it, once", () => {
   // The record of src/platform/emscripten/em_hooks.cpp (EngineModel) at 16: row 2, four bytes
-  // at 40, no path; a second one at 32: row 0, no bytes, the path at 48.
-  const memory = new ArrayBuffer(64)
+  // at 64, no path, serial 1; a second one at 40: row 0, no bytes, the path at 72, serial 2.
+  const memory = new ArrayBuffer(96)
   const words = new Uint32Array(memory)
-  words.set([2, 40, 4, 0], 16 / 4)
-  words.set([0, 0, 0, 48], 32 / 4)
-  new Uint8Array(memory).set([1, 2, 3, 4], 40)
+  words.set([2, 64, 4, 0, 1], 16 / 4)
+  words.set([0, 0, 0, 72, 2], 40 / 4)
+  new Uint8Array(memory).set([1, 2, 3, 4], 64)
   const module = {
     HEAPU8: new Uint8Array(memory),
     HEAPU32: words,
-    UTF8ToString: (ptr: number) => (ptr === 48 ? 'model.onnx' : ''),
+    UTF8ToString: (ptr: number) => (ptr === 72 ? 'model.onnx' : ''),
   } as unknown as AbiModule
   const registry = new Registry()
   const seen: EngineModel[] = []
@@ -144,12 +144,68 @@ test("an engine's load sees its model entry before the first call on it, once", 
   assert.deepEqual([...seen[0].bytes!], [1, 2, 3, 4])
   assert.equal(seen[0].bytes!.buffer, memory, 'a view of the shared memory, no copy')
   assert.equal(seen[0].path, null)
-  assert.equal(registry.engine(module, key, p, 0, 32, 0), anira_status.ANIRA_OK)
+  assert.equal(registry.engine(module, key, p, 0, 40, 0), anira_status.ANIRA_OK)
   assert.equal(seen.length, 2, 'another loaded model loads again')
   assert.equal(seen[1].bytes, null)
   assert.equal(seen[1].path, 'model.onnx')
   assert.equal(processed, 3)
   assert.deepEqual(engineModel({ module } as ScopeEnv, 16).row, 2)
+})
+
+test('a model whose record lies where the record of an unloaded one lay is loaded all the same', () => {
+  // What a handler destroyed, or a variant removed, leaves behind: the next model's record is
+  // allocated at the freed address. The serial tells the two apart; the address does not.
+  const memory = new ArrayBuffer(64)
+  const words = new Uint32Array(memory)
+  const bytes = new Uint8Array(memory)
+  const RECORD = 16
+  const record = (value: number, serial: number) => {
+    words.set([0, 48, 1, 0, serial], RECORD / 4)
+    bytes[48] = value
+  }
+  const module = {
+    HEAPU8: bytes,
+    HEAPU32: words,
+    UTF8ToString: () => '',
+  } as unknown as AbiModule
+  const registry = new Registry()
+  let loaded = -1
+  const ran: number[] = []
+  const key = registry.defineEngine('org.example.keeps-its-model', () => ({
+    load(model: EngineModel) {
+      loaded = model.bytes![0]
+    },
+    // The engine computes with what its last load read, as one that keeps a session does.
+    process() {
+      ran.push(loaded)
+    },
+    reset() {
+      ran.push(-loaded)
+    },
+  }))
+  const p = anira_phase
+  record(7, 1)
+  assert.equal(
+    registry.engine(module, key, p.ANIRA_PHASE_INFERENCE, 0, RECORD, 0),
+    anira_status.ANIRA_OK
+  )
+  assert.equal(
+    registry.engine(module, key, p.ANIRA_PHASE_INFERENCE, 0, RECORD, 0),
+    anira_status.ANIRA_OK
+  )
+  // Unloaded; another model's record at the same address.
+  record(9, 2)
+  assert.equal(
+    registry.engine(module, key, p.ANIRA_PHASE_INFERENCE, 0, RECORD, 0),
+    anira_status.ANIRA_OK
+  )
+  // And once more, met first by a reset, which loads as an inference does.
+  record(11, 3)
+  assert.equal(
+    registry.engine(module, key, p.ANIRA_PHASE_RESET, 0, RECORD, 0),
+    anira_status.ANIRA_OK
+  )
+  assert.deepEqual(ran, [7, 7, 9, -11], 'every call ran the model of its own record')
 })
 
 test('a key nobody defined, and two names of one key, are refused', () => {

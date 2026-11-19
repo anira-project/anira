@@ -250,16 +250,20 @@ export class Registry {
     throw new Error(`JavaScript engine ${key}: phase ${phase} is not an engine phase`)
   }
 
-  /** @hidden */
+  /** @hidden The serial of the loaded model each engine of this scope loaded last. */
   private readonly loadedModels = new WeakMap<Engine, number>()
 
   /** @hidden */
   private loadOnce(module: AbiModule, engine: Engine, model: number): number {
-    if (!engine.load || model === 0 || this.loadedModels.get(engine) === model) {
-      return anira_status.ANIRA_OK
-    }
+    if (!engine.load || model === 0) return anira_status.ANIRA_OK
+    // The record's serial names the loaded model. Its address does not: the record of a model
+    // loaded later may lie where the record of an unloaded one lay (a handler destroyed, a
+    // variant removed), and the engine must not run the new model with what it loaded for
+    // the old one.
+    const serial = heap(module).HEAPU32[(model + ENGINE_MODEL_SERIAL) >>> 2]
+    if (this.loadedModels.get(engine) === serial) return anira_status.ANIRA_OK
     const loaded = status(engine.load(engineModel(this.envOf(module), model)))
-    if (loaded === anira_status.ANIRA_OK) this.loadedModels.set(engine, model)
+    if (loaded === anira_status.ANIRA_OK) this.loadedModels.set(engine, serial)
     return loaded
   }
 
@@ -352,11 +356,13 @@ export const engineTensors = (
 }
 
 // The record a JavaScript engine's calls receive as `prepared` (src/platform/emscripten/
-// em_hooks.cpp, EngineModel): four 32-bit words, the row, the bytes, their size, the path.
+// em_hooks.cpp, EngineModel): five 32-bit words, the row, the bytes, their size, the path, and
+// the loaded model's serial, which no other loaded model of the module's life has.
 const ENGINE_MODEL_ROW = 0
 const ENGINE_MODEL_BYTES = 4
 const ENGINE_MODEL_SIZE = 8
 const ENGINE_MODEL_PATH = 12
+const ENGINE_MODEL_SERIAL = 16
 
 /** The model entry of an engine call's `prepared` record (see `EngineModel`). */
 export const engineModel = (env: ScopeEnv, prepared: number): EngineModel => {
