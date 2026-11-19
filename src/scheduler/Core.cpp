@@ -988,18 +988,22 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
             std::shared_ptr<SessionElement::PlanSlot> owned =
                 std::make_shared<SessionElement::PlanSlot>();
             SessionElement::PlanSlot& slot = *owned;
-            acquire_loaded_locked(state, request, pool_size, slot);
             slot.m_registered = request.m_source == engine::Source::Registered;
             slot.m_variant = request.m_variant;
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
+            // The session's copies of the two ids before the loaded model: between the moment
+            // the slot holds its model (which the pool has then) and the moment it is in the
+            // list nothing may fail, or the rollback below would not find the model and the
+            // pool would keep it, loaded. An interned id allocates.
             slot.m_engine_id = session->intern_id(request.m_model.m_engine_id);
             slot.m_provider_id = session->intern_id(request.m_model.m_provider_id);
+            acquire_loaded_locked(state, request, pool_size, slot);
             slot.m_state_alias = (slot.m_loaded->flags() &
                                   static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS)) != 0;
             // Into the table before the prepare: a prepare that throws (an exclusive session's
             // own executor, its warm-up) leaves the slot where the rollback below finds its
-            // loaded model and lets the pool entry go.
+            // loaded model and lets the pool entry go. The list has the room (reserved above).
             session->m_plans.push_back(std::move(owned));
             SessionElement::PlanSlot& placed = *session->m_plans.back();
             if (!placed.m_registered) {
