@@ -34,4 +34,4 @@ set(ANIRA_TANH_LIB_REPOSITORY https://github.com/tanh-lab/tanh-lib.git)
 # since v0.3.0: the logger carriers (tanh-lab/tanh-lib#37: platform identity, per-record flags,
 # the drop count on the record) and the compiled log ceiling (#38). tanh-tooling v0.3.0, the
 # same tooling tag this tree pins.
-set(ANIRA_TANH_LIB_COMMIT 7cee3aaebef7a9db48aeebcc989faaf0db168e8a)
+set(ANIRA_TANH_LIB_COMMIT bdd9111764619b46a6f4ed987643af3c1402545a)
