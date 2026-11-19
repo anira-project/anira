@@ -563,6 +563,11 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
     // whatever path it takes (a second signal would let a later try_acquire succeed for a
     // struct nobody dispatched).
     bool signalled = false;
+    // The token of the dispatch gate this job holds (an exclusive session's chunk; unused
+    // otherwise), read ahead of the done signal: behind it the struct is the driving thread's
+    // again, to collect and to form the next chunk in, and every release below hands the token
+    // back without reading the struct once more.
+    const uint64_t gate_token = thread_safe_struct->m_dispatch_epoch;
     try {
         // A wait-free reset (Core::reset_session) bumps the session generation. A
         // dispatch whose stamp is now stale would have its output discarded anyway, so
@@ -583,7 +588,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
             }
             signalled = true;
             if (session->exclusive()) {
-                session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+                session->release_dispatch(gate_token);
                 dispatch_next_pending(session);
             }
         } else if (session->m_initialized.load(std::memory_order::seq_cst)) {
@@ -597,17 +602,22 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
             // entries are the drainer's job (force_reset_dispatch_chain in prepare).
             session->complete_with_zeros(thread_safe_struct);
             signalled = true;
-            if (session->exclusive()) {
-                session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
-            }
+            if (session->exclusive()) { session->release_dispatch(gate_token); }
         }
     } catch (...) {
         // Last resort (do_inference() catches what the model throws): a struct is never
-        // stranded without its done signal, and never signalled twice.
+        // stranded without its done signal, and never signalled twice. The exclusive task's
+        // turn on the chain ends here as at the end of a job: the gate is freed and the next
+        // parked chunk dispatched, so the chunks behind this one do not wait for the driving
+        // thread's next call. Under the rule of the branch above: no successor for a session
+        // that is uninitialised by now, whose pending entries are its drainer's.
         if (!signalled) {
             session->complete_with_zeros(thread_safe_struct);
             if (session->exclusive()) {
-                session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+                session->release_dispatch(gate_token);
+                if (session->m_initialized.load(std::memory_order::seq_cst)) {
+                    dispatch_next_pending(session);
+                }
             }
             if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
                 ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
@@ -619,29 +629,37 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
     }
 }
 void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement>& session) {
-    if (auto next = session->try_acquire_next_dispatch()) {
+    // Until a chunk is in the inference queue (the gate stays busy with it) or nothing is
+    // parked: a chunk the queue refuses is dropped, the gate freed, and the pending queue looked
+    // at again, which is what every release of the gate owes while the session runs
+    // (SessionElement::try_acquire_next_dispatch). To leave behind the freed gate would keep
+    // the chunks behind the dropped one parked until the driving thread's next call. One turn
+    // per parked chunk at most, each a chunk of the session's struct pool.
+    while (auto next = session->try_acquire_next_dispatch()) {
+        // The gate's token, ahead of the chunk's done signal on the drop path below.
+        const uint64_t gate_token = next->m_dispatch_epoch;
         // Safe to use the session's producer token here: the dispatch gate
         // guarantees only one thread at a time enqueues for this session,
         // and its acquire/release ordering publishes the token's state. Counted
         // before it is in the queue (the drain's rule); a drop gives the count back.
         session->m_active_inferences->fetch_add(1, std::memory_order::seq_cst);
-        if (!m_next_inference.try_enqueue(
+        if (m_next_inference.try_enqueue(
                 session->m_producer_token,
                 InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
-            // The task completes as zeros at its stream position, keeping
-            // the output time-aligned instead of stalling the session: a dropped hop,
-            // ANIRA_ERROR_CAPACITY in the handler's rt_error.
-            session->m_active_inferences->fetch_sub(1, std::memory_order::release);
-            static_cast<void>(session->m_rt->record_drop());
-            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NextDispatchDropped,
-                                    log_group::k_scheduler,
-                                    "Could not enqueue next inference! "
-                                    "Dropping the inference and zero-filling its output.");
-            session->complete_with_zeros(next);
-            session->release_dispatch(next->m_dispatch_epoch);
+            notify_work();
             return;
         }
-        notify_work();
+        // The task completes as zeros at its stream position, keeping
+        // the output time-aligned instead of stalling the session: a dropped hop,
+        // ANIRA_ERROR_CAPACITY in the handler's rt_error.
+        session->m_active_inferences->fetch_sub(1, std::memory_order::release);
+        static_cast<void>(session->m_rt->record_drop());
+        ANIRA_LOG_RT_ERROR_ONCE(RtSite::NextDispatchDropped,
+                                log_group::k_scheduler,
+                                "Could not enqueue next inference! "
+                                "Dropping the inference and zero-filling its output.");
+        session->complete_with_zeros(next);
+        session->release_dispatch(gate_token);
     }
 }
 
@@ -731,6 +749,8 @@ void InferenceThread::do_inference(
     thread_safe_struct->m_inference_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                              std::chrono::steady_clock::now() - started)
                                              .count();
+    // The gate's token, ahead of the done signal (see process_job).
+    const uint64_t gate_token = thread_safe_struct->m_dispatch_epoch;
     if (session->uses_semaphore()) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
@@ -743,7 +763,7 @@ void InferenceThread::do_inference(
     // the pool. Only one task per session is ever in flight, keeping execution in
     // order and mutually exclusive with no spinning.
     if (session->exclusive()) {
-        session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+        session->release_dispatch(gate_token);
         dispatch_next_pending(session);
     }
 }

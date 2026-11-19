@@ -495,9 +495,25 @@ std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_ne
         }
         // Nothing pending: release ownership. Re-check to avoid a lost task that
         // was enqueued between the failed dequeue and the release. The fence between the
-        // release and the re-check is the holder's half of the pair described above. The rule
-        // for any site that frees the gate while the session runs: fence, then look at the
-        // queue and re-acquire when it is not empty, or hand over to a path that does.
+        // release and the re-check is the holder's half of the pair described above.
+        //
+        // The invariant, for every site that frees the gate (release_dispatch) while the
+        // session runs: the same thread then passes a sequentially consistent fence and looks
+        // at the pending queue, and takes the gate again when the queue is not empty and the
+        // gate still free. Here that is the code below. Everywhere else it is a call of this
+        // function behind the release, whose first fence, acquire and dequeue are that look,
+        // repeated until a chunk is in the inference queue (the gate stays busy with it) or
+        // this function returns none: the end of a job and a dispatch the inference queue
+        // refused (InferenceThread::dispatch_next_pending), the same refusal on the driving
+        // thread (Core::try_dispatch_stateful), the last resort of a job that threw
+        // (InferenceThread::process_job) and the drain that could not requeue another
+        // session's job (Core::drain_inference_queue). A release without the look leaves the
+        // chunks behind it parked until the driving thread's next call. The releases that need
+        // none: the driving thread's discard_pending_dispatches, which emptied the queue while
+        // it held the gate and is the queue's one producer; reserve_pending_dispatch, at a
+        // prepare; and every release for a session that does not run (found uninitialised by
+        // a job, by its last resort or by another session's drain, or drained itself), whose
+        // parked chunks its prepare flushes or its release drops.
         release_dispatch(token);
         std::atomic_thread_fence(std::memory_order_seq_cst);
         if (m_dispatch_pending.size_approx() == 0) { return nullptr; }
@@ -554,16 +570,16 @@ void SessionElement::discard_pending_dispatches() {
 
 void SessionElement::force_reset_dispatch_chain() {
     // Quiescent contexts only (Core::drain_inference_queue has run): no task of
-    // this session is queued or running, but a laggard worker — one that was
-    // invisible to the drain and woke on the stale-skip path — may still
-    // TRANSIENTLY hold the gate while it filters the pending queue. Never erase a
-    // live holder's busy bit (an unconditional store here would let a later
-    // dispatch acquire the "freed" gate while the laggard still believes it owns
-    // it — two holders, mutual exclusion broken). Instead bump the epoch with a
-    // CAS that only succeeds on a free gate, waiting out any transient holder.
-    // Bounded: with the session generation already bumped by the caller's flow, a
-    // laggard holder only filters stale pending entries and releases — it never
-    // dispatches, so the busy phase is microseconds.
+    // this session is queued or running, its driving thread is in no call, and nothing holds
+    // the gate. A job counts on the session from before its enqueue until its thread is done
+    // with it (m_active_inferences), an inference thread touches the gate only inside such a
+    // job, and the drain returns at a count of zero: the laggard worker this function was
+    // written for, one the drain did not see, which woke later and held the gate while it
+    // filtered the pending queue, no longer exists. The epoch is still bumped with a CAS that
+    // only succeeds on a free gate, waiting out a holder, and never with a store: a store
+    // would erase a live holder's busy bit if there ever were one again (a later dispatch
+    // would acquire the "freed" gate while that holder still believes it owns it — two
+    // holders, mutual exclusion broken), and the loop costs nothing while there is none.
     uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
     while ((gate & k_dispatch_busy) != 0 ||
            !m_stateful_dispatch_gate.compare_exchange_weak(gate,
@@ -573,11 +589,10 @@ void SessionElement::force_reset_dispatch_chain() {
         std::this_thread::sleep_for(std::chrono::microseconds(50));
         gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
     }
-    // Epoch bumped first: a laggard acquiring from here on does so under the new
-    // epoch and finds only stale entries to filter. Flush whatever remains — the
-    // entries reference structs the caller is about to rebuild or wipe. No inference
-    // thread gets them: each gives its count on its plan slot back, since the slots
-    // outlive the structs.
+    // Epoch bumped first: a release that still carried a token of the old epoch would be
+    // inert from here. Flush whatever remains — the entries reference structs the caller is
+    // about to rebuild or wipe. No inference thread gets them: each gives its count on its
+    // plan slot back, since the slots outlive the structs.
     std::shared_ptr<ThreadSafeStruct> drained;
     while (m_dispatch_pending.try_dequeue(drained)) {
         if (drained != nullptr) { drained->leave_slot(); }
@@ -585,8 +600,9 @@ void SessionElement::force_reset_dispatch_chain() {
 }
 
 void SessionElement::reserve_pending_dispatch() {
-    // The gate, busy under the current epoch, for the whole reservation: a laggard worker
-    // waits it out as in force_reset_dispatch_chain, and only a holder dequeues.
+    // The gate, busy under the current epoch, for the whole reservation: only a holder
+    // dequeues. Nothing else holds it at a prepare (see force_reset_dispatch_chain); the loop
+    // takes it as that function does.
     uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
     while ((gate & k_dispatch_busy) != 0 ||
            !m_stateful_dispatch_gate.compare_exchange_weak(gate,
@@ -615,11 +631,14 @@ void SessionElement::reserve_pending_dispatch() {
 }
 
 void SessionElement::complete_with_zeros(
-    const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct) {
+    const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct) noexcept {
     // The global queue rejected the task (momentarily full), so this inference is
     // dropped. Completing it with zeroed output keeps the stream time-aligned:
     // the output side consumes the task at its correct position like any other
     // and frees the struct, it just yields silence for this chunk.
+    // noexcept: a memset, plain stores, and the done signal (an atomic store, or the
+    // semaphore's release, see anira::Semaphore). The release of the dispatch gate that
+    // follows a drop therefore always runs.
     thread_safe_struct->zero_outputs();
     thread_safe_struct->m_completed_as_zeros = true;  // before the done signal
     // No inference thread gets a chunk dropped here: its count on its plan slot goes back
@@ -741,8 +760,8 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
 
     // The pending-dispatch chain must not survive the struct rebuild below: a
     // leftover entry would reference an orphaned struct and could be dispatched
-    // into the rebuilt session. Also opens a new dispatch epoch, invalidating
-    // any gate token a laggard worker may still hold from before the drain.
+    // into the rebuilt session. Also opens a new dispatch epoch: a gate token from
+    // before the drain, should a release still carry one, is inert.
     force_reset_dispatch_chain();
     // An exclusive session parks its chunks in the pending queue until the gate lets one go:
     // room for every struct of the pool there, as the inference queue gets (Core::

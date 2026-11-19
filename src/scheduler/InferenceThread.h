@@ -425,8 +425,9 @@ private:
      * (ThreadSafeStruct::take_slot). The chunk's count on that slot and the session's
      * active-inference count are released and @p job emptied on every
      * exit path, and a last-resort handler completes a struct that was not signalled yet with
-     * zeros (never signalling one twice), ends its turn on the chain and records
-     * ANIRA_ERROR_ENGINE on the session's latch.
+     * zeros (never signalling one twice), ends its turn on the chain as the end of a job does
+     * (the gate freed and, unless the session is uninitialized by then, the next pending task
+     * dispatched) and records ANIRA_ERROR_ENGINE on the session's latch.
      *
      * @param job The request; empty on return
      * @param instance What inference() runs the chunk on (see there)
@@ -442,9 +443,11 @@ private:
      * Claims the next pending dispatch (stale entries are filtered to the free
      * pool by try_acquire_next_dispatch) and enqueues it into the global
      * inference queue. On a full queue the task completes as zeros at its stream
-     * position and the gate is released. Shared continuation of every
-     * session-exclusive task boundary except the uninitialized skip, which must
-     * not dispatch new work into a drain's window.
+     * position, the gate is released and the next pending dispatch claimed in its
+     * turn, until one is in the queue or none is pending: no task is left waiting
+     * behind a free gate. Shared continuation of every session-exclusive task
+     * boundary except the uninitialized skip, which must not dispatch new work
+     * into a drain's window.
      *
      * @param session Session whose dispatch chain to continue
      */

@@ -50,8 +50,13 @@ class Semaphore {
 public:
     explicit Semaphore(int initial_count = 0) : m_semaphore(initial_count) {}
 
-    /** Increment the counter and unblock a waiter (std::semaphore::release). */
-    void release() {
+    /** Increment the counter and unblock a waiter (std::semaphore::release). Does not throw:
+     * the standard lets release report an error with std::system_error, and none of the
+     * implementations behind this wrapper has one to report (libstdc++ and the MSVC STL
+     * declare theirs noexcept, libc++'s is an atomic add and a notify, the lightweight
+     * semaphore's signal repeats its system call until it succeeds). A chunk's done signal
+     * relies on it (SessionElement::complete_with_zeros). */
+    void release() noexcept {
 #if ANIRA_USE_LIGHTWEIGHT_SEMAPHORE
         m_semaphore.signal();
 #else

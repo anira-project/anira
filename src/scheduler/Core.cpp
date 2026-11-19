@@ -1069,11 +1069,13 @@ void Core::release_loaded_if_unheld(const std::shared_ptr<engine::Loaded>& loade
 void Core::wait_until_unused(const std::shared_ptr<SessionElement>& session,
                              const SessionElement::PlanSlot& slot) {
     while (slot.active_chunks() != 0) {
-        // A chunk of an exclusive session may wait in the pending queue with the dispatch gate
-        // free: its enqueue and an inference thread's release of the gate passed each other,
-        // which the driving thread's next call resolves. The caller does not wait for a call
-        // that may never come (a stopped transport): it kicks the chain itself, as the warm-up
-        // does. Nothing while the gate is held; nothing for a shared session.
+        // A chunk of an exclusive session that waits in the pending queue is dispatched by
+        // whoever frees the dispatch gate, without a call of the driving thread: its enqueue and
+        // a release of the gate cannot pass each other, and no release leaves without a look at
+        // the queue (SessionElement::try_acquire_next_dispatch). The kick is the guard against
+        // a release that did, as in the warm-up: the caller does not wait for a call of the
+        // driving thread that may never come (a stopped transport). Nothing while the gate is
+        // held; nothing for a shared session.
         try_dispatch_stateful(session);
 #ifndef __EMSCRIPTEN__
         std::this_thread::sleep_for(std::chrono::microseconds(50));
@@ -1492,14 +1494,15 @@ void Core::new_data_request(const std::shared_ptr<SessionElement>& session) {
 // semaphore try_acquire); in non-real-time mode it waits for the oldest in-flight
 // inference like every other collection point.
 bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
-    // A stateful task may still be awaiting dispatch with none in flight: its
-    // dispatch can race a worker's task boundary so that both sides bail (the
-    // audio thread finds the gate briefly held, the worker's recheck misses the
-    // just-enqueued entry), or a prior dispatch attempt found the global queue
-    // full. No further submission may be coming while the caller only polls for
-    // output, so kick the chain here — the same rationale as the kick in
-    // wait_for_completion(). No-op for non-stateful sessions; wait-free (bounded
-    // CAS + at most one token enqueue, the normal dispatch path).
+    // The guard of the stateful dispatch chain. No release of the gate leaves a task
+    // parked behind it: a dispatch and a worker's task boundary cannot both bail (the
+    // fences of SessionElement::try_acquire_next_dispatch), and a dispatch the global
+    // queue refused looks at the pending queue again. Should a release leave one all the
+    // same, no further submission may be coming while the caller only polls for output,
+    // so the chain is kicked here — the same rationale as the kick in
+    // wait_for_completion(). No-op for non-stateful sessions and while a task is in
+    // flight; wait-free (a fence, a bounded CAS and one token enqueue per parked task at
+    // most, the normal dispatch path).
     try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
     while (true) {
@@ -1614,10 +1617,9 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
 // new_data_request() overloads above wait correctly in non-real-time mode
 // regardless of which one is called.
 void Core::wait_for_completion(const std::shared_ptr<SessionElement>& session, size_t index) {
-    // A stateful task may still be awaiting dispatch with none in flight (a
-    // previous dispatch attempt found the global queue full and dropped its
-    // task). No further submission may be coming to restart the chain, so kick
-    // it before blocking.
+    // The guard of the stateful dispatch chain, as in collect_completed(): no further
+    // submission may be coming to restart a chain whose next task a release left parked
+    // with none in flight, so kick it before blocking.
     try_dispatch_stateful(session);
     if (session->uses_semaphore()) {
         session->m_struct_pool[index]->m_done_semaphore.acquire();
@@ -1694,8 +1696,9 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session,
                 session->enqueue_pending_dispatch(session->m_struct_pool[i]);
                 // If the global queue is full, the claimed task (possibly an
                 // older chunk) is dropped and completes as zeros at its stream
-                // position — either way this submission stands, so fall through
-                // to return true.
+                // position, and so does every task parked behind it while the queue
+                // stays full, this one included — either way this submission stands,
+                // so fall through to return true.
                 try_dispatch_stateful(session);
             } else {
                 enqueue_inference_or_drop(session, session->m_struct_pool[i]);
@@ -1713,10 +1716,17 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session,
 
 void Core::try_dispatch_stateful(const std::shared_ptr<SessionElement>& session) {
     if (!session->exclusive()) { return; }
-    if (auto next = session->try_acquire_next_dispatch()) {
-        if (!enqueue_inference_or_drop(session, next)) {
-            session->release_dispatch(next->m_dispatch_epoch);
-        }
+    // Until a chunk is in the inference queue or nothing is parked, as an inference thread
+    // dispatches (InferenceThread::dispatch_next_pending): a chunk the queue refuses is dropped,
+    // the gate freed, and the pending queue looked at again, the look every release of the gate
+    // owes while the session runs (SessionElement::try_acquire_next_dispatch). One turn per
+    // parked chunk at most; nothing in a turn blocks or allocates, and a drop logs at its
+    // rate-limited site alone (enqueue_inference_or_drop).
+    while (auto next = session->try_acquire_next_dispatch()) {
+        // The gate's token, ahead of the chunk's done signal on the drop path.
+        const uint64_t gate_token = next->m_dispatch_epoch;
+        if (enqueue_inference_or_drop(session, next)) { return; }
+        session->release_dispatch(gate_token);
     }
 }
 
@@ -1833,10 +1843,12 @@ int64_t Core::warm_up_inference(const std::shared_ptr<SessionElement>& session, 
     const auto deadline = std::chrono::steady_clock::now() + k_warm_up_timeout;
     bool done = false;
     while (!done) {
-        // An exclusive session's job may still wait in its pending queue: this thread's enqueue
-        // and the inference thread's release of the dispatch gate can pass each other, which a
-        // stream's next submission resolves. The pass has no next submission, so it kicks the
-        // chain itself while it waits (nothing while the gate is held).
+        // An exclusive session's job that found the dispatch gate still held (an inference
+        // thread signals a job done before it frees the gate) is dispatched by that thread's
+        // look at the pending queue behind its release: this thread's enqueue and that release
+        // cannot pass each other (SessionElement::try_acquire_next_dispatch). The kick is the
+        // guard against a release that left without the look: the pass has no next submission
+        // that would restart the chain (nothing while the gate is held).
         if (session->exclusive()) { try_dispatch_stateful(session); }
         if (session->uses_semaphore()) {
 #ifdef __EMSCRIPTEN__
@@ -2022,13 +2034,15 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 // reserve_inference_capacity) only gives its count back. A task: complete it,
                 // never started, as silence at its stream position (kept time-aligned for
                 // callers that continue after the drain) and end its turn on the stateful
-                // dispatch chain so the gate cannot stay wedged.
+                // dispatch chain so the gate cannot stay wedged. No look at the pending queue
+                // behind this release: the session does not run, and what is parked there is
+                // flushed by its prepare or dropped by its release.
                 if (inference_data.m_thread_safe_struct != nullptr) {
+                    // The gate's token, ahead of the chunk's done signal.
+                    const uint64_t gate_token =
+                        inference_data.m_thread_safe_struct->m_dispatch_epoch;
                     session->complete_with_zeros(inference_data.m_thread_safe_struct);
-                    if (session->exclusive()) {
-                        session->release_dispatch(
-                            inference_data.m_thread_safe_struct->m_dispatch_epoch);
-                    }
+                    if (session->exclusive()) { session->release_dispatch(gate_token); }
                 }
                 session->m_active_inferences->fetch_sub(1, std::memory_order::release);
             } else {
@@ -2052,10 +2066,23 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 if (other.m_thread_safe_struct != nullptr) {
                     // A dropped hop of the other handler: its rt_error says so.
                     static_cast<void>(other.m_session->m_rt->record_drop());
+                    // The gate's token, ahead of the chunk's done signal.
+                    const uint64_t gate_token = other.m_thread_safe_struct->m_dispatch_epoch;
                     other.m_session->complete_with_zeros(other.m_thread_safe_struct);
                     if (other.m_session->exclusive()) {
-                        other.m_session->release_dispatch(
-                            other.m_thread_safe_struct->m_dispatch_epoch);
+                        other.m_session->release_dispatch(gate_token);
+                        // The other session runs: the chunks parked behind the dropped one are
+                        // dispatched from here, or they would wait for its driving thread's next
+                        // call. Whoever takes the gate may use the session's producer token,
+                        // whose blocks were reserved, and this thread holds no lock. The dropped
+                        // job still counts on that session (its count goes back below), as an
+                        // inference thread's job does while it dispatches a successor, so a
+                        // drain of that session waits for this dispatch too. And as for a job
+                        // that finds its session uninitialised: no successor then, the pending
+                        // entries are that session's drainer's.
+                        if (other.m_session->m_initialized.load(std::memory_order::seq_cst)) {
+                            try_dispatch_stateful(other.m_session);
+                        }
                     }
                 }
                 other.m_session->m_active_inferences->fetch_sub(1, std::memory_order::release);

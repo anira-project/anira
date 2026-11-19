@@ -959,13 +959,17 @@ public:
     // sessions are unaffected and keep using the shared thread pool in parallel.
     //
     // Gate word layout: bit 0 = busy (a task of this session is queued or
-    // running), bits 63..1 = dispatch epoch. The epoch gives the gate an owner
-    // identity: force_reset_dispatch_chain() (quiescent contexts only) opens a
-    // new epoch after waiting out any transient holder, and release_dispatch()
-    // is an epoch-checked CAS — so any release still carrying a pre-reset token
-    // is inert, whatever the interleaving. A safety invariant, not a
-    // specific-scenario patch: it holds for every release path (worker tail,
-    // stale skip, dispatch failure, drain).
+    // running), bits 63..1 = dispatch epoch. The epoch tells the eras of the gate
+    // apart, not its holders: force_reset_dispatch_chain() (quiescent contexts only)
+    // opens a new epoch on a free gate, and release_dispatch() is an epoch-checked
+    // CAS — so any release still carrying a pre-reset token is inert, whatever the
+    // interleaving with the new era. A safety invariant, not a specific-scenario
+    // patch: it holds for every release path (worker tail, stale skip, dispatch
+    // failure, drain). Within one epoch every holder carries the same token: a
+    // second release by a holder that released already would free the gate under
+    // the holder that acquired since. So each holder releases exactly once (a job's
+    // last resort is guarded by the flag of its done signal), and the token protects
+    // nothing beyond the epoch.
     static constexpr uint64_t k_dispatch_busy = 1;
     // The wait-free reset()/dispatch guarantees assume these 64-bit atomics are
     // implemented lock-free; a target where they are not would silently reintroduce
@@ -997,9 +1001,9 @@ public:
     /** @brief prepare's step for an exclusive session, after force_reset_dispatch_chain(): gives
      * m_dispatch_producer_token the blocks for every struct of the pool at once (one allocating
      * enqueue_bulk of placeholders, QueueCapacity.h), then takes the placeholders back. Holds
-     * the gate meanwhile: the gate holder is the pending queue's only consumer, so no laggard
-     * worker pops a placeholder (an empty struct pointer) or reuses a block before the ring holds
-     * them all. Blocking (waits out a transient gate holder in 50us steps) and allocating —
+     * the gate meanwhile: the gate holder is the pending queue's only consumer, so nobody else
+     * pops a placeholder (an empty struct pointer) or reuses a block before the ring holds
+     * them all. Blocking (would wait out a gate holder in 50us steps) and allocating —
      * control thread only.
      * @throws std::bad_alloc when the blocks cannot be allocated */
     void reserve_pending_dispatch() ANIRA_BLOCKING;
@@ -1011,7 +1015,10 @@ public:
      * to release_dispatch(). */
     std::shared_ptr<ThreadSafeStruct> try_acquire_next_dispatch();
     /** @brief Mark the in-flight stateful task finished, allowing the next to be dispatched.
-     * Epoch-checked: a token from before a force_reset_dispatch_chain() fails silently. */
+     * Epoch-checked: a token from before a force_reset_dispatch_chain() fails silently. While
+     * the session runs, the caller owes the pending queue a look behind this call (a call of
+     * try_acquire_next_dispatch(), repeated until a task is dispatched or none is pending):
+     * the invariant is spelled out there, with the releases that owe none. */
     void release_dispatch(uint64_t token);
     /** @brief Wait-free reset kick for the stateful dispatch chain (driving thread only, called
      * right after the generation bump): if no task is in flight, acquires the gate, returns every
@@ -1021,11 +1028,12 @@ public:
      * filters the stale prefix at its next task boundary. */
     void discard_pending_dispatches();
     /** @brief Quiescent-only (a drain has run; no task of this session is queued or running,
-     * though a laggard worker may still transiently hold the gate while filtering stale
-     * entries): waits out any transient gate holder, opens a new dispatch epoch (so any
-     * release carrying a pre-reset token is inert, whatever the interleaving), then flushes
-     * the pending queue. Blocking (sleeps in 50us steps while the gate is held) — called
-     * only from prepare(), never from a real-time path. */
+     * and nothing holds the gate: the drain counts every job from before its enqueue, so no
+     * worker is left that it did not see): opens a new dispatch epoch on a free gate (so any
+     * release carrying a pre-reset token is inert, whatever the interleaving), waiting out a
+     * holder should there be one, then flushes the pending queue. Blocking (sleeps in 50us
+     * steps while the gate is held) — called only from prepare(), never from a real-time
+     * path. */
     void force_reset_dispatch_chain() ANIRA_BLOCKING;
     /** @brief Complete a task without running inference: zero its output tensors and signal
      * completion. Used when the global queue rejects a task, so the dropped inference still
@@ -1033,8 +1041,9 @@ public:
      * The chunk stops counting on its plan slot ahead of the signal
      * (ThreadSafeStruct::leave_slot), unless an inference thread's job took the slot off it
      * before (a session momentarily uninitialized, the last resort): that job gives the count
-     * back at its end. */
-    void complete_with_zeros(const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct);
+     * back at its end. Does not throw, so the release of the dispatch gate that follows a
+     * dropped task always runs. */
+    void complete_with_zeros(const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct) noexcept;
 
     capi::ProcessorRunner& m_processor;  ///< The handler's processor runner: the four phases of
                                          ///< every chunk, and the port vectors of the rings

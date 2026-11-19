@@ -1007,9 +1007,14 @@ private:
      * Claims the session's next task awaiting dispatch and enqueues it into the
      * global inference queue. If the queue is momentarily full, the inference
      * is dropped: the task completes with zeroed output at its stream position,
-     * so the output remains time-aligned. No-op for sessions without a
-     * session-exclusive processor or while one of the session's tasks is
-     * already in flight.
+     * so the output remains time-aligned, the dispatch gate is freed and the
+     * next task awaiting dispatch is claimed in its turn, until one is in the
+     * queue or none waits: a task is never left waiting behind a free gate. No-op
+     * for sessions without a session-exclusive processor or while one of the
+     * session's tasks is already in flight. Real-time safe; besides the session's
+     * driving thread, a control thread calls it for a session that runs (the
+     * warm-up pass, wait_until_unused, another session's drain that had to drop
+     * this session's task), which the gate allows: whoever takes it dispatches.
      *
      * @param session Shared pointer to the session whose task to dispatch
      */
@@ -1027,10 +1032,10 @@ private:
      * independently -- means both overloads wait correctly regardless of which
      * one a caller uses.
      *
-     * Also kicks a pending stateful dispatch first: a session-exclusive
-     * processor's next task may still be waiting to be dispatched with none in
-     * flight (a previous attempt found the global queue full and dropped its
-     * task), and no further submission may be coming to restart the chain.
+     * Also kicks a pending stateful dispatch first, the guard of
+     * collect_completed(): should a session-exclusive processor's next task
+     * still be waiting to be dispatched with none in flight, no further
+     * submission may be coming to restart the chain.
      *
      * @param session Shared pointer to the session awaiting completion
      * @param index Index into the session's inference queue to wait on
@@ -1085,7 +1090,9 @@ private:
      * single pass's window). The session's placeholders (reserve_inference_capacity) only give
      * their count back. Other sessions' tasks and placeholders are requeued with the
      * allocating enqueue, however many; only if that allocation fails is a task completed as
-     * silence instead of being silently lost.
+     * silence instead of being silently lost, and the dispatch chain of its session, when that
+     * one is exclusive and runs, continued from here (try_dispatch_stateful): the tasks parked
+     * behind the dropped one do not wait for that session's next call.
      *
      * @param session Shared pointer to the session whose queue to drain
      *
