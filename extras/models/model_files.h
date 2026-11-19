@@ -97,6 +97,32 @@ inline constexpr const char* k_stateful_accumulator_model_json =
     ANIRA_EXTRAS_MODEL_FILE("model-pool/stateful_accumulator.model.json");
 inline constexpr const char* k_stateful_accumulator_contract_json =
     ANIRA_EXTRAS_MODEL_FILE("model-pool/stateful_accumulator.contract.json");
+// Its negated twin (stateful_accumulator_network_negated_stereo.*): the same tensors in every
+// format, processed_data = data - state_in[.., 0], the state advanced exactly as the
+// accumulator advances it. A second variant of the accumulator's inference stage, whose stream
+// tells which of the two ran a hop and what state it read; the contract file is the
+// accumulator's. The mono export of the accumulator is a model of another form (one channel),
+// which a stage over the stereo one refuses.
+inline constexpr const char* k_stateful_accumulator_negated_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/stateful_accumulator_negated.model.json");
+inline constexpr const char* k_stateful_accumulator_mono_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/stateful_accumulator_mono.model.json");
+
+// VariantGainNetwork (example-models): three models of one form, the variants of one inference
+// stage. One architecture with three weights, y = w * x on a mono 512-sample stream with
+// w = 0.5 (half), 2 (double) and -1 (invert), exact in float32 for any sample; one model file
+// per variant, rows for every engine, and one contract file for the three:
+//
+//     pipeline.add_inference({half, twice, invert}, {});  // variants 0, 1 and 2
+//     handler.set_model(2);                               // the stream moves to invert
+inline constexpr const char* k_variant_gain_half_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/variant_gain_half.model.json");
+inline constexpr const char* k_variant_gain_double_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/variant_gain_double.model.json");
+inline constexpr const char* k_variant_gain_invert_model_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/variant_gain_invert.model.json");
+inline constexpr const char* k_variant_gain_contract_json =
+    ANIRA_EXTRAS_MODEL_FILE("model-pool/variant_gain.contract.json");
 
 // RAVE funk drum (IRCAM ACIDS; LibTorch only): the whole model, and its encoder and decoder
 // halves as two entry points of the same TorchScript file. The decoder anchors on its audio
