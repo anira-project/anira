@@ -113,8 +113,8 @@ inline constexpr const char* k_stateful_accumulator_mono_model_json =
 // w = 0.5 (half), 2 (double) and -1 (invert), exact in float32 for any sample; one model file
 // per variant, rows for every engine, and one contract file for the three:
 //
-//     pipeline.add_inference({half, twice, invert}, {});  // variants 0, 1 and 2
-//     handler.set_model(2);                               // the stream moves to invert
+//     pipeline.add_inference({half, twice, inverted}, {});  // variants 0, 1 and 2
+//     handler.set_model(2);                                 // the stream moves to inverted
 inline constexpr const char* k_variant_gain_half_model_json =
     ANIRA_EXTRAS_MODEL_FILE("model-pool/variant_gain_half.model.json");
 inline constexpr const char* k_variant_gain_double_model_json =

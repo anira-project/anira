@@ -134,9 +134,9 @@ never held.
          planar tensor
      * - 8
        - VariantGainNetwork: three models of one form (``y = 0.5 x``, ``2 x`` and ``-x``) as the
-         variants of the one inference stage (``add_inference({half, double, invert}, {})``), which
-         one handler loads and measures together; a "Model" parameter switches between them while
-         audio runs
+         variants of the one inference stage (``add_inference({half, twice, inverted}, {})``),
+         which one handler loads and measures together; a "Model" parameter switches between them
+         while audio runs
 
 - The "Backend Type" parameter stores its choice in an atomic and ``processBlock`` applies it: the
   plan that runs the chosen engine (``PlanReport::find``, then ``set_plan``).
