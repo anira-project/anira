@@ -41,6 +41,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <ios>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -58,6 +61,7 @@
 #include "capi/port.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/Core.h"
 #include "scheduler/SessionElement.h"
 
 namespace {
@@ -2677,6 +2681,86 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
         EXPECT_EQ(second.m_out, first.m_out);
         expect_closed_form(second, latency, 0, k_file_hop);
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    }
+}
+
+// A variant added to a playing handler runs on what the build beside the stream made for it, on
+// every engine of the build. The bundled model joins its own handler a second time, from its
+// bytes: another loaded model, whose figure no prepare stored, so the build's own pass measures
+// it on the engine, in the build's session. The handler is exclusive (the declared State pair):
+// the new plan's handle owns its executor, made and run in that session, and runs in the
+// handler's from the first chunk formed on the variant. The state starts over there (the
+// contract's default), the closed form holds across the switch, and it keeps holding when the
+// first variant is removed and its model unloaded.
+TEST(AbiState, TheBundledModelAddedAndRemovedAtRunTimeFollowsTheClosedFormOnEveryEngine) {
+    for (const anira_engine engine : file_engines()) {
+        SCOPED_TRACE(engine_word(engine));
+        ASSERT_TRUE(anira_test::fresh_core());
+        EngineRig rig(engine, k_file_hop, {}, /*as_written=*/true);
+        ASSERT_TRUE(rig.ready());
+        anira_handler* h = rig.get();
+        const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
+        const std::vector<size_t> sizes((latency / k_file_hop) + 3, k_file_hop);
+        size_t position = 0;
+        Streams streams;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        ASSERT_NO_FATAL_FAILURE(rig.settle());
+
+        // The same model from its bytes: the entry of this engine, read off the file it names.
+        ModelConfig variant = ModelConfig::from_file(k_stateful_accumulator_model_json);
+        std::vector<std::byte> bytes;
+        for (uint32_t row = 0; row < variant.model_count(); ++row) {
+            if (variant.model_engine(row).kind != engine) { continue; }
+            std::ifstream file(std::string(variant.model_path(row)), std::ios::binary);
+            ASSERT_TRUE(file.good()) << variant.model_path(row);
+            const std::vector<char> text((std::istreambuf_iterator<char>(file)),
+                                         std::istreambuf_iterator<char>());
+            bytes.resize(text.size());
+            std::memcpy(bytes.data(), text.data(), text.size());
+            variant.set_model_bytes(row, bytes);
+        }
+        ASSERT_FALSE(bytes.empty()) << "the file has no entry of the engine";
+
+        const size_t loaded = anira::Core::get_num_loaded_models();
+        uint32_t index = 0;
+        anira_error err = ANIRA_ERROR_INIT;
+        ASSERT_EQ(anira_handler_add_variant(h, variant.native(), &index, &err), ANIRA_OK)
+            << err.message;
+        ASSERT_EQ(index, 1U);
+        EXPECT_EQ(anira::Core::get_num_loaded_models(), loaded + 1);
+        ASSERT_EQ(h->m_reports.back()->m_plans.size(), 2U);
+        const anira_plan_info added = h->m_reports.back()->m_plans.at(1);
+        EXPECT_EQ(added.engine, static_cast<uint32_t>(engine));
+        EXPECT_GE(added.warmup_iterations, 4U) << "the build's pass ran on the engine";
+        EXPECT_NE(added.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+        EXPECT_EQ(anira_handler_get_latency(h, EngineRig::processed_slot()), latency);
+
+        // The stream moves to the added variant: its state starts over at this position.
+        ASSERT_EQ(anira_handler_set_model(h, 1), ANIRA_OK);
+        const size_t switched_at = position;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        ASSERT_NO_FATAL_FAILURE(rig.settle());
+        // The first variant goes, and its model with it; the stream stays on the second.
+        ASSERT_EQ(anira_handler_remove_variant(h, 0, &err), ANIRA_OK) << err.message;
+        EXPECT_EQ(anira::Core::get_num_loaded_models(), loaded);
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+
+        for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+            const std::vector<float>& out = streams.m_out.at(channel);
+            ASSERT_EQ(out.size(), 3 * sizes.size() * k_file_hop);
+            for (size_t n = 0; n < out.size(); ++n) {
+                float expected = 0.0F;
+                if (n >= latency) {
+                    const size_t sample = n - latency;
+                    expected = expected_sample(channel,
+                                               sample,
+                                               sample < switched_at ? 0 : switched_at,
+                                               k_file_hop);
+                }
+                ASSERT_EQ(out[n], expected) << "channel " << channel << ", sample " << n;
+            }
+        }
     }
 }
 
