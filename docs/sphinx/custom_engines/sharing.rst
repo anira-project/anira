@@ -26,11 +26,12 @@ copies the pair as it copies every other slot.
   (the last-good rule is the engine's to keep here), and a chunk of a plan without the bit in between
   flips the pair, so the addresses stay put across the chunks of aliasing plans alone (re-capture
   after such a switch).
-- The pair is the model's, not a plan's: every plan of the variant runs it, in host memory in this
+- The pair is the stream's, not a plan's: every plan of the handler binds it (the variants of a
+  stage have one form), in host memory in this
   pre-release (a ``host_domain`` on the State input overrides it), so a plan switch inside one
   variant keeps the state whether the plans flip or alias, and the first inference of a new stream
   reads zeros either way; so does the first one behind a switch to another variant, unless the
-  contract keeps the state (``anira_contract_hard_set_variant_state``).
+  contract keeps the state (``anira_contract_hard_set_variant_state``, :ref:`usage-variant-state`).
 - A model with a State pair is stateful: it is loaded once with no shared slot, and every handler of
   it is exclusive, so an engine with state of its own beside the pair builds it at ``prepare`` and
   re-initialises it at ``reset``.
@@ -65,6 +66,13 @@ re-prepared or destroyed, ``unload`` with the last of them, ``release`` once the
 pipelines and the handlers are all gone. An ``unprepare`` always precedes the ``unload`` of the model
 it ran on; for a handler alone a re-prepare unloads and loads again, since the old session is
 released before the new one is created.
+
+A handler whose inference stage has several variants (:ref:`usage-variants`) is a holder of one
+loaded model per plan of every variant, each variant's configuration its own key. A variant added
+at run time loads and prepares beside the playing stream
+(:ref:`a prepare beside running phases <engines-live>`); a variant removed at run time gets the
+``unprepare`` of each of its plans and the ``unload`` of every loaded model whose last holder it
+was, and a model another handler, or another variant of the same handler, still runs stays loaded.
 
 What a refusal owes, at every level: a refused ``init`` leaves the object uninitialised (the next
 prepare calls it again); a refused ``load`` owes no ``unload``; a refused ``prepare`` owes no
@@ -145,8 +153,9 @@ of times, on the main thread, at ``anira_handler_create`` and at the pipeline's 
 with an ``anira_init_info``; it may log and never calls an entry that takes the lifecycle lock.
 ``anira_handler_create`` asks every engine of the pipeline that declares providers, also one no plan
 of the handler runs on.
-``anira_handler_prepare`` never calls it: the handler keeps its create's answer and checks the plans
-against it again. A status other than ``ANIRA_OK`` fails the calling entry, naming the engine; a
+``anira_handler_prepare`` and ``anira_handler_add_variant`` never call it: the handler keeps its
+create's answer and checks the plans against it again. A status other than ``ANIRA_OK`` fails the
+calling entry, naming the engine; a
 declared provider the query cleared is refused for a candidate as "declares provider 'x' but its
 query reports it unavailable here". In C++: ``Engine::query(const InitInfo&)``.
 

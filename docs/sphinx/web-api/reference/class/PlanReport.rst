@@ -17,7 +17,8 @@ spec declared none and the window was derived from the Time axis); a plan row (`
 memory its provider computes in (``memoryKind``, an ``anira_memory_kind``: unified on the CPU path,
 unknown for a device provider, since a browser exposes no device's memory kind, so its slots read
 ``ANIRA_EDGE_UNKNOWN``) and whether the plan still runs (``state``, an ``anira_plan_state``:
-``ANIRA_PLAN_REMOVED`` for a plan of a removed variant, whose row keeps its index).
+``ANIRA_PLAN_REMOVED`` for a plan of a removed variant, whose row keeps its index;
+:ref:`usage-variant-set`).
 
 .. js:autoclass:: PlanReport.PlanReport
    :short-name:

@@ -212,11 +212,15 @@ naming the engine (``the engine 'com.example.myengine' refused load: it returned
        what the engine keeps per handler (an exclusive handler's own executor). The prepares and
        unprepares of one loaded model never overlap (two handlers prepared on two threads reach it one
        after the other; different loaded models may run at once). It may call the
-       ``[callback-safe]`` entries, the handler's getters and the two Static entries, never
-       ``prepare``, ``destroy`` or a Hard entry. Hands back the ``prepared`` pointer (``NULL`` legal)
+       ``[callback-safe]`` entries, the handler's getters and the two Static entries, never a Hard
+       entry or a control entry of the handler (``prepare``, ``add_variant``, ``remove_variant``,
+       ``destroy``: ``ANIRA_ERROR_INVALID_STATE`` from inside a callback). Hands back the
+       ``prepared`` pointer (``NULL`` legal)
        every ``process``, ``reset`` and ``unprepare`` of this handler on this loaded model receives. A
        refusal leaves the handler unprepared, owes no ``unprepare``, and the loaded model goes back
-       (an ``unload`` when the handler was its last holder).
+       (an ``unload`` when the handler was its last holder). A variant added at run time prepares
+       its plans' engines beside the playing stream, with ``ANIRA_PREPARE_LIVE``
+       (:ref:`a prepare beside running phases <engines-live>`).
    * - ``process(ctx, prepared, user_data)``
      - One inference, on an inference thread, in ``ANIRA_PHASE_INFERENCE`` (between the processor's
        ``before_inference`` and ``after_inference``). A **shared call** (a handler that is not
@@ -308,9 +312,41 @@ while the handler stays prepared, the arrays for the call): ``handler``, ``repor
 of the **model end** as the processor sees it (the spec's dtype and shape at the pinned window, the
 slot's host domain, no memory), the canonical names, and ``flags``: ``ANIRA_PREPARE_EXCLUSIVE`` when
 the handler's inferences run one at a time and in order (a stateful model or a State pair), its calls
-claim no shared slot, and the engine builds what it keeps per stream here, its executor included; 0
-otherwise: the handler's calls run on the shared slots, and an engine that keeps nothing per handler
-hands back nothing.
+claim no shared slot, and the engine builds what it keeps per stream here, its executor included;
+without the bit the handler's calls run on the shared slots, and an engine that keeps nothing per
+handler hands back nothing. ``ANIRA_PREPARE_LIVE`` says the prepare runs while the handler's
+stream plays (below).
+
+.. _engines-live:
+
+**A prepare beside running phases.** ``anira_handler_add_variant`` builds the plans of a new
+variant while the handler's stream plays (:ref:`usage-variant-set`). For the engines of those plans
+the lifecycle is the one above with one difference: ``init`` (for an engine object no earlier plan
+reached), ``load`` and ``prepare`` run on the thread that called the add, while the driver thread
+and the inference threads run the handler's other plans. The engine's own ``process`` may run at
+the same moment for another prepared handle of the same handler.
+
+- The prepare record carries ``ANIRA_PREPARE_LIVE`` in ``flags``, beside ``ANIRA_PREPARE_EXCLUSIVE``
+  where the handler is exclusive. ``handler`` is the playing handler, ``num_entries`` the playing
+  stream's entry count, and ``report`` the report the add publishes when it succeeds
+  (``anira_handler_plan_report`` answers the previous one until then).
+- From inside ``init``, ``load``, ``prepare``, ``unprepare`` or ``unload`` of such a build the
+  handler's getters answer. Every control entry of the handler (``anira_handler_prepare``,
+  ``anira_handler_add_variant``, ``anira_handler_remove_variant``, ``anira_handler_destroy``) and
+  the two Static entries return ``ANIRA_ERROR_INVALID_STATE``: the driver thread is the one writer
+  of a Static store while the stream plays. Inside a plain prepare the two Static entries stay
+  legal.
+- The add's warm-up pass, where it runs, reaches the new prepared handle as ordinary ``process``
+  calls, in a session of the add's own, before the handle joins the playing stream. In the stream
+  the handle's first inference is the first of a new stream for its plan: an exclusive handler's
+  engine gets its ``reset`` first.
+- ``anira_handler_remove_variant`` gives the handles back beside the playing stream too:
+  ``unprepare`` for every plan of the variant, then ``unload`` for a loaded model no other plan of
+  any handler runs, on the thread that called the removal, once no ``process`` of those handles is
+  running or queued. A failed add unprepares and unloads what it built before it returns.
+- An engine that keeps something per handler outside its ``prepared`` pointers (a table keyed by
+  the handler, a scratch every handle writes) guards it: its ``prepare`` for a handler and its
+  ``process`` for the same handler may run at once.
 
 **The call context**, ``anira_engine_ctx`` (Tier 1, 64 bytes on anira's stack for the call):
 ``instance`` (the shared slot, ``0 .. instances - 1``, never two calls at once on one; 0 under

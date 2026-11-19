@@ -12,7 +12,10 @@ The main thread
    context, the configs, the pipeline, the handler, its prepare), and so do the main-thread
    phases of a JavaScript processor (``init``, ``prepare``, ``unprepare``, ``release``) and an
    engine's ``query``. A prepare whose contract warms up spins here while the Workers run the pass,
-   so it needs them in their loops first (:js:meth:`Context.ready`). There is no log drain thread
+   so it needs them in their loops first (:js:meth:`Context.ready`). The control entries that run
+   beside a playing stream, :js:meth:`InferenceHandler.addVariant` and
+   :js:meth:`InferenceHandler.removeVariant`, run here too, while the audio thread renders: the
+   main thread blocks for the call, the audio thread never waits for it. There is no log drain thread
    on the web: :js:meth:`Anira.startLogPump` drains the real-time records on an interval.
 
 The context's inference Workers

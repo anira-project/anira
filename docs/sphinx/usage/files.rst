@@ -78,6 +78,10 @@ The model file
      - ``"stateless"`` / ``"stateful"``; the instance ceiling (absent: ``ANIRA_INSTANCES_AUTO``); the
        anchor's canonical name (absent: the first Streamed input, else output)
 
+A model file describes one model. The variants of an inference stage are one model file each,
+loaded into one ``ModelConfig`` each and handed to ``add_inference`` as a list
+(:ref:`usage-variants`); a set of variants has no file form.
+
 The contract file
 -----------------
 
@@ -91,7 +95,8 @@ decoder files add ``"on_miss": "zeros"``):
       "hard": {
         "budget": "measured",
         "warmup": "until_stable",
-        "on_miss": "bypass"
+        "on_miss": "bypass",
+        "variant_state": "fresh"
       }
     }
 
@@ -111,6 +116,9 @@ decoder files add ``"on_miss": "zeros"``):
    * - ``on_miss``
      - ``"bypass"``, ``"hold_last"``, ``"zeros"`` or ``"callback"`` (the policy only: the function
        is set in code)
+   * - ``variant_state``
+     - ``"fresh"`` or ``"keep"``: the model's state behind a switch to another variant of the
+       inference stage (:ref:`usage-variant-state`)
    * - ``wait_ratio``
      - A number
    * - ``ring_dtypes``, ``latencies``

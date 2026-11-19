@@ -69,6 +69,12 @@ filled. Under a measured budget ``prepare`` may run twice in one prepare: ``prep
 The processor's id, for the model's measured figure, is ``org.anira.web.processor.<key>``, the key of
 its name: processors defined under one name share the figure (:ref:`usage-budget-warmup`).
 
+**Model variants.** The processor is prepared once per handler and serves every variant of the
+inference stage: the variants have one form, and ``ctx``'s ``variant`` field
+(``layout.anira_processor_ctx``) says which one a chunk runs. :js:meth:`InferenceHandler.addVariant`
+and :js:meth:`InferenceHandler.removeVariant` call no hook of the processor: neither ``prepare`` nor
+``unprepare``, and no phase for the warm-up of the added plans (:ref:`usage-variant-set`).
+
 The Example's Processor
 -----------------------
 

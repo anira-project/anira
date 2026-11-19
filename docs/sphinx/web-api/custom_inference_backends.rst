@@ -39,7 +39,9 @@ array of that dtype over the tensor's data (``Float32Array`` for float32, ``Int1
 bytes as a ``Uint8Array`` for bool8); and ``f32``, ``data`` when the tensor is float32. It fills
 the outputs and returns an ``anira_status``. ``reset`` (with
 ``hooks: ANIRA_EM_ENGINE_HOOK_RESET`` in ``addEngine``) runs at a new stream of an exclusive
-handler, on the Workers too; ``query`` (``ANIRA_EM_ENGINE_HOOK_QUERY``) answers what the engine
+handler and at the first inference behind a switch to another model variant under
+``ANIRA_VARIANT_STATE_FRESH`` (:ref:`usage-variant-state`), on the Workers too; ``query``
+(``ANIRA_EM_ENGINE_HOOK_QUERY``) answers what the engine
 can run here and runs on the main thread, so a page whose engine has one imports the module there
 as well. Each Worker builds its own instance, so an engine object is never shared between
 threads.
@@ -47,6 +49,17 @@ threads.
 ``process`` must be synchronous: the Worker's event loop does not run while it is in its loop, so
 an engine whose inference is a promise (onnxruntime-web's ``session.run()``, a WebGPU readback)
 cannot run there yet. :ref:`web-realms` says what an engine can reach once the Worker runs.
+
+**One model per Worker.** A Worker's engine instance holds the model of its last ``load``:
+``load(model)`` runs again whenever the Worker's next call is for another loaded model than its
+last one. A handler with several model variants on one JavaScript engine (:ref:`usage-variants`)
+therefore loads a variant's model on every Worker that takes one of its chunks after a chunk of
+another variant, inside that call; the ONNX Runtime Web engine releases its session and creates
+the new one. The stream stays correct, and on each Worker the first inference behind a switch pays
+the load. The module's built-in ONNX Runtime engine keeps the model of every plan loaded. A
+JavaScript engine has no ``prepare`` hook, so nothing of an
+:js:meth:`InferenceHandler.addVariant` crosses into JavaScript before the added plan's first call
+on a Worker (its ``load``, then its ``process``).
 
 Registering It
 --------------

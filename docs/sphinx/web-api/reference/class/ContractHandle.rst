@@ -9,7 +9,11 @@ options, the contract file's ``"edge_cost"``: ``"zero_copy"``, ``"copy"``,
 ``"unified_transfer"`` or ``"dedicated_transfer"``) is the worst edge class a plan may take for
 any slot: prepare drops a plan above it, and every limit drops a plan with an
 ``ANIRA_EDGE_UNKNOWN`` edge (a device provider's, on the web). Left out, or ``edgeCost(undefined)``:
-no limit, every edge admitted.
+no limit, every edge admitted. ``hardVariantState`` (the ``variantState`` field of
+``ContractHandle.hard``'s options, the contract file's ``"variant_state"``: ``"fresh"`` or
+``"keep"``) is the model's state behind a switch to another variant of the inference stage:
+``ANIRA_VARIANT_STATE_FRESH``, the default, starts the other variant from its initial state,
+``ANIRA_VARIANT_STATE_KEEP`` hands it the state the stream holds (:ref:`usage-variant-state`).
 
 .. js:autoclass:: ContractHandle.ContractHandle
    :short-name:

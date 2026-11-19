@@ -150,6 +150,13 @@ through the real-time queue (:ref:`logging-realtime`); a miss is not recorded.
 ``get_available_samples(slot, channel, &count)`` collects completed inferences and reports what
 waits in an output ring (right after prepare, the latency).
 
+The block entries, their ``_wait`` twins and ``get_available_samples`` read the handler's plan
+table through a reader slot they hold until they return, so that a control thread can add or
+remove a model variant while the stream runs (:ref:`usage-variant-set`). The handler has four such
+slots. When more than four of these entries overlap on one handler, which one driver thread never
+does, an entry returns ``ANIRA_ERROR_CAPACITY``: nothing moved, nothing is recorded in
+``rt_error()``, and the caller calls again.
+
 .. _usage-static:
 
 Static tensors

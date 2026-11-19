@@ -265,14 +265,15 @@ policy without a function is ``ANIRA_ERROR_CONFIG`` at prepare, and a contract f
 
 .. _usage-contract-options:
 
-Wait ratio, ring dtypes, latencies, host domains, edge cost
------------------------------------------------------------
+Wait ratio, ring dtypes, latencies, variant state, host domains, edge cost
+--------------------------------------------------------------------------
 
 .. code-block:: cpp
 
     hard.wait_ratio = 0.5;                                 // a _wait entry may wait half a block
     hard.ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}};    // the host streams int16 into a float32 model
     hard.latencies = {{"audio_out", 4096}};                // the reported latency of this output
+    hard.variant_state = ANIRA_VARIANT_STATE_KEEP;         // a switch to another variant keeps the state
     hard.edge_cost = ANIRA_EDGE_COPY;                      // no plan that crosses a domain
     contract.host_domain("audio_in", ANIRA_DOMAIN_HOST);   // where the host end lives (both kinds)
 
@@ -288,6 +289,13 @@ Wait ratio, ring dtypes, latencies, host domains, edge cost
   *replacing* the computed figure and priming its receive ring. ``ANIRA_ERROR_CONFIG`` at prepare
   below the model's internal latency, on an input, a Static output or an unknown name; above
   ``INT32_MAX`` the setter refuses it. Every output never named keeps the computed figure.
+- **Variant state** (``variant_state``, ``hard_variant_state``; ``"variant_state"`` in the file):
+  what the model's state is behind a switch to another variant of the inference stage.
+  ``ANIRA_VARIANT_STATE_FRESH``, the default, starts the other variant from its initial state;
+  ``ANIRA_VARIANT_STATE_KEEP`` hands it the state the stream holds. A backend switch inside one
+  variant keeps the state under either value, and a handler over one variant never switches
+  (:ref:`usage-variant-state`). A value ``anira_variant_state`` does not name is
+  ``ANIRA_ERROR_INVALID_ARGUMENT`` at the setter.
 - **Host domains** (``host_domain``, both kinds): where the host end of one tensor lives, by
   canonical name, ``ANIRA_DOMAIN_HOST`` for every tensor never named. The ring, the model tensor, the
   Static store, the state buffers and every processor phase live there, and the planner joins it to
