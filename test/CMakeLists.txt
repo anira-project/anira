@@ -229,6 +229,7 @@ anira_add_test_binary(test_abi WHITE_BOX
 	abi/test_MemoryKind.cpp
 	abi/test_State.cpp
 	abi/test_Variants.cpp
+	abi/test_VariantSet.cpp
 	abi/test_Dtypes.cpp
 	abi/test_Tensor.cpp
 	abi/test_Compat.cpp

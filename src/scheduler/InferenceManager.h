@@ -454,6 +454,17 @@ public:
     SessionElement& session() noexcept { return *m_session; }
 
     /**
+     * @brief The session as the core's control plane takes it
+     *
+     * For the control thread of a 3.x handler that changes the session's plan list while the
+     * stream runs (Core::add_plan_slot, take_plan_slot, wait_until_unused, which take the
+     * shared pointer the core registered). The manager keeps its own reference.
+     *
+     * @return The shared pointer to the session
+     */
+    const std::shared_ptr<SessionElement>& shared_session() const noexcept { return m_session; }
+
+    /**
      * @brief What a missed block delivers (anira_miss_policy)
      *
      * ANIRA_MISS_ZEROS is the 2.x behaviour and the default; ANIRA_MISS_HOLD_LAST repeats

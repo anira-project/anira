@@ -68,6 +68,7 @@ anira_custom_engine_destroy
 anira_custom_engine_detach
 anira_drain_log
 anira_enabled_engines
+anira_handler_add_variant
 anira_handler_create
 anira_handler_destroy
 anira_handler_get_available_samples

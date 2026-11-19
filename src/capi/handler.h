@@ -51,7 +51,8 @@ struct Plan {
                                                     ///< list (m_info.variant)
     size_t m_row = 0;                               ///< the index in that variant's models[]
     anira_plan_info m_info = ANIRA_PLAN_INFO_INIT;  ///< engine_id and provider_id point into
-                                                    ///< the report's string store
+                                                    ///< the handler's own store
+                                                    ///< (anira_handler::m_plan_strings)
 };
 
 /**
@@ -227,14 +228,20 @@ struct anira_handler {
                                                              ///< twins: wait_ratio x host_block_max
                                                              ///< / host_rate
     /// dense index -> variant/row/backend, over every variant in variant order; rebuilt at
-    /// prepare only, in the order the session's plan table is built in from the same
-    /// derivations (plan_requests). The control side of the table: read and written by the
-    /// thread inside a control entry alone. What an entry of another thread reads is
-    /// m_plan_rows.
+    /// prepare, in the order the session's plan table is built in from the same derivations
+    /// (plan_requests), and extended by anira_handler_add_variant, which appends the plans of
+    /// its variant behind the others as it appends their slots to the session's table: the
+    /// dense index is the position here, in the session's list and in the published rows. The
+    /// control side of the table: read and written by the thread inside a control entry alone.
+    /// What an entry of another thread reads is m_plan_rows.
     std::vector<anira::capi::Plan> m_plans;
+    /// The engine and provider ids the rows of m_plans point at, the handler's own copies: a
+    /// deque, so that a string stays where it is when plans are appended. Cleared with m_plans.
+    std::deque<std::string> m_plan_strings;
     /// The plan rows the selection entries read (anira::capi::PlanRows), published from
     /// m_plans by the control thread: at the end of a prepare, before the handler is runnable,
-    /// and empty by unprepare. Read through a lease of m_plan_row_readers, never directly.
+    /// behind every change of the table by a later control entry, and empty by unprepare. Read
+    /// through a lease of m_plan_row_readers, never directly.
     thl::RCU<anira::capi::PlanRows> m_plan_rows{anira::capi::PlanRows{}};
     /// The reader slots of m_plan_rows, added once, with the handler: a selection entry claims
     /// one for its call (all busy: ANIRA_ERROR_CAPACITY). Declared behind the rows it reads.
@@ -249,10 +256,19 @@ struct anira_handler {
      * session starts it at 0; prepare then selects its initial plan.
      */
     std::atomic<uint32_t> m_selected_plan{0};
-    anira_plan_report m_report;
-    /// The report anira_handler_plan_report hands out: m_report while the handler is prepared,
-    /// NULL else. Stored by the control thread (prepare, before its callbacks run; unprepare),
-    /// loaded by the getter, which never reaches into the session or the report itself.
+    /// The plan reports of the prepared handler, oldest first: the one its prepare built, then
+    /// one per control entry that changed the plan table since (anira_handler_add_variant), each
+    /// a whole report that owns every string its rows name. A host holds raw pointers to them
+    /// (anira_handler_plan_report, a prepare record's report), so each is an object of its own
+    /// at one address, none is changed once a newer one exists and none is freed before the
+    /// next prepare or destroy. unprepare frees the later ones and empties the first, which
+    /// the next prepare fills again: the prepare's report is one object for the handler's
+    /// life, as the handler's one report always was. Control thread.
+    std::vector<std::unique_ptr<anira_plan_report>> m_reports;
+    /// The report anira_handler_plan_report hands out: the newest of m_reports while the
+    /// handler is prepared, NULL else. Stored by the control thread (prepare, before its
+    /// callbacks run; a later control entry, once its report is complete; unprepare), loaded
+    /// by the getter, which never reaches into the session or the report itself.
     std::atomic<const anira_plan_report*> m_published_report{nullptr};
     std::atomic<bool> m_prepared{false};  ///< release before the engines' and the processor's
                                           ///< prepares of a prepare, so the getters answer
@@ -297,15 +313,27 @@ struct anira_handler {
     /**
      * @brief The control lock: one control entry of the handler at a time.
      *
-     * Serialises anira_handler_prepare (anira_em_audio_node_prepare's included) and
-     * anira_handler_destroy. No real-time entry takes it, and none waits for it: the getters
-     * answer from the atomics above, the Hard entries are the driver thread's. m_control_holder
-     * is the thread inside the locked region (std::thread::id() while nobody is): a callback of
-     * that region (an engine's or a processor's prepare, a load) runs on the holding thread, so
-     * a control entry called from it finds itself there and does not lock again.
+     * Serialises anira_handler_prepare (anira_em_audio_node_prepare's included),
+     * anira_handler_add_variant and anira_handler_destroy. No real-time entry takes it, and
+     * none waits for it: the getters answer from the atomics above, the Hard entries are the
+     * driver thread's. m_control_holder is the thread inside the locked region
+     * (std::thread::id() while nobody is): a callback of that region (an engine's or a
+     * processor's prepare, a load) runs on the holding thread, so a control entry called from
+     * it finds itself there and is refused (ANIRA_ERROR_INVALID_STATE; a destroy does
+     * nothing): it neither locks again nor runs inside the entry that called it.
+     *
+     * m_live_build is set while the lock is held by an entry that runs beside the playing
+     * stream (anira_handler_add_variant): the two Static entries, which a callback of a plain
+     * prepare may call, are refused on the holding thread then, since the driver thread is the
+     * one writer of a Static store while the stream plays. They read the flag first and the
+     * holder only when it is set, so a Static entry of a stream that no control entry runs
+     * beside costs one load.
      */
     std::mutex m_control;
     std::atomic<std::thread::id> m_control_holder{};
+    static_assert(std::atomic<std::thread::id>::is_always_lock_free,
+                  "the Static entries read the holder of the control lock on the driver thread");
+    std::atomic<bool> m_live_build{false};
     /// What the processor's prepare handed back for this handler (the out_prepared of
     /// anira_processor_prepare_fn; NULL is a legal value): the `prepared` pointer every phase call,
     /// the reset and the unprepare of this handler receive beside the registration's user_data.

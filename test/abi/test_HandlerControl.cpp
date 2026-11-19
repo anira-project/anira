@@ -361,7 +361,7 @@ TEST(AbiGetters, TheValueGettersAnswerFromTheHandlersOwnAtomics) {
     EXPECT_GT(anira_handler_num_entries(h), 0U);
     EXPECT_EQ(anira_handler_num_entries(h), h->m_pp->num_entries());
     EXPECT_EQ(anira_handler_num_entries(h), h->m_num_entries.load());
-    EXPECT_EQ(anira_handler_plan_report(h), &h->m_report);
+    EXPECT_EQ(anira_handler_plan_report(h), h->m_reports.back().get());
     EXPECT_EQ(anira_handler_get_plan(h), 0U);
     ASSERT_EQ(anira_handler_set_plan(h, 0), ANIRA_OK);
     EXPECT_EQ(h->m_manager->get_plan(), anira_handler_get_plan(h));
@@ -372,7 +372,7 @@ TEST(AbiGetters, TheValueGettersAnswerFromTheHandlersOwnAtomics) {
     expect_unprepared("behind a refused prepare");
 
     ASSERT_EQ(handler.prepare(hop_contract()), ANIRA_OK) << handler.m_err.message;
-    EXPECT_EQ(anira_handler_plan_report(h), &h->m_report);
+    EXPECT_EQ(anira_handler_plan_report(h), h->m_reports.back().get());
     EXPECT_GT(anira_handler_get_latency(h, 0), 0U);
 }
 

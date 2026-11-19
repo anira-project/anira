@@ -1026,6 +1026,22 @@ typedef enum anira_phase {
 #define ANIRA_PREPARE_EXCLUSIVE 1u
 
 /**
+ * @brief anira_prepare_info.flags bit (anira/abi/lifecycle.h): the prepare is a live build's.
+ * anira_handler_add_variant prepares the engines of a new variant's plans while the
+ * handler's stream keeps playing, so this prepare, and the load ahead of it, run on a
+ * control thread beside the driver thread and the inference threads, which run the
+ * handler's other plans meanwhile (the engine's own process for another prepared handle
+ * of the same handler included). The record names the playing handler: its entry count
+ * is the playing stream's, its report the one the call publishes when it succeeds
+ * (anira_handler_plan_report answers the previous one until then). From inside such a
+ * prepare the handler's getters are legal; every control entry of the handler
+ * (anira_handler_prepare, anira_handler_add_variant, anira_handler_destroy) and the two
+ * Static entries are refused with ANIRA_ERROR_INVALID_STATE. Never set for a processor:
+ * a live build does not prepare it again.
+ */
+#define ANIRA_PREPARE_LIVE 2u
+
+/**
  * @brief anira_engine_ctx.flags bit: the call is an exclusive handler's
  * (ANIRA_PREPARE_EXCLUSIVE at its prepare): it runs on what that handler's prepare
  * built, no shared slot of the loaded model was claimed, and instance is 0.

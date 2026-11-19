@@ -1202,7 +1202,7 @@ TEST(AbiProcessor, CtxPerPhase) {
     const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(h);
     ASSERT_NE(session, nullptr);
     const uint32_t plan = anira_handler_get_plan(h);
-    const anira_plan_info& info = h->m_report.m_plans.at(plan);
+    const anira_plan_info& info = h->m_reports.back()->m_plans.at(plan);
     const std::array<uint32_t, 4> phases{ANIRA_PHASE_PRE_PROCESS,
                                          ANIRA_PHASE_BEFORE_INFERENCE,
                                          ANIRA_PHASE_AFTER_INFERENCE,
@@ -1210,8 +1210,8 @@ TEST(AbiProcessor, CtxPerPhase) {
     // The contract file's warm-up (FIXED 1) ran every plan at prepare, through the session: the
     // inference hooks once per plan and inference, pre_process and post_process never (they are
     // the stream's alone).
-    const int pass =
-        static_cast<int>(h->m_report.m_plans.size() * h->m_contract.hard()->m_warmup_iterations);
+    const int pass = static_cast<int>(h->m_reports.back()->m_plans.size() *
+                                      h->m_contract.hard()->m_warmup_iterations);
     ASSERT_GT(pass, 0);
     for (const uint32_t phase : phases) {
         SCOPED_TRACE("phase " + std::to_string(phase));
@@ -2911,7 +2911,7 @@ std::array<anira_backend_id, 1> one_engine(anira_engine engine) {
 
 /// The engine of the plan the handler runs.
 uint32_t plan_engine(const anira_handler* handler) {
-    return handler->m_report.m_plans.at(anira_handler_get_plan(handler)).engine;
+    return handler->m_reports.back()->m_plans.at(anira_handler_get_plan(handler)).engine;
 }
 
 /// The Static gain of the bundled gain model, through the handler's store.

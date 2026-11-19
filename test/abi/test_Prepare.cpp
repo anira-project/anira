@@ -1626,14 +1626,14 @@ ContractHandle measured_contract(uint32_t block = k_block, double rate = k_rate)
 
 /// The plan row `plan` of a prepared handler's report.
 const anira_plan_info& plan_row(const Handler& handler, uint32_t plan = 0) {
-    return handler.m_handler->m_report.m_plans.at(plan);
+    return handler.m_handler->m_reports.back()->m_plans.at(plan);
 }
 
 /// Every row of a prepared handler: a positive real-time factor over at least one parallel
 /// inference, the verdict the thresholds give its load (0.75, 1), or UNMEASURED with no pass; a
 /// measured row's median at or below its figure.
 void expect_rows_follow_the_thresholds(const Handler& handler) {
-    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+    for (const anira_plan_info& row : handler.m_handler->m_reports.back()->m_plans) {
         EXPECT_GT(row.rt_factor, 0.0);
         EXPECT_GE(row.rt_parallel, 1U);
         if (row.rt_verdict == ANIRA_RT_UNMEASURED) {
@@ -1723,7 +1723,7 @@ TEST(AbiWarmup, FixedRunsItsCountPerPlan) {
         << handler.m_err.message;
     EXPECT_EQ(engine.m_calls.load(), 3);
     EXPECT_DOUBLE_EQ(plan_row(handler).budget_ms, 5.0) << "an explicit budget stays";
-    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+    for (const anira_plan_info& row : handler.m_handler->m_reports.back()->m_plans) {
         EXPECT_EQ(row.warmup_iterations, 3U);
         EXPECT_EQ(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_FIXED));
     }
@@ -1733,7 +1733,7 @@ TEST(AbiWarmup, FixedRunsItsCountPerPlan) {
     measured.hard_warmup(ANIRA_WARMUP_FIXED, 4);
     ASSERT_EQ(handler.prepare(measured), ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(engine.m_calls.load(), 3 + 4);
-    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+    for (const anira_plan_info& row : handler.m_handler->m_reports.back()->m_plans) {
         EXPECT_GT(row.budget_ms, 0.0) << "every plan was measured";
     }
 }
@@ -1748,7 +1748,7 @@ TEST(AbiWarmup, TheSessionRunsTheSlowestPlansFigure) {
     Handler handler(context, gain_with_custom(), candidates, {}, engine.engine());
     ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
     double slowest = 0.0;
-    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+    for (const anira_plan_info& row : handler.m_handler->m_reports.back()->m_plans) {
         EXPECT_GT(row.budget_ms, 0.0);
         slowest = std::max(slowest, row.budget_ms);
     }

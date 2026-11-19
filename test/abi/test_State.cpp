@@ -2524,7 +2524,7 @@ const char* engine_word(anira_engine engine) {
 
 /// The engine of the plan the handler runs: a case tells that it ran on the engine it asked for.
 uint32_t plan_engine(const anira_handler* handler) {
-    return handler->m_report.m_plans.at(anira_handler_get_plan(handler)).engine;
+    return handler->m_reports.back()->m_plans.at(anira_handler_get_plan(handler)).engine;
 }
 
 /// The bundled file on one engine of this build: the handler over the model file with that one
@@ -2698,7 +2698,7 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
         ASSERT_NE(hard, nullptr);
         EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_UNTIL_STABLE) << "the contract file's defaults";
         EXPECT_EQ(hard->m_budget, ANIRA_BUDGET_MEASURED) << "the contract file's defaults";
-        const anira_plan_info& row = h->m_report.m_plans.at(anira_handler_get_plan(h));
+        const anira_plan_info& row = h->m_reports.back()->m_plans.at(anira_handler_get_plan(h));
         EXPECT_GE(row.warmup_iterations, 4U) << "the pass ran through the session";
         EXPECT_NE(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
         const std::vector<float> fresh = state_values(h, EngineRig::state_slot());
