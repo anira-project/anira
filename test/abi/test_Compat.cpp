@@ -2364,6 +2364,52 @@ TEST(AbiCompat, NonblockingRoutesUnderRtsan) {
     EXPECT_EQ(handler.rt_error(), ANIRA_OK);
 }
 
+// A set_inference_backend that meets another thread's inside the C handler stores nothing there
+// (the selection entries run one at a time: ANIRA_ERROR_CONCURRENT_CALL), and the 2.x member
+// has no status to say so. The request is kept, and the thread that drives the handler applies
+// it with its next block: no request is lost, and none waits for another. The other call is
+// played by the lease on the C handler's plan rows, held white-box.
+TEST(AbiCompat, ABackendRequestThatMeetsAnotherCallIsAppliedWithTheNextBlock) {
+    // The gain model's rows for the built-in engines: two plans where the build has two of them.
+    v2::InferenceConfig config = make_shim(oracle_gain_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    // A second backend with a plan: one the selection follows.
+    const v2::InferenceBackend before = handler.get_inference_backend();
+    std::optional<v2::InferenceBackend> other;
+    for (const v2::InferenceBackend backend : k_backends) {
+        if (backend == before) { continue; }
+        handler.set_inference_backend(backend);
+        if (handler.get_inference_backend() == backend) {
+            other = backend;
+            break;
+        }
+    }
+    if (!other.has_value()) { GTEST_SKIP() << "one plan: fewer than two engines in this build"; }
+    handler.set_inference_backend(before);
+    ASSERT_EQ(handler.get_inference_backend(), before);
+
+    {
+        const auto held = handler.native()->m_plan_row_reader.claim();
+        ASSERT_TRUE(held.has_value());
+        handler.set_inference_backend(*other);
+        EXPECT_EQ(handler.get_inference_backend(), before)
+            << "another selection entry is inside the handler: nothing was stored";
+    }
+    EXPECT_EQ(handler.get_inference_backend(), before) << "nothing applies it but a block";
+    Buffers buffers;
+    const std::array<const float*, 1> in_ch{buffers.m_in.data()};
+    const std::array<float*, 1> out_ch{buffers.m_out.data()};
+    static_cast<void>(
+        handler.process(in_ch.data(), anira_test::k_block, out_ch.data(), anira_test::k_block));
+    EXPECT_EQ(handler.get_inference_backend(), *other) << "the next block applied the request";
+    static_cast<void>(
+        handler.process(in_ch.data(), anira_test::k_block, out_ch.data(), anira_test::k_block));
+    EXPECT_EQ(handler.get_inference_backend(), *other);
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK) << "a legal overlap records nothing";
+}
+
 // Case 24: the 2.x statics forward to the core entries.
 TEST(AbiCompat, ContextStaticsForward) {
     {
