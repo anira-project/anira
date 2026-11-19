@@ -32,12 +32,14 @@
 //                       that races a removal ends on a ready plan; a prepare behind removals
 //                       keeps the variant indices and numbers the plans anew, and an add
 //                       behind one gets a new index;
-//   the loop            add, select, remove, fifty times beside a free-running stream.
+//   the loop            add, select, remove, fifty times beside a free-running stream;
+//   real models         the bundled variant gain models on every built-in engine of the build:
+//                       one joins a playing handler, is switched to, and the first one leaves.
 //
-// Engine-free: every plan runs on one registered engine whose loaded model is a gain, the factor
-// the number its entry's path spells, so a block of the stream says which variant ran it. The
-// driving thread is anira_test::BackgroundDriver, which feeds a ramp and checks every block
-// against the delayed input times one factor.
+// Engine-free but for the last case: every plan runs on one registered engine whose loaded model
+// is a gain, the factor the number its entry's path spells, so a block of the stream says which
+// variant ran it. The driving thread is anira_test::BackgroundDriver, which feeds a ramp and
+// checks every block against the delayed input times one factor.
 
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -70,6 +72,7 @@
 #include <thread>
 #include <vector>
 
+#include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -2071,4 +2074,91 @@ TEST(VariantSet, VariantsAddedSelectedAndRemovedBesideAFreeRunningStream) {
     EXPECT_EQ(rig.m_engine.m_loads.load(), static_cast<int>(k_rounds) + 1);
     EXPECT_EQ(anira::Core::get_num_loaded_models(), 1U);
     EXPECT_EQ(rig.h()->m_reports.size(), (2U * k_rounds) + 1) << "a report per control call";
+}
+
+// ==== real models =============================================================================
+
+// The bundled VariantGainNetwork files (y = 0.5 x, 2 x and -x) on every built-in engine of the
+// build. A handler prepared with half and double plays under a free-running driving thread while
+// invert joins it: the model loads and its plan is prepared and measured beside the stream. The
+// stream moves to it, and the first variant leaves, its model unloaded, while the thread goes on
+// playing; the two that remain switch as before. Every block of the stream is the delayed input
+// times the weight of the variant its chunk was formed on, and no block is missing. The handler
+// is a shared one (the models keep no state), so the added plan runs on the instances of its
+// loaded model, which no session made.
+TEST(VariantSet, ABundledModelJoinsAPlayingStreamAndTheFirstLeavesItOnEveryEngine) {
+    const std::vector<anira_engine> engines = anira_test::built_in_engines();
+    if (engines.empty()) { GTEST_SKIP() << "no built-in engine in this build"; }
+    const anira::ModelConfig half = anira::ModelConfig::from_file(k_variant_gain_half_model_json);
+    const anira::ModelConfig twice =
+        anira::ModelConfig::from_file(k_variant_gain_double_model_json);
+    const anira::ModelConfig invert =
+        anira::ModelConfig::from_file(k_variant_gain_invert_model_json);
+    constexpr size_t k_some = 4;  // blocks the thread plays between two steps of the case
+    for (const anira_engine engine : engines) {
+        SCOPED_TRACE(anira_test::engine_word(engine));
+        SetRig rig({&half, &twice}, nullptr, ANIRA_LOG_ERROR, {anira_test::cpu_backend(engine)});
+        ASSERT_EQ(rig.prepare(
+                      anira_test::file_contract(k_variant_gain_contract_json, anira_test::k_block)),
+                  ANIRA_OK)
+            << rig.m_message;
+        EXPECT_FALSE(anira_test::session_of(rig.h())->exclusive());
+        const uint32_t latency = anira_handler_get_latency(rig.h(), 0);
+        const uint32_t entries = anira_handler_num_entries(rig.h());
+        const size_t loaded = anira::Core::get_num_loaded_models();
+
+        BackgroundDriver driver(rig.h(), anira_test::k_block);
+        driver.run_free(1U << 20);
+        ASSERT_TRUE(wait_for([&driver] { return driver.done() >= k_some; }));
+
+        // invert joins while the thread plays.
+        uint32_t variant = 99;
+        ASSERT_EQ(rig.add(invert, &variant), ANIRA_OK) << rig.m_message;
+        ASSERT_EQ(variant, 2U);
+        EXPECT_EQ(anira::Core::get_num_loaded_models(), loaded + 1);
+        const std::vector<anira_plan_info> rows = rows_of(anira_handler_plan_report(rig.h()));
+        ASSERT_EQ(rows.size(), 3U);
+        EXPECT_EQ(rows[2].variant, 2U);
+        EXPECT_EQ(rows[2].engine, static_cast<uint32_t>(engine));
+        EXPECT_EQ(rows[2].state, k_ready);
+        EXPECT_EQ(anira_handler_get_plan(rig.h()), 0U) << "an add selects nothing";
+        size_t done = driver.done();
+        ASSERT_TRUE(wait_for([&] { return driver.done() >= done + k_some; }))
+            << "the stream stopped behind the add";
+
+        // The switch, between two calls of the thread: the chunk it lands on is known.
+        driver.stop();
+        ASSERT_TRUE(driver.wait());
+        const size_t to_invert = driver.done();
+        ASSERT_EQ(anira_handler_set_model(rig.h(), 2), ANIRA_OK);
+        ASSERT_EQ(anira_handler_get_plan(rig.h()), 2U);
+        driver.run_free(1U << 20);
+        ASSERT_TRUE(wait_for([&] { return driver.done() >= to_invert + k_some; }));
+
+        // The first variant leaves while the thread plays, and its model with it.
+        ASSERT_EQ(rig.remove(0), ANIRA_OK) << rig.m_message;
+        EXPECT_EQ(anira::Core::get_num_loaded_models(), loaded);
+        EXPECT_EQ(states_of(anira_handler_plan_report(rig.h())),
+                  (std::vector<uint32_t>{k_removed, k_ready, k_ready}));
+        EXPECT_EQ(anira_handler_get_plan(rig.h()), 2U);
+        done = driver.done();
+        ASSERT_TRUE(wait_for([&] { return driver.done() >= done + k_some; }))
+            << "the stream stopped behind the removal";
+
+        // The two that remain switch as before.
+        driver.stop();
+        ASSERT_TRUE(driver.wait());
+        const size_t to_double = driver.done();
+        ASSERT_EQ(anira_handler_set_model(rig.h(), 1), ANIRA_OK);
+        driver.step(k_some + driver.latency_blocks());
+        ASSERT_TRUE(driver.wait());
+
+        expect_stream(driver, [&](size_t chunk) {
+            if (chunk < to_invert) { return 0.5F; }
+            return chunk < to_double ? -1.0F : 2.0F;
+        });
+        EXPECT_EQ(anira_handler_rt_error(rig.h()), ANIRA_OK);
+        EXPECT_EQ(anira_handler_get_latency(rig.h(), 0), latency);
+        EXPECT_EQ(anira_handler_num_entries(rig.h()), entries);
+    }
 }

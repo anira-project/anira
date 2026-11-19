@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <anira/anira.hpp>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -168,6 +169,43 @@ inline anira_edge_info to_host(const anira_backend_id& backend) noexcept {
     query.from_provider_id = backend.provider_id;
     query.to_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
     return query;
+}
+
+/// The built-in engines of this build, in the order of anira_enabled_engines: what a case over
+/// a bundled model file with a row for every engine runs on (the accumulator and its negated
+/// twin, the variant gain models).
+inline std::vector<anira_engine> built_in_engines() {
+    std::vector<anira_engine> out;
+    for (const anira::BackendId& id : anira::enabled_engines()) {
+        const auto engine = static_cast<anira_engine>(id.engine);
+        if (engine == ANIRA_ENGINE_LIBTORCH || engine == ANIRA_ENGINE_ONNXRUNTIME ||
+            engine == ANIRA_ENGINE_EXECUTORCH || engine == ANIRA_ENGINE_TFLITE ||
+            engine == ANIRA_ENGINE_LITERT) {
+            out.push_back(engine);
+        }
+    }
+    return out;
+}
+
+/// The word a model file names a built-in engine by: a case's trace says which engine it is on.
+inline const char* engine_word(anira_engine engine) {
+    switch (engine) {
+        case ANIRA_ENGINE_LIBTORCH: return "libtorch";
+        case ANIRA_ENGINE_ONNXRUNTIME: return "onnxruntime";
+        case ANIRA_ENGINE_EXECUTORCH: return "executorch";
+        case ANIRA_ENGINE_TFLITE: return "tflite";
+        case ANIRA_ENGINE_LITERT: return "litert";
+        default: return "another engine";
+    }
+}
+
+/// A built-in engine on its CPU path, as a candidate of an inference stage and as the backend of
+/// a plan query.
+inline anira_backend_id cpu_backend(anira_engine engine) {
+    return {.struct_size = sizeof(anira_backend_id),
+            .engine = static_cast<uint32_t>(engine),
+            .provider = ANIRA_PROVIDER_CPU,
+            .engine_id = nullptr};
 }
 
 /// One candidate per engine of oracle_engines() plus the custom engine anira.v2.custom (k_custom,
@@ -506,6 +544,18 @@ struct Handler {
             const anira::ModelConfig& model,
             std::span<const anira_backend_id> candidates = {},
             std::span<const anira_processor_desc> processors = {},
+            const anira_custom_engine* custom = nullptr)
+        : Handler(context,
+                  std::array<const anira_model_config*, 1>{model.native()},
+                  candidates,
+                  processors,
+                  custom) {}
+
+    /// The inference stage over several variants (models of one form), in this order.
+    Handler(const Context& context,
+            std::span<const anira_model_config* const> variants,
+            std::span<const anira_backend_id> candidates = {},
+            std::span<const anira_processor_desc> processors = {},
             const anira_custom_engine* custom = nullptr) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         if (custom != nullptr) {
@@ -513,10 +563,9 @@ struct Handler {
         } else {
             add_passthrough(m_pipeline);
         }
-        const anira_model_config* variants[] = {model.native()};
         EXPECT_EQ(anira_pipeline_add_inference(m_pipeline,
-                                               variants,
-                                               1,
+                                               variants.data(),
+                                               static_cast<uint32_t>(variants.size()),
                                                candidates.empty() ? nullptr : candidates.data(),
                                                static_cast<uint32_t>(candidates.size()),
                                                &m_err),

@@ -428,6 +428,128 @@ TEST(ExtrasFixtures, StatefulAccumulator) {
     EXPECT_EQ(figures.m_warm_up, 1U);
 }
 
+// The accumulator's two siblings (3.x-only files). The negated twin is the accumulator's file
+// with the twin's exports: the rows, the LiteRT output keys and every tensor spec are the
+// accumulator's, which is what makes the two the variants of one inference stage. The mono file
+// names the accumulator's mono exports and has one channel where the stereo one has two, and
+// nothing else differs: a model of another form. Every row's file is in the fetched tree.
+TEST(ExtrasFixtures, StatefulAccumulatorSiblings) {
+    const anira::ModelConfig accumulator =
+        anira::ModelConfig::from_file(k_stateful_accumulator_model_json);
+    const anira_model_config& base = *accumulator.native();
+    const auto check = [&base](const char* model_json, const char* stem, int64_t channels) {
+        SCOPED_TRACE(stem);
+        const anira::ModelConfig loaded = anira::ModelConfig::from_file(model_json);
+        EXPECT_FALSE(loaded.upgraded()) << "a 3.x document";
+        const anira_model_config& cfg = *loaded.native();
+        ASSERT_EQ(cfg.m_models.size(), base.m_models.size());
+        for (size_t row = 0; row < cfg.m_models.size(); ++row) {
+            const anira::capi::ModelEntry& entry = cfg.m_models[row];
+            EXPECT_EQ(entry.m_engine, base.m_models[row].m_engine) << "row " << row;
+            ASSERT_EQ(entry.m_tensors.size(), base.m_models[row].m_tensors.size()) << "row " << row;
+            for (const auto& [canonical, record] : base.m_models[row].m_tensors) {
+                ASSERT_EQ(entry.m_tensors.count(canonical), 1U) << canonical;
+                EXPECT_EQ(entry.m_tensors.at(canonical).m_name, record.m_name) << canonical;
+            }
+            EXPECT_NE(entry.m_path.find(std::string("StatefulAccumulatorNetwork/models/") + stem),
+                      std::string::npos)
+                << entry.m_path;
+            EXPECT_TRUE(std::filesystem::exists(entry.m_path)) << entry.m_path;
+        }
+        const auto same_specs = [channels](const std::vector<anira_tensor_spec>& specs,
+                                           const std::vector<anira_tensor_spec>& base_specs) {
+            ASSERT_EQ(specs.size(), base_specs.size());
+            for (size_t i = 0; i < specs.size(); ++i) {
+                const anira_tensor_spec& spec = specs[i];
+                const anira_tensor_spec& other = base_specs[i];
+                SCOPED_TRACE(other.m_name);
+                EXPECT_EQ(spec.m_name, other.m_name);
+                EXPECT_EQ(spec.m_dtype, other.m_dtype);
+                EXPECT_EQ(spec.m_role, other.m_role);
+                ASSERT_EQ(spec.m_ndim, other.m_ndim);
+                for (uint32_t axis = 0; axis < spec.m_ndim; ++axis) {
+                    EXPECT_EQ(spec.m_axes[axis].m_tag, other.m_axes[axis].m_tag) << "axis " << axis;
+                    EXPECT_EQ(spec.m_axes[axis].m_extent,
+                              other.m_axes[axis].m_tag == ANIRA_AXIS_CHANNEL
+                                  ? channels
+                                  : other.m_axes[axis].m_extent)
+                        << "axis " << axis;
+                }
+                EXPECT_EQ(spec.m_window_min, other.m_window_min);
+                EXPECT_EQ(spec.m_window_max, other.m_window_max);
+                EXPECT_EQ(spec.m_overlap, other.m_overlap);
+                EXPECT_EQ(spec.m_state_source, other.m_state_source);
+            }
+        };
+        same_specs(cfg.m_inputs, base.m_inputs);
+        same_specs(cfg.m_outputs, base.m_outputs);
+    };
+    check(k_stateful_accumulator_negated_model_json,
+          "stateful_accumulator_network_negated_stereo.",
+          2);
+    check(k_stateful_accumulator_mono_model_json, "stateful_accumulator_network_mono.", 1);
+}
+
+// The bundled VariantGainNetwork files: three models of one form, a model file per variant
+// (3.x-only, checked field by field). A row for every engine over the variant's export of that
+// format and no tensors record (one tensor per side, which every engine binds by its name or
+// by position), every row's file in the fetched tree, the two mono 512-sample streams, and one
+// contract file for the three with the library's defaults.
+TEST(ExtrasFixtures, VariantGain) {
+    const std::array<std::pair<const char*, const char*>, 3> variants{{
+        {"half", k_variant_gain_half_model_json},
+        {"double", k_variant_gain_double_model_json},
+        {"invert", k_variant_gain_invert_model_json},
+    }};
+    for (const auto& [word, model_json] : variants) {
+        SCOPED_TRACE(word);
+        const anira::ModelConfig loaded = anira::ModelConfig::from_file(model_json);
+        EXPECT_FALSE(loaded.upgraded()) << "a 3.x document";
+        const anira_model_config& cfg = *loaded.native();
+        ASSERT_EQ(cfg.m_models.size(), k_every_engine.size());
+        const std::string stem =
+            std::string("VariantGainNetwork/models/variant_gain_network_") + word + "_mono.";
+        for (size_t row = 0; row < cfg.m_models.size(); ++row) {
+            const anira::capi::ModelEntry& entry = cfg.m_models[row];
+            EXPECT_EQ(entry.m_engine, k_every_engine.at(row)) << "row " << row;
+            EXPECT_TRUE(entry.m_tensors.empty()) << "row " << row;
+            EXPECT_NE(entry.m_path.find(stem), std::string::npos) << entry.m_path;
+            EXPECT_TRUE(std::filesystem::exists(entry.m_path)) << entry.m_path;
+        }
+        ASSERT_EQ(cfg.m_inputs.size(), 1U);
+        ASSERT_EQ(cfg.m_outputs.size(), 1U);
+        const auto expect_stream = [](const anira_tensor_spec& spec, const char* name) {
+            EXPECT_EQ(spec.m_name, name);
+            EXPECT_EQ(spec.m_dtype, ANIRA_DTYPE_F32);
+            EXPECT_EQ(spec.m_role, ANIRA_ROLE_STREAMED);
+            ASSERT_EQ(spec.m_ndim, 3U);
+            EXPECT_EQ(spec.m_axes[0].m_tag, ANIRA_AXIS_BATCH);
+            EXPECT_EQ(spec.m_axes[0].m_extent, 1);
+            EXPECT_EQ(spec.m_axes[1].m_tag, ANIRA_AXIS_CHANNEL);
+            EXPECT_EQ(spec.m_axes[1].m_extent, 1);
+            EXPECT_EQ(spec.m_axes[2].m_tag, ANIRA_AXIS_TIME);
+            EXPECT_EQ(spec.m_axes[2].m_extent, 512);
+            EXPECT_EQ(spec.m_window_min, 512);
+            EXPECT_EQ(spec.m_window_max, 512);
+            EXPECT_EQ(spec.m_overlap, 0);
+        };
+        expect_stream(cfg.m_inputs[0], "data");
+        expect_stream(cfg.m_outputs[0], "processed_data");
+    }
+
+    const anira::ContractHandle contract =
+        anira::ContractHandle::from_file(k_variant_gain_contract_json);
+    EXPECT_FALSE(contract.upgraded());
+    const anira::capi::HardContract* hard = contract.native()->hard();
+    ASSERT_NE(hard, nullptr);
+    EXPECT_EQ(hard->m_budget, ANIRA_BUDGET_MEASURED) << "the library's defaults";
+    EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_UNTIL_STABLE) << "the library's defaults";
+    EXPECT_EQ(hard->m_variant_state, ANIRA_VARIANT_STATE_FRESH);
+    const anira_test::FileFigures figures = anira_test::file_figures(k_variant_gain_contract_json);
+    EXPECT_EQ(figures.m_budget_ms, 5.0) << "the gain file's figures, pinned by the suites";
+    EXPECT_EQ(figures.m_warm_up, 1U);
+}
+
 // The bundled TypedGainNetwork files: the gain fixture's tensors at int16, int8 and float16,
 // checked field by field (a 3.x-only file, no 2.x oracle). A row for every engine over the
 // typed export of that format, the TFLite gain's layout and the LiteRT output keys as the gain

@@ -35,6 +35,17 @@ the tests by ``extras/models/model_files.h``:
    * - ``model-pool/stateful_accumulator``
      - StatefulAccumulatorNetwork, stereo, with a declared State pair (:ref:`usage-state`)
      - the default fill
+   * - ``model-pool/stateful_accumulator_negated``, ``stateful_accumulator_mono``
+     - the accumulator's negated twin (``processed_data = data - state_in[.., 0]``, the same
+       tensors and the same state), a second variant of the accumulator's inference stage; and the
+       accumulator's mono export, a model of another form. Both run under the accumulator's
+       contract file
+     - the default fill (model files only)
+   * - ``model-pool/variant_gain_half``, ``variant_gain_double``, ``variant_gain_invert``
+     - VariantGainNetwork: one architecture with three weights (``y = 0.5 x``, ``2 x``, ``-x`` on
+       a mono stream), so three models of one form, the variants of one inference stage; one
+       contract file for the three, ``variant_gain.contract.json``
+     - the default fill
    * - ``model-pool/typed_gain_<dtype>``
      - TypedGainNetwork at ``int16``, ``int8`` and ``float16`` on every engine; the ``_unplanned``
        files run an ExecuTorch export whose I/O the memory plan leaves to the caller, bound in place

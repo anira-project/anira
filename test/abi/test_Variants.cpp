@@ -27,7 +27,9 @@
 //                       land;
 //   the measurement     every plan of every variant is warmed up, and the session runs the
 //                       slowest figure;
-//   real models         a bundled model file twice, as two variants, on every engine of the build.
+//   real models         a bundled model file twice, as two variants, and the three bundled
+//                       variant gain models (one architecture, three weights) as the three
+//                       variants of one stage, on every engine of the build.
 //
 // The engine-free cases run on a registered engine whose loaded model is a gain: the factor is
 // the number its entry's path spells, read through the load record's variant, so every plan of a
@@ -1378,6 +1380,73 @@ TEST(Variants, ABundledModelTwiceRunsOnEveryEngine) {
         *std::max_element(expected.begin() + static_cast<std::ptrdiff_t>(priming), expected.end()),
         0.0F)
         << "the oracle's output is not silence";
+}
+
+// The bundled VariantGainNetwork files: one architecture with three weights (y = 0.5 x, 2 x and
+// -x, exact in float32), a model file each, as the three variants of one stage on every built-in
+// engine of the build. The plan table has one row per variant, each naming its variant, and
+// anira_plan_report_find resolves every one of them; a stream that moves to another variant every
+// few hops through anira_handler_set_model is, block by block, the input times the weight of the
+// variant that was selected when the block was formed, on one delay line: nothing is filled, and
+// the latency and the entry count stay.
+TEST(Variants, ThreeBundledModelsOfOneFormSwitchOnEveryEngine) {
+    const std::vector<anira_engine> engines = anira_test::built_in_engines();
+    if (engines.empty()) { GTEST_SKIP() << "no built-in engine in this build"; }
+    const anira::ModelConfig half = anira::ModelConfig::from_file(k_variant_gain_half_model_json);
+    const anira::ModelConfig twice =
+        anira::ModelConfig::from_file(k_variant_gain_double_model_json);
+    const anira::ModelConfig invert =
+        anira::ModelConfig::from_file(k_variant_gain_invert_model_json);
+    constexpr std::array<float, 3> k_weights{0.5F, 2.0F, -1.0F};
+    for (const anira_engine engine : engines) {
+        SCOPED_TRACE(anira_test::engine_word(engine));
+        const anira_backend_id backend = anira_test::cpu_backend(engine);
+        Rig rig({&half, &twice, &invert}, {backend});
+        ASSERT_EQ(rig.m_status, ANIRA_OK) << rig.m_message;
+        ASSERT_EQ(rig.prepare(anira_test::file_contract(k_variant_gain_contract_json, k_block)),
+                  ANIRA_OK)
+            << rig.m_message;
+        anira_handler* h = rig.h();
+
+        // One plan per variant, in variant order, each on the engine and found by its variant.
+        const std::vector<anira_plan_info> rows = rig.plans();
+        ASSERT_EQ(rows.size(), k_weights.size());
+        for (uint32_t variant = 0; variant < rows.size(); ++variant) {
+            EXPECT_EQ(rows[variant].variant, variant);
+            EXPECT_EQ(rows[variant].engine, static_cast<uint32_t>(engine));
+            EXPECT_EQ(rows[variant].state, static_cast<uint32_t>(ANIRA_PLAN_READY));
+            EXPECT_EQ(find_plan(h, variant, nullptr), static_cast<int>(variant));
+            EXPECT_EQ(find_plan(h, variant, &backend), static_cast<int>(variant));
+        }
+        EXPECT_EQ(find_plan(h, ANIRA_VARIANT_ANY, &backend), 0) << "the first plan on the engine";
+        EXPECT_EQ(find_plan(h, static_cast<uint32_t>(rows.size()), nullptr), -1);
+        const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(h);
+        ASSERT_NE(session, nullptr);
+        EXPECT_NE(session->m_plans.at(0)->m_loaded, session->m_plans.at(1)->m_loaded);
+        EXPECT_NE(session->m_plans.at(1)->m_loaded, session->m_plans.at(2)->m_loaded)
+            << "three files are three loaded models";
+        const uint32_t latency = anira_handler_get_latency(h, 0);
+        const uint32_t entries = anira_handler_num_entries(h);
+        ASSERT_EQ(anira_handler_get_plan(h), 0U) << "the stream starts on the first variant";
+
+        // Every variant from every other one, three hops each.
+        constexpr std::array<uint32_t, 10> k_order{0, 1, 2, 0, 2, 1, 0, 0, 2, 1};
+        anira_test::DelayLine line(latency);
+        size_t block = 0;
+        for (const uint32_t variant : k_order) {
+            ASSERT_EQ(anira_handler_set_model(h, variant), ANIRA_OK);
+            ASSERT_EQ(anira_handler_get_plan(h), variant);
+            for (int repeat = 0; repeat < 3; ++repeat, ++block) {
+                const std::vector<float> in = anira_test::ramp(block + 1);
+                anira_test::expect_same_block(rig.run_block(in),
+                                              line.next(in, k_weights.at(variant)),
+                                              block);
+            }
+        }
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "no miss, no drop, no refusal";
+        EXPECT_EQ(anira_handler_get_latency(h, 0), latency);
+        EXPECT_EQ(anira_handler_num_entries(h), entries);
+    }
 }
 
 // ============================================================================================
