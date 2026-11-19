@@ -35,6 +35,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginParameters::createPara
                                                                  latentAttributes));
 #endif
 
+#if MODEL_TO_USE == 8
+    // The variants of the inference stage, in the order the processor adds them: the choice's
+    // index is the variant's.
+    params.push_back(
+        std::make_unique<juce::AudioParameterChoice>(MODEL_ID,
+                                                     MODEL_NAME,
+                                                     juce::StringArray{"HALF", "DOUBLE", "INVERT"},
+                                                     0));
+#endif
+
     params.push_back(std::make_unique<juce::AudioParameterChoice>(BACKEND_TYPE_ID,
                                                                   BACKEND_TYPE_NAME,
                                                                   backend_types,

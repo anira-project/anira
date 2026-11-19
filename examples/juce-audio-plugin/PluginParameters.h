@@ -13,6 +13,9 @@ public:
         LATENT_0_ID = {"param_latent_0", 1}, LATENT_1_ID = {"param_latent_1", 1},
         LATENT_2_ID = {"param_latent_2", 1}, LATENT_3_ID = {"param_latent_3", 1},
 #endif
+#if MODEL_TO_USE == 8
+        MODEL_ID = {"param_model", 1},
+#endif
         BACKEND_TYPE_ID = {"param_backend_type", 1}, DRY_WET_ID = {"param_mix", 1};
 
     inline static const juce::String
@@ -22,6 +25,9 @@ public:
 #if MODEL_TO_USE == 7
         LATENT_0_NAME = "Latent 0", LATENT_1_NAME = "Latent 1", LATENT_2_NAME = "Latent 2",
         LATENT_3_NAME = "Latent 3",
+#endif
+#if MODEL_TO_USE == 8
+        MODEL_NAME = "Model",
 #endif
         BACKEND_TYPE_NAME = "Backend Type", DRY_WET_NAME = "Dry/Wet";
 

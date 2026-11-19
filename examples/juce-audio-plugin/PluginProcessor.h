@@ -35,9 +35,10 @@
 #endif
 
 // The model this plugin runs is picked at configure time (MODEL_TO_USE, see CMakeLists.txt):
-// the model file and the contract file of a bundled model (extras/models). Variant 1 runs the
-// CNN of variant 0 from files compiled into the plugin; variant 7 runs RAVE as an encoder and a
-// decoder handler.
+// the model file and the contract file of a bundled model (extras/models). Value 1 runs the
+// CNN of value 0 from files compiled into the plugin; value 7 runs RAVE as an encoder and a
+// decoder handler; value 8 runs three models of one form in one handler, as the variants of its
+// inference stage, and the "Model" parameter switches between them while audio runs.
 #if MODEL_TO_USE == 0 || MODEL_TO_USE == 1
 #define MODEL_FILE k_cnn_model_json
 #define CONTRACT_FILE k_cnn_contract_json
@@ -56,8 +57,11 @@
 #elif MODEL_TO_USE == 6
 #define MODEL_FILE k_rave_funk_drum_model_json
 #define CONTRACT_FILE k_rave_funk_drum_contract_json
+#elif MODEL_TO_USE == 8
+#define MODEL_FILE k_variant_gain_half_model_json
+#define CONTRACT_FILE k_variant_gain_contract_json
 #elif MODEL_TO_USE != 7
-#error "MODEL_TO_USE must be 0 to 7; see CMakeLists.txt"
+#error "MODEL_TO_USE must be 0 to 8; see CMakeLists.txt"
 #endif
 
 #if MODEL_TO_USE == 1
@@ -107,7 +111,13 @@ struct AniraModel {
         , handler(context,
                   anira::Pipeline()
                       .add_engine(std::make_shared<BypassEngine>())
+#if MODEL_TO_USE == 8
+                      // The inference stage over three variants: one plan per variant and
+                      // backend, every one loaded and measured by the one prepare.
+                      .add_inference({model_config, double_config, invert_config}, {})
+#else
                       .add_inference(model_config)
+#endif
 #if MODEL_TO_USE == 2
                       .add_processor(std::make_shared<HybridNNProcessor>())
 #endif
@@ -128,6 +138,22 @@ struct AniraModel {
     }
 
     anira::ModelConfig model_config;  // outlives the handler: an embedded entry is borrowed
+#if MODEL_TO_USE == 8
+    // Variants 1 and 2 of the inference stage, beside model_config (variant 0, y = 0.5 x): the
+    // same architecture with other weights, y = 2 x and y = -x. Models of one form (the same
+    // tensors, window and latency), so one handler runs the three in one stream. Each carries
+    // the bypass entry, so every variant has its "BYPASS" plan.
+    anira::ModelConfig double_config = [] {
+        anira::ModelConfig config = anira::ModelConfig::from_file(k_variant_gain_double_model_json);
+        config.add_model(k_bypass_engine_id);
+        return config;
+    }();
+    anira::ModelConfig invert_config = [] {
+        anira::ModelConfig config = anira::ModelConfig::from_file(k_variant_gain_invert_model_json);
+        config.add_model(k_bypass_engine_id);
+        return config;
+    }();
+#endif
     anira::ContractHandle contract;
     anira::InferenceHandler handler;
     anira::PlanReport plan_report{nullptr};
@@ -222,6 +248,11 @@ private:
     float gain_value = 1.0F;
     anira::Tensor gain_tensor{};
 #endif
+#if MODEL_TO_USE == 8
+    // The "Model" choice: the variant of the inference stage that runs, stored by the parameter
+    // listener and applied by processBlock.
+    std::atomic<int> model_variant{0};
+#endif
     // The "Backend Type" choices: the backends of this build that the model has an export for,
     // then BYPASS, the plan that runs while a backend waits for "Try nonetheless". The default
     // choice, and the choice the parameter listener stores and processBlock applies.
@@ -234,11 +265,12 @@ private:
     juce::AudioProcessorValueTreeState parameters;
 
     // Per backend choice, what prepareToPlay read off the plan report: whether it has a plan
-    // (every handler's, in variant 7; an engine can fail to load the model on this machine), the
-    // real-time verdict of the plan it runs (anira_rt_verdict; the worse of the encoder's and the
-    // decoder's in variant 7), its real-time factor and its parallel inferences; and the worst
-    // verdict the user accepted for it ("Try nonetheless"), kept across prepares, so that a
-    // re-prepare asks again only when the verdict got worse.
+    // (every handler's, with MODEL_TO_USE 7; an engine can fail to load the model on this
+    // machine), the real-time verdict of the plan it runs (anira_rt_verdict; the worse of the
+    // encoder's and the decoder's with MODEL_TO_USE 7; the first variant's with MODEL_TO_USE 8,
+    // whose variants are one architecture), its real-time factor and its parallel inferences; and
+    // the worst verdict the user accepted for it ("Try nonetheless"), kept across prepares, so that
+    // a re-prepare asks again only when the verdict got worse.
     struct BackendVerdict {
         std::atomic<bool> has_plan{true};
         std::atomic<uint32_t> verdict{ANIRA_RT_UNMEASURED};

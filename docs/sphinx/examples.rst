@@ -93,8 +93,8 @@ between calls can still miss a block, rarely (`#228 <https://github.com/anira-pr
 
 Both offer as backends the engines this build compiled in (``anira::enabled_engines()``) that the
 model file has an entry for, then the bypass, last. The default is ONNX Runtime where the build has
-it; JUCE variant 3 defaults to LibTorch, since the stateful LSTM's ONNX export starts every
-inference from a zero state. A backend whose engine cannot run the model on the machine (no plan in
+it; the JUCE plugin at ``MODEL_TO_USE=3`` defaults to LibTorch, since the stateful LSTM's ONNX
+export starts every inference from a zero state. A backend whose engine cannot run the model on the machine (no plan in
 the report) runs the bypass plan and says so.
 
 Both act on the verdict of the plan they run (:ref:`usage-plan-report`): a ``NOT_REALTIME``
@@ -132,12 +132,25 @@ never held.
        - RAVE as an encoder and a decoder handler; the decoder anchors on its audio output, so both
          handlers prepare with the host's block range and rate, and the latent frames pass from the encoder's ``pop_data`` to the decoder's ``push_data`` as one
          planar tensor
+     * - 8
+       - VariantGainNetwork: three models of one form (``y = 0.5 x``, ``2 x`` and ``-x``) as the
+         variants of the one inference stage (``add_inference({half, double, invert}, {})``), which
+         one handler loads and measures together; a "Model" parameter switches between them while
+         audio runs
 
 - The "Backend Type" parameter stores its choice in an atomic and ``processBlock`` applies it: the
   plan that runs the chosen engine (``PlanReport::find``, then ``set_plan``).
+- Value 8 has a second choice, the "Model" parameter (``HALF``, ``DOUBLE``, ``INVERT``: variants 0,
+  1 and 2 of the stage), and ``processBlock`` applies each choice along its own axis of the one
+  selection: ``set_backend`` moves to the chosen backend and keeps the model, ``set_model`` moves to
+  the chosen variant and keeps the backend. Both are real-time safe. The switch is seamless: the
+  chunks in flight finish on their own plan, so the output changes one latency later, without a gap,
+  and the latency stays. With "Dry/Wet" at 50 % the ``INVERT`` model cancels the dry signal. Every
+  variant carries the bypass entry, so each has its "BYPASS" plan; the log and the verdict line
+  show the first variant's row per backend (the three are one architecture).
 - ``PluginEditor`` holds the parameters' controls, a verdict line and a "Try nonetheless" button,
   shown while the chosen backend waits, polling the processor at 4 Hz. ``prepareToPlay`` reads the
-  row of each backend's plan and writes it to ``juce::Logger`` (variant 7 both handlers' rows,
+  row of each backend's plan and writes it to ``juce::Logger`` (value 7 both handlers' rows,
   keeping the worse verdict)
   ("anira: ONNX: budget X ms (measured X ms, median X ms, N warm-up inferences, stable); real-time
   factor F of n (load L): comfortable"). A ``NOT_REALTIME`` backend runs the BYPASS plan until the
