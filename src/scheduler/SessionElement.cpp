@@ -411,6 +411,18 @@ void SessionElement::enqueue_pending_dispatch(
 std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_next_dispatch() {
     // Only one task may be dispatched at a time. Whoever flips the busy bit from
     // 0 to 1 (same epoch) owns the right to release the next pending task.
+    //
+    // The driving thread enqueues a chunk and then calls this function; the gate's holder
+    // releases the gate and then looks at the queue once more (below). Each side writes one
+    // word and then reads the other's, which is the store-buffering pattern: without a full
+    // barrier between its write and its read, both may read the old value, the enqueuer "busy"
+    // and the holder "empty", and the chunk stays parked behind a free gate until the driving
+    // thread's next call. One sequentially consistent fence per side, between that side's write
+    // and its read, rules it out: of the two fences one comes first, and the read behind the
+    // later one observes the write ahead of the earlier one. The queue's own stores and loads
+    // are moodycamel's (release and relaxed), so the fences are explicit. This one stands
+    // behind any enqueue of the calling thread and ahead of its read of the gate.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
     if ((gate & k_dispatch_busy) != 0 ||
         !m_stateful_dispatch_gate.compare_exchange_strong(gate,
@@ -445,8 +457,12 @@ std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_ne
             return next;  // keep busy; the task is now in flight
         }
         // Nothing pending: release ownership. Re-check to avoid a lost task that
-        // was enqueued between the failed dequeue and the release.
+        // was enqueued between the failed dequeue and the release. The fence between the
+        // release and the re-check is the holder's half of the pair described above. The rule
+        // for any site that frees the gate while the session runs: fence, then look at the
+        // queue and re-acquire when it is not empty, or hand over to a path that does.
         release_dispatch(token);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         if (m_dispatch_pending.size_approx() == 0) { return nullptr; }
         gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
         if ((gate & k_dispatch_busy) != 0 || (gate | k_dispatch_busy) != token ||
