@@ -420,8 +420,8 @@ anira_status ANIRA_CALL anira_processor_output_tensor(const anira_processor_ctx*
 }
 
 // The pairs of the chunk's plan: the record's value field and its id slot, which make_ctx
-// filled from the session's table (the pair rule: the id is set beside CUSTOM alone). The id
-// out-parameter may be NULL; both are reset on a refusal.
+// filled from the chunk's copies of its plan slot's (the pair rule: the id is set beside CUSTOM
+// alone). The id out-parameter may be NULL; both are reset on a refusal.
 anira_status ANIRA_CALL anira_processor_engine(const anira_processor_ctx* ctx,
                                                anira_engine* engine,
                                                const char** engine_id)
@@ -653,25 +653,19 @@ anira_processor_ctx ProcessorRunner::make_ctx(anira_phase phase,
                                               const ProcessorFrame& frame) const noexcept
     ANIRA_NONBLOCKING {
     // The plan the chunk was stamped with (Core::pre_process), never the session's atomic: all
-    // four phases of a chunk report one plan, and one entry. The session's table names the
-    // plan's engine and provider; a stamp is always in range.
-    const uint32_t plan = chunk.m_plan;
-    const std::vector<anira::SessionElement::PlanSlot>& plans = m_session->m_plans;
+    // four phases of a chunk report one plan, and one entry. The chunk carries the plan's
+    // variant, engine and provider, copied at the stamp: no phase reads the session's table or
+    // the plan's slot, which nothing keeps for a phase on the driving thread behind the
+    // inference.
     anira_processor_ctx ctx{};  // every slot NULL, the high halves of the pointer slots zero
     ctx.phase = static_cast<uint32_t>(phase);
-    ctx.engine = plan < plans.size() ? static_cast<uint32_t>(plans[plan].m_engine)
-                                     : static_cast<uint32_t>(ANIRA_ENGINE_NONE);
-    ctx.provider = plan < plans.size() ? static_cast<uint32_t>(plans[plan].m_provider)
-                                       : static_cast<uint32_t>(ANIRA_PROVIDER_NONE);
+    ctx.engine = static_cast<uint32_t>(chunk.m_engine);
+    ctx.provider = static_cast<uint32_t>(chunk.m_provider);
     // The pairs' names for anira_processor_engine / _provider: the session's own strings,
-    // which live as long as its table; NULL for a built-in engine and a provider of the enum.
-    if (plan < plans.size()) {
-        const std::string& engine_id = plans[plan].m_engine_id;
-        const std::string& provider_id = plans[plan].m_provider_id;
-        ctx.engine_id = engine_id.empty() ? nullptr : engine_id.c_str();
-        ctx.provider_id = provider_id.empty() ? nullptr : provider_id.c_str();
-    }
-    ctx.variant = 0;
+    // which live as long as the session; NULL for a built-in engine and a provider of the enum.
+    ctx.engine_id = chunk.m_engine_id;
+    ctx.provider_id = chunk.m_provider_id;
+    ctx.variant = chunk.m_variant;
     ctx.num_inputs = static_cast<uint32_t>(m_input_ports.size());
     ctx.num_outputs = static_cast<uint32_t>(m_output_ports.size());
     ctx.ticket = ANIRA_TICKET_INVALID;
@@ -874,8 +868,7 @@ anira_status ProcessorRunner::post_process(Chunk& chunk) noexcept {
 }
 
 bool ProcessorRunner::aliases_state(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING {
-    const std::vector<anira::SessionElement::PlanSlot>& plans = m_session->m_plans;
-    return chunk.m_plan < plans.size() && plans[chunk.m_plan].m_state_alias;
+    return chunk.m_state_alias;
 }
 
 void ProcessorRunner::bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING {
@@ -889,13 +882,18 @@ void ProcessorRunner::bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING {
         auto* state = std::get_if<StatePort>(&m_input_ports[slot]);
         if (state == nullptr || !state->m_value.has_value()) { continue; }
         StateSlot& value = *state->m_value;
-        if (state->m_generation != chunk.m_dispatch_generation) {
-            // The first inference of a new stream (a reset, a prepare): the state starts over.
-            // The chunk's stamp, never the session's atomic: a reset that lands between a
-            // chunk's stale check and its bind must not zero the read buffer for a chunk of
-            // the old stream, whose promotion would then seed the new one.
+        if (state->m_generation != chunk.m_dispatch_generation ||
+            state->m_state_epoch != chunk.m_state_epoch) {
+            // The first inference of a new stream (a reset, a prepare), or the first one
+            // behind a switch to another variant under ANIRA_VARIANT_STATE_FRESH (a new state
+            // epoch): the state starts over. The chunk's stamps, never the session's fields:
+            // a reset that lands between a chunk's stale check and its bind must not zero the
+            // read buffer for a chunk of the old stream, whose promotion would then seed the
+            // new one, and a chunk formed ahead of a variant switch finishes on the state it
+            // ran with.
             value.zero_read();
             state->m_generation = chunk.m_dispatch_generation;
+            state->m_state_epoch = chunk.m_state_epoch;
         }
         anira_tensor_init_host(&chunk.m_input_tensors[slot],
                                value.read(),

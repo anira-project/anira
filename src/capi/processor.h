@@ -126,9 +126,10 @@ struct ProcessorFrame {
 ///
 /// The scheduler hands every phase the chunk itself (the session's ThreadSafeStruct), whose
 /// position in the session's pool is its entry (anira_processor_ctx::entry,
-/// anira_handler_num_entries). The struct carries what the ctx needs: the plan the chunk was
-/// stamped with (the session's plan table names its engine and provider) and the descriptors
-/// of its tensors (what a tensor accessor hands out, a copy of the struct's).
+/// anira_handler_num_entries). The struct carries what the ctx needs: the engine and the
+/// provider of the plan the chunk was stamped with (copied off the plan's slot at the stamp,
+/// so no phase reads the session's plan table) and the descriptors of its tensors (what a
+/// tensor accessor hands out, a copy of the struct's).
 ///
 /// The processor reads the handler's two port vectors (port.h), indexed by slot: the role of
 /// a slot is its port's arm and the ring of a slot its stream port's, both plain reads. The
@@ -165,9 +166,8 @@ public:
     ProcessorRunner(const ProcessorCarrier* processor, Ports& input_ports, Ports& output_ports);
 
     /// Control thread, after the session's prepare and before its first chunk: the session (its
-    /// plan table is what a ctx reports the engine and the provider of a chunk's plan from, its
-    /// pool what the entries count) and the count check's scratch, sized by the stream ports'
-    /// rings the prepare sized.
+    /// latch is what a failed phase records into, its pool what the entries count) and the
+    /// count check's scratch, sized by the stream ports' rings the prepare sized.
     void bind(anira::SessionElement& session);
 
     /// Control thread, after the processor's prepare returned: what it handed back for this
@@ -236,8 +236,8 @@ private:
     /// the one buffer already holds the produced state.
     void bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING;
     void promote_state(const Chunk& chunk) noexcept ANIRA_NONBLOCKING;
-    /// Whether the chunk's plan keeps its own aliasing of the State pairs (the session's
-    /// table; a stamp is always in range).
+    /// Whether the chunk's plan keeps its own aliasing of the State pairs (the chunk's copy of
+    /// its plan slot's flag, taken at the stamp).
     bool aliases_state(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING;
     /// The count check around the two ring-moving phases, over the stream ports of one side:
     /// snapshot() reads available() of every channel ahead of the phase; the check behind it

@@ -53,8 +53,10 @@ anira_contract_hard_set_latency
 anira_contract_hard_set_miss_fn
 anira_contract_hard_set_on_miss
 anira_contract_hard_set_ring_dtype
+anira_contract_hard_set_variant_state
 anira_contract_hard_set_wait_ratio
 anira_contract_hard_set_warmup
+anira_contract_hard_variant_state
 anira_contract_hard_wait_ratio
 anira_contract_hard_warmup
 anira_contract_set_edge_cost
@@ -66,6 +68,7 @@ anira_custom_engine_destroy
 anira_custom_engine_detach
 anira_drain_log
 anira_enabled_engines
+anira_handler_add_variant
 anira_handler_create
 anira_handler_destroy
 anira_handler_get_available_samples
@@ -86,8 +89,11 @@ anira_handler_process_multi_wait
 anira_handler_process_wait
 anira_handler_push_data
 anira_handler_push_data_multi
+anira_handler_remove_variant
 anira_handler_reset
 anira_handler_rt_error
+anira_handler_set_backend
+anira_handler_set_model
 anira_handler_set_plan
 anira_handler_set_static_input
 anira_has_core

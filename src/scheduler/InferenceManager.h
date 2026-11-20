@@ -2,15 +2,18 @@
 #define ANIRA_INFERENCEMANAGER_H
 
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/tensor.h>
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "Core.h"
 #include "InferenceThread.h"
+#include "SessionElement.h"
 #include "Warmup.h"
 
 /// The context config the 3.x constructor takes (its body is src/capi/handles.h).
@@ -73,23 +76,27 @@ public:
      *
      * @param processor The handler's processor runner: the phases of every chunk, and the port
      * vectors that hold the session's rings (it outlives the manager)
-     * @param model The handler's model config (its variant)
-     * @param derived What the validator derived for it under the contract
-     * @param hard The Hard half of the contract the handler is prepared under (the three
+     * @param bounds What sizes the session over the handler's variants (VariantBounds), copied
+     * @param derived The form of the stream: what the validator derived for the handler's
+     * variants under the contract
+     * @param hard The Hard half of the contract the handler is prepared under (the two
      * outlive the manager: the session reads them by reference)
      * @param requests The plans, in dense-index order; never empty
      * @param context_config The context's configuration (anira_context_config_*)
      * @param rt_latch The handler's latch the session records its failures into; nullptr
      * gives the session its own
+     * @param selection The handler's atomic that holds the selected plan (it outlives the
+     * manager); nullptr gives the session its own
      * @throws std::invalid_argument for an empty request list
      */
     InferenceManager(capi::ProcessorRunner& processor,
-                     const anira_model_config& model,
+                     const VariantBounds& bounds,
                      const capi::Derived& derived,
                      const capi::HardContract& hard,
                      std::vector<engine::PlanRequest> requests,
                      const anira_context_config& context_config,
-                     anira::RtLatch* rt_latch = nullptr);
+                     anira::RtLatch* rt_latch = nullptr,
+                     std::atomic<uint32_t>* selection = nullptr);
 
     /**
      * @brief Destructor that properly cleans up inference resources
@@ -197,8 +204,29 @@ public:
      * None of them allocates. process_nowait(), push_data() and pop_data() never wait and
      * are real-time safe; process_wait(), pop_data_wait() and the deadline form of pop_data()
      * wait, and process() waits when the contract has a wait ratio.
+     *
+     * The plan table. Every stem that submits a chunk stamps it from a published version of
+     * the session's plan table, read through a lease (SessionElement::claim_plans). `plans` is
+     * that version: a C entry claims the lease first, holds it for its whole call and passes
+     * its table, so every chunk of the call is stamped from one version and the entry can
+     * refuse before anything moved when the reader slot is held. A caller that holds no lease
+     * (a white-box caller of the stems) passes NULL: the stem claims one for its submission,
+     * and when another caller holds the slot it submits nothing in this call: the hops stay in the
+     * send rings, and the next call submits them.
      */
     ///@{
+
+    /**
+     * @brief A read lease on the session's plan table for one call of the driving thread
+     *
+     * SessionElement::claim_plans(): what a C entry claims before its stem, holds until it
+     * returns, and passes the stem as `plans` (`&lease->data()`).
+     *
+     * @return The lease, or nothing while another caller holds the reader slot
+     */
+    std::optional<SessionElement::PlanLease> claim_plans() const noexcept ANIRA_NONBLOCKING {
+        return m_session->claim_plans();
+    }
 
     /**
      * @brief The wait-free process call: push, submit, collect what completed, pop
@@ -211,11 +239,14 @@ public:
      *
      * @param inputs One tensor per input slot (see "The tensor stems")
      * @param outputs One tensor per output slot; the same tensor as the input for in place
+     * @param plans The plan table of the caller's lease, or NULL (see "The plan table")
      * @return The delivered count per output slot (0 on a miss)
      *
      * @note Real-time safe: allocates nothing, never waits.
      */
-    const size_t* process_nowait(const anira_tensor* inputs, const anira_tensor* outputs);
+    const size_t* process_nowait(const anira_tensor* inputs,
+                                 const anira_tensor* outputs,
+                                 const SessionElement::PlanTable* plans = nullptr);
 
     /**
      * @brief The process call that waits up to a budget for the block's result
@@ -232,6 +263,7 @@ public:
      * @param outputs One tensor per output slot; the same tensor as the input for in place
      * @param budget How long to wait at most (duration::max() = without limit)
      * @param outcome How the wait ended
+     * @param plans The plan table of the caller's lease, or NULL (see "The plan table")
      * @return The delivered count per output slot (0 on a miss)
      *
      * @note Not real-time safe for as long as it waits.
@@ -239,7 +271,8 @@ public:
     const size_t* process_wait(const anira_tensor* inputs,
                                const anira_tensor* outputs,
                                std::chrono::steady_clock::duration budget,
-                               Core::WaitOutcome& outcome);
+                               Core::WaitOutcome& outcome,
+                               const SessionElement::PlanTable* plans = nullptr);
 
     /**
      * @brief Pushes input to the inference pipeline for asynchronous processing
@@ -252,10 +285,11 @@ public:
      * is driven by the output demand of the process and pop forms.
      *
      * @param inputs One tensor per input slot (see "The tensor stems")
+     * @param plans The plan table of the caller's lease, or NULL (see "The plan table")
      *
      * @note Real-time safe: allocates nothing, never waits.
      */
-    void push_data(const anira_tensor* inputs);
+    void push_data(const anira_tensor* inputs, const SessionElement::PlanTable* plans = nullptr);
 
     /**
      * @brief Pops processed output from the inference pipeline (non-blocking)
@@ -267,11 +301,13 @@ public:
      * samples, before results are collected.
      *
      * @param outputs One tensor per output slot (see "The tensor stems")
+     * @param plans The plan table of the caller's lease, or NULL (see "The plan table")
      * @return The delivered count per output slot (0 on a miss)
      *
      * @note Real-time safe: allocates nothing, never waits.
      */
-    const size_t* pop_data(const anira_tensor* outputs);
+    const size_t* pop_data(const anira_tensor* outputs,
+                           const SessionElement::PlanTable* plans = nullptr);
 
     /**
      * @brief pop_data() that waits up to a budget for the next result
@@ -283,13 +319,15 @@ public:
      * @param outputs One tensor per output slot (see "The tensor stems")
      * @param budget How long to wait at most (duration::max() = without limit)
      * @param outcome How the wait ended
+     * @param plans The plan table of the caller's lease, or NULL (see "The plan table")
      * @return The delivered count per output slot (0 on a miss)
      *
      * @note Not real-time safe for as long as it waits.
      */
     const size_t* pop_data_wait(const anira_tensor* outputs,
                                 std::chrono::steady_clock::duration budget,
-                                Core::WaitOutcome& outcome);
+                                Core::WaitOutcome& outcome,
+                                const SessionElement::PlanTable* plans = nullptr);
 
     /**
      * @brief The 2.x process call over host tensors: the dispatcher on the contract's wait
@@ -367,6 +405,22 @@ public:
     uint32_t get_plan() const noexcept;
 
     /**
+     * @brief Selects a plan if the selection is still the one the caller computed it from
+     *
+     * One compare-and-swap of the selection (SessionElement::select_plan_if): what
+     * anira_handler_set_model and anira_handler_set_backend store with, each having resolved
+     * its plan from the selected one (one axis kept, the other moved), so that two of them on
+     * two threads both land.
+     *
+     * @param expected The plan the caller read as selected; the plan selected now on a false
+     * return
+     * @param plan A dense index into the plan table, in range
+     * @return False, and nothing stored, when the selection is no longer `expected` (or
+     * spuriously: the caller resolves again and loops)
+     */
+    bool set_plan_if(uint32_t& expected, uint32_t plan) noexcept ANIRA_NONBLOCKING;
+
+    /**
      * @brief Gets the processing latency for all tensors
      *
      * Returns the latency introduced by the inference processing in samples for each output
@@ -398,6 +452,17 @@ public:
      * @return The session
      */
     SessionElement& session() noexcept { return *m_session; }
+
+    /**
+     * @brief The session as the core's control plane takes it
+     *
+     * For the control thread of a 3.x handler that changes the session's plan list while the
+     * stream runs (Core::add_plan_slot, take_plan_slot, wait_until_unused, which take the
+     * shared pointer the core registered). The manager keeps its own reference.
+     *
+     * @return The shared pointer to the session
+     */
+    const std::shared_ptr<SessionElement>& shared_session() const noexcept { return m_session; }
 
     /**
      * @brief What a missed block delivers (anira_miss_policy)
@@ -691,6 +756,17 @@ private:
      * (try_acquire) under a wait ratio above 0, the atomic flag otherwise.
      */
     void collect_nonblocking();
+
+    /**
+     * @brief Submits what the call made ready: Core::new_data_submitted() over a plan table
+     *
+     * `plans` when the caller holds a lease (a C entry's, for its whole call); else a lease
+     * claimed here for the submission alone. When another caller holds the slot then, nothing is
+     * submitted: the hops stay in the send rings, and the next call submits them.
+     *
+     * @param plans The plan table of the caller's lease, or NULL
+     */
+    void submit(const SessionElement::PlanTable* plans);
 
 private:
     std::shared_ptr<SessionElement> m_session;  ///< Shared pointer to the current inference session

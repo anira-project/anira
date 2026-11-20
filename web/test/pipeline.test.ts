@@ -9,6 +9,9 @@
 // A JavaScript processor's real-time promise (addProcessor's `realtimePhases`) reaches
 // anira_em_pipeline_add_js_processor as given, the bits of pre_process, post_process and reset by
 // default.
+// The inference stage (addInference) takes one model or several variants: the handles reach
+// anira_pipeline_add_inference as one array, in the caller's order, with the default candidates
+// (NULL, 0), and the array is freed.
 // A stand-in module.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -25,11 +28,13 @@ import {
   ONNXRUNTIME_WEB_ENGINE_EDGES,
   ONNXRUNTIME_WEB_ENGINE_ID,
 } from '../src/engines/ids'
+import type { ModelConfig } from '../src/ModelConfig'
 import { Pipeline } from '../src/Pipeline'
 
 type EdgeRecord = { structSize: number; edgeClass: number; reason: string | null } | null
 type Stated = { inputs: EdgeRecord; outputs: EdgeRecord }
 type AddedProcessor = { key: number; hooks: number; realtimePhases: number }
+type AddedStage = { variants: number[]; candidates: number; numCandidates: number }
 
 const fakes = () => {
   const buffer = new ArrayBuffer(1 << 16)
@@ -52,9 +57,36 @@ const fakes = () => {
         }
   const stated: Stated[] = []
   const processors: AddedProcessor[] = []
+  const stages: AddedStage[] = []
+  const freed: number[] = []
+  let heapTop = 8
   const module = {
     HEAPU8: u8,
     HEAPU32: u32,
+    _malloc: (bytes: number) => {
+      const at = heapTop
+      heapTop += (bytes + 7) & ~7
+      return at
+    },
+    _free: (ptr: number) => {
+      freed.push(ptr)
+    },
+    _anira_pipeline_add_inference: (
+      _pipeline: number,
+      variants: number,
+      numVariants: number,
+      candidates: number,
+      numCandidates: number,
+      _err: number
+    ) => {
+      const first = variants >>> 2
+      stages.push({
+        variants: Array.from(u32.subarray(first, first + numVariants)),
+        candidates,
+        numCandidates,
+      })
+      return anira_status.ANIRA_OK
+    },
     stackSave: () => sp,
     stackRestore: (value: number) => {
       sp = value
@@ -100,9 +132,32 @@ const fakes = () => {
     abi: new AniraBindings(module as unknown as AbiModule),
     stated,
     processors,
+    stages,
+    freed,
     stack: () => sp,
   }
 }
+
+test("addInference hands one model or several variants to the stage, in the caller's order", () => {
+  const { abi, stages, freed } = fakes()
+  // A model config as the pipeline reads it: its handle and its input specs.
+  const model = (native: number, name: string) =>
+    ({ native: () => native, inputSpecs: () => [{ name }] }) as unknown as ModelConfig
+  const variants = Pipeline.create({ abi }).addInference([
+    model(11, 'first'),
+    model(22, 'second'),
+    model(33, 'third'),
+  ])
+  const single = Pipeline.create({ abi }).addInference(model(44, 'alone'))
+  assert.deepEqual(stages, [
+    { variants: [11, 22, 33], candidates: 0, numCandidates: 0 },
+    { variants: [44], candidates: 0, numCandidates: 0 },
+  ])
+  assert.equal(freed.length, 2, 'each array of handles is freed')
+  // The variants of a stage have one form: the first one's input specs are the stage's.
+  assert.deepEqual(variants.inputSpecs(), [{ name: 'first' }])
+  assert.deepEqual(single.inputSpecs(), [{ name: 'alone' }])
+})
 
 test("addProcessor states the processor's real-time phases, the audio thread's three by default", () => {
   const { abi, processors } = fakes()

@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <anira/anira.hpp>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -168,6 +169,43 @@ inline anira_edge_info to_host(const anira_backend_id& backend) noexcept {
     query.from_provider_id = backend.provider_id;
     query.to_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
     return query;
+}
+
+/// The built-in engines of this build, in the order of anira_enabled_engines: what a case over
+/// a bundled model file with a row for every engine runs on (the accumulator and its negated
+/// twin, the variant gain models).
+inline std::vector<anira_engine> built_in_engines() {
+    std::vector<anira_engine> out;
+    for (const anira::BackendId& id : anira::enabled_engines()) {
+        const auto engine = static_cast<anira_engine>(id.engine);
+        if (engine == ANIRA_ENGINE_LIBTORCH || engine == ANIRA_ENGINE_ONNXRUNTIME ||
+            engine == ANIRA_ENGINE_EXECUTORCH || engine == ANIRA_ENGINE_TFLITE ||
+            engine == ANIRA_ENGINE_LITERT) {
+            out.push_back(engine);
+        }
+    }
+    return out;
+}
+
+/// The word a model file names a built-in engine by: a case's trace says which engine it is on.
+inline const char* engine_word(anira_engine engine) {
+    switch (engine) {
+        case ANIRA_ENGINE_LIBTORCH: return "libtorch";
+        case ANIRA_ENGINE_ONNXRUNTIME: return "onnxruntime";
+        case ANIRA_ENGINE_EXECUTORCH: return "executorch";
+        case ANIRA_ENGINE_TFLITE: return "tflite";
+        case ANIRA_ENGINE_LITERT: return "litert";
+        default: return "another engine";
+    }
+}
+
+/// A built-in engine on its CPU path, as a candidate of an inference stage and as the backend of
+/// a plan query.
+inline anira_backend_id cpu_backend(anira_engine engine) {
+    return {.struct_size = sizeof(anira_backend_id),
+            .engine = static_cast<uint32_t>(engine),
+            .provider = ANIRA_PROVIDER_CPU,
+            .engine_id = nullptr};
 }
 
 /// One candidate per engine of oracle_engines() plus the custom engine anira.v2.custom (k_custom,
@@ -506,6 +544,18 @@ struct Handler {
             const anira::ModelConfig& model,
             std::span<const anira_backend_id> candidates = {},
             std::span<const anira_processor_desc> processors = {},
+            const anira_custom_engine* custom = nullptr)
+        : Handler(context,
+                  std::array<const anira_model_config*, 1>{model.native()},
+                  candidates,
+                  processors,
+                  custom) {}
+
+    /// The inference stage over several variants (models of one form), in this order.
+    Handler(const Context& context,
+            std::span<const anira_model_config* const> variants,
+            std::span<const anira_backend_id> candidates = {},
+            std::span<const anira_processor_desc> processors = {},
             const anira_custom_engine* custom = nullptr) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         if (custom != nullptr) {
@@ -513,10 +563,9 @@ struct Handler {
         } else {
             add_passthrough(m_pipeline);
         }
-        const anira_model_config* variants[] = {model.native()};
         EXPECT_EQ(anira_pipeline_add_inference(m_pipeline,
-                                               variants,
-                                               1,
+                                               variants.data(),
+                                               static_cast<uint32_t>(variants.size()),
                                                candidates.empty() ? nullptr : candidates.data(),
                                                static_cast<uint32_t>(candidates.size()),
                                                &m_err),
@@ -736,6 +785,210 @@ inline RecordCollector::Record find_record(RecordCollector& collector,
     }
     return {};
 }
+
+/**
+ * @brief A background "audio" thread over one handler: the driving thread of a test whose own
+ * thread does something else meanwhile (a control call, a switch, a table that is replaced)
+ *
+ * The thread feeds a ramp, one block of `block` samples per call, through the single form of
+ * one mono Streamed input and output, in place, and checks what comes back against the delay
+ * line of the handler's latency (DelayLine): every sample of an output block must be the
+ * delayed input times one factor, the factor of the engine that ran the chunk (1 for a
+ * pass-through; a test's engines multiply by their own). It keeps the status and the factor of
+ * every block, and counts the blocks that are no such multiple (a zero-filled one included: a
+ * miss or a drop breaks the stream).
+ *
+ * The entry is anira_handler_process, after which the thread waits for the block's inference
+ * through anira_handler_get_available_samples (so the stream is complete: no block misses), or
+ * anira_handler_process_wait, which waits inside the call: with the block's engine held on a
+ * closed gate the thread is parked inside the entry, its read lease out (inside_call()).
+ *
+ * Stepped (step(): so many more blocks, then parked between two calls) or free-running
+ * (run_free(), until stop()). The results are read while the thread is parked (wait() returned
+ * true): they are the thread's own plain data. The block is one hop of the model and the
+ * latency a whole number of blocks (checked), so block k of the output is the chunk formed by
+ * call k - latency_blocks().
+ */
+class BackgroundDriver {
+public:
+    enum class Entry : uint8_t { Process, ProcessWait };
+
+    explicit BackgroundDriver(anira_handler* handler,
+                              size_t block = k_block,
+                              Entry entry = Entry::Process)
+        : m_handler(handler)
+        , m_block(block)
+        , m_entry(entry)
+        , m_latency(anira_handler_get_latency(handler, 0))
+        , m_line(m_latency)
+        , m_thread([this] { loop(); }) {
+        EXPECT_EQ(m_latency % m_block, 0U) << "the latency is no whole number of blocks";
+    }
+    ~BackgroundDriver() {
+        m_quit.store(true, std::memory_order_release);
+        m_thread.join();
+    }
+    BackgroundDriver(const BackgroundDriver&) = delete;
+    BackgroundDriver& operator=(const BackgroundDriver&) = delete;
+    BackgroundDriver(BackgroundDriver&&) = delete;
+    BackgroundDriver& operator=(BackgroundDriver&&) = delete;
+
+    /// `blocks` more blocks, then the thread parks. Returns at once: wait() for the parking.
+    void step(size_t blocks) { m_target.fetch_add(blocks, std::memory_order_release); }
+    /// Blocks until stop(), at most `limit` of them.
+    void run_free(size_t limit) { step(limit); }
+    /// No block after the one that runs now. Returns at once: wait() for the parking.
+    void stop() {
+        m_target.store(m_done.load(std::memory_order_acquire), std::memory_order_release);
+    }
+    /// Waits until every block asked for is done and the thread is parked between two calls;
+    /// false after k_wait_s (the thread is stuck inside a call).
+    bool wait() const {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(k_wait_s);
+        while (!parked()) {
+            if (std::chrono::steady_clock::now() > deadline) { return false; }
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+        return true;
+    }
+    bool parked() const {
+        return m_parked.load(std::memory_order_acquire) &&
+               m_done.load(std::memory_order_acquire) >= m_target.load(std::memory_order_acquire);
+    }
+    /// The blocks done so far (readable while the thread runs).
+    size_t done() const { return m_done.load(std::memory_order_acquire); }
+    /// Whether the thread is inside the handler's process entry right now.
+    bool inside_call() const { return m_inside.load(std::memory_order_acquire); }
+
+    /// The latency in blocks: block k of the output is the chunk formed by call k minus this.
+    size_t latency_blocks() const { return m_latency / m_block; }
+    /// Per block, in order: the status of its call. Parked only.
+    const std::vector<anira_status>& statuses() const { return m_statuses; }
+    /// Per block, in order: the factor between its samples and the delayed input; 0 for a
+    /// block of the latency's silence and for a broken one. Parked only.
+    const std::vector<float>& factors() const { return m_factors; }
+    /// The blocks that are no multiple of the delayed input, and what the first one was.
+    /// Parked only.
+    size_t broken() const { return m_broken; }
+    const std::string& first_break() const { return m_first_break; }
+
+    /// The stream is ordered and complete: every call returned ANIRA_OK, and every block is
+    /// the delayed input times one factor. Parked only.
+    void expect_continuous() const {
+        EXPECT_EQ(m_broken, 0U) << m_first_break;
+        for (size_t block = 0; block < m_statuses.size(); ++block) {
+            ASSERT_EQ(m_statuses[block], ANIRA_OK) << "block " << block;
+        }
+    }
+
+private:
+    void loop() {
+        while (!m_quit.load(std::memory_order_acquire)) {
+            if (m_done.load(std::memory_order_relaxed) >=
+                    m_target.load(std::memory_order_acquire) ||
+                m_stuck) {
+                m_parked.store(true, std::memory_order_release);
+                std::this_thread::sleep_for(std::chrono::microseconds(50));
+                continue;
+            }
+            m_parked.store(false, std::memory_order_release);
+            one_block(m_done.load(std::memory_order_relaxed));
+            m_done.fetch_add(1, std::memory_order_release);
+        }
+    }
+
+    void one_block(size_t index) {
+        // Block 0 of the ramp starts at sample 0, which no factor shows on: the ramp starts
+        // at block 1.
+        std::vector<float> block = ramp(index + 1, m_block);
+        const std::vector<float> expected = m_line.next(block);
+        const std::array<float*, 1> planes{block.data()};
+        const std::array<int64_t, 2> shape{1, static_cast<int64_t>(m_block)};
+        anira_tensor io{};
+        anira_tensor_init_host_planar(&io,
+                                      static_cast<const void*>(planes.data()),
+                                      1,
+                                      ANIRA_DTYPE_F32,
+                                      2,
+                                      shape.data());
+        const size_t before = m_entry == Entry::Process ? available(m_handler) : 0;
+        size_t delivered = 0;
+        m_inside.store(true, std::memory_order_release);
+        const anira_status status =
+            m_entry == Entry::Process ? anira_handler_process(m_handler, &io, 0, &io, 0, &delivered)
+                                      : anira_handler_process_wait(m_handler,
+                                                                   &io,
+                                                                   0,
+                                                                   &io,
+                                                                   0,
+                                                                   &delivered,
+                                                                   1000.0 * k_wait_s);
+        m_inside.store(false, std::memory_order_release);
+        m_statuses.push_back(status);
+        m_factors.push_back(factor_of(block, expected, index));
+        if (m_entry != Entry::Process || status != ANIRA_OK) { return; }
+        // The block's inference, collected, before the next call: the stream stays complete.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(k_wait_s);
+        while (available(m_handler) != before) {
+            if (m_quit.load(std::memory_order_acquire)) { return; }
+            if (std::chrono::steady_clock::now() > deadline) {
+                note_break(index, "its inference was never collected");
+                m_stuck = true;
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
+    }
+
+    /// The factor of one output block against the delayed input; 0, and a break noted, when
+    /// the block is no multiple of it.
+    float factor_of(std::span<const float> out, std::span<const float> expected, size_t index) {
+        float factor = 0.0F;
+        bool silence = true;
+        for (size_t i = 0; i < out.size(); ++i) {
+            if (expected[i] == 0.0F) {
+                if (out[i] != 0.0F) {
+                    note_break(index, "a sample where the delayed input is silent");
+                    return 0.0F;
+                }
+                continue;
+            }
+            if (silence) {
+                silence = false;
+                factor = out[i] / expected[i];
+            }
+            if (factor == 0.0F || out[i] != expected[i] * factor) {
+                note_break(index,
+                           factor == 0.0F ? "zeros where the delayed input is not"
+                                          : "not the delayed input times one factor");
+                return 0.0F;
+            }
+        }
+        return factor;
+    }
+
+    void note_break(size_t index, const char* what) {
+        if (m_broken++ == 0) { m_first_break = "block " + std::to_string(index) + ": " + what; }
+    }
+
+    anira_handler* m_handler;
+    size_t m_block;
+    Entry m_entry;
+    size_t m_latency;
+    DelayLine m_line;
+    std::atomic<bool> m_quit{false};
+    std::atomic<bool> m_parked{false};
+    std::atomic<bool> m_inside{false};
+    std::atomic<size_t> m_target{0};
+    std::atomic<size_t> m_done{0};
+    // The thread's own, read by the test while it is parked.
+    bool m_stuck = false;
+    std::vector<anira_status> m_statuses;
+    std::vector<float> m_factors;
+    size_t m_broken = 0;
+    std::string m_first_break;
+    std::thread m_thread;  ///< last: it starts in the constructor's initialiser list
+};
 
 /// Declared right after the Handler a gate engine runs in, so at scope exit it runs first: it
 /// opens the held gate so the in-flight inference can finish, then destroys the handler, which

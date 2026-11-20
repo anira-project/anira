@@ -88,12 +88,16 @@ typedef struct anira_prepare_info {
      */
     uint32_t num_entries;
     /**
-     * The handler being prepared: its getters and the two Static entries are legal, never
-     * prepare, destroy or a Hard entry.
+     * The handler being prepared: its getters and the two Static entries are legal, never a
+     * control entry (prepare, add_variant, remove_variant, destroy: ANIRA_ERROR_INVALID_STATE
+     * from inside a callback of one) or a Hard entry. Under ANIRA_PREPARE_LIVE the handler is
+     * playing, and the two Static entries are refused too.
      */
     anira_handler* handler;
     /**
-     * This prepare's plan report; valid while the handler stays prepared.
+     * This prepare's plan report; valid while the handler stays prepared. Under
+     * ANIRA_PREPARE_LIVE the report the running anira_handler_add_variant publishes when it
+     * succeeds, with the rows of the new plans in it.
      */
     const anira_plan_report* report;
     /**
@@ -112,8 +116,9 @@ typedef struct anira_prepare_info {
     /**
      * The flags of this prepare: ANIRA_PREPARE_EXCLUSIVE when the handler's inferences run one
      * at a time and in order (a model declared ANIRA_MODEL_STATEFUL or with a declared State
-     * pair), with a reset at every stream start; 0 otherwise. No other bit is defined in this
-     * pre-release.
+     * pair), with a reset at every stream start; ANIRA_PREPARE_LIVE when the prepare runs
+     * beside the handler's playing stream (anira_handler_add_variant; an engine's prepare
+     * alone). No other bit is defined in this pre-release.
      */
     uint32_t flags;
     uint32_t reserved;  /**< 0. */

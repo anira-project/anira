@@ -110,9 +110,20 @@ typedef enum anira_status {
     ANIRA_ERROR_EXTENSION_VERSION = -22,
     /**
      * The lookup found nothing that matches (anira_plan_report_find: no plan has every property
-     * the query names).
+     * the query names; anira_handler_set_model and anira_handler_set_backend: the variant has
+     * no plan on the backend, the selection unchanged, recorded in anira_handler_rt_error).
      */
     ANIRA_ERROR_NOT_FOUND = -23,
+    /**
+     * Another call of the same group is inside the handler, and this one did nothing. From
+     * anira_handler_set_plan, anira_handler_set_model and anira_handler_set_backend, which read
+     * the handler's plan rows through one reader slot: a legal overlap, the selection unchanged
+     * and nothing recorded; call again. From a driver-thread entry (the Hard entries, their
+     * _wait twins, anira_handler_get_available_samples), which read the plan table through one
+     * reader slot of their own: two threads drive one handler, which the thread contract
+     * forbids; nothing moved, recorded in anira_handler_rt_error.
+     */
+    ANIRA_ERROR_CONCURRENT_CALL = -24,
     /**
      * An exception the firewall could not classify; a bug in anira.
      */

@@ -2376,6 +2376,59 @@ TEST(AbiEngine, TheQueryRunsAtCreateAndPrepareReusesItsAnswer) {
     EXPECT_EQ(gain.m_queried_off_thread.load(), 0);
 }
 
+// An engine not reached at create has an answer: anira_handler_create asks the query of every
+// engine of the pipeline that declares providers, whether a plan of the handler runs on it or
+// not, and the handler keeps the answer, so a plan that reaches the engine later is checked
+// against it without a query (the query runs on the main thread only, a later check on any
+// control thread). An engine without a list has no bit a query could clear and is not asked. A
+// prepare asks nothing again. A refused query of an engine no plan reaches fails the create with
+// its status, naming the engine, as a reached engine's does.
+TEST(AbiEngine, AnEngineNoPlanReachesHasAQueryAnswer) {
+    constexpr const char* k_unreached_id = "org.example.unreached";
+    constexpr const char* k_listless_id = "org.example.listless";
+    const Context context;
+    static constexpr std::array<const char*, 2> k_served{"coreml", "com.example.npu"};
+    GainEngine reached;    // the model's entry names it
+    GainEngine unreached;  // declares providers, and no entry names it
+    unreached.m_available = 0b10;
+    GainEngine listless;  // no providers list, and no entry names it
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(reached, k_served)), ANIRA_OK)
+        << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_unreached_id, gain_desc_serving(unreached, k_served)), ANIRA_OK)
+        << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_listless_id, gain_desc(listless)), ANIRA_OK)
+        << pipe.m_err.message;
+    pipe.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    EXPECT_EQ(reached.m_queried, 1);
+    EXPECT_EQ(unreached.m_queried, 1) << "asked at create although no plan runs on it";
+    EXPECT_EQ(unreached.m_query_context, context.m_context);
+    EXPECT_EQ(listless.m_queried, 0) << "no list: nothing a query could answer";
+    const uint64_t* kept = handler->m_query_answers.find(k_unreached_id);
+    ASSERT_NE(kept, nullptr) << "the handler keeps the answer";
+    EXPECT_EQ(*kept, 0b10U);
+    ASSERT_NE(handler->m_query_answers.find(k_gain_id), nullptr);
+    EXPECT_EQ(handler->m_query_answers.find(k_listless_id), nullptr);
+
+    anira_error err = ANIRA_ERROR_INIT;
+    const anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(reached.m_queried, 1) << "a prepare never calls a query";
+    EXPECT_EQ(unreached.m_queried, 1);
+    EXPECT_EQ(unreached.m_inited, 0) << "no plan reached it: never initialised";
+    EXPECT_EQ(unreached.m_loaded, 0);
+    anira_handler_destroy(handler);
+    handler = nullptr;
+
+    unreached.m_refuse_query = ANIRA_ERROR_DEVICE;
+    EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_ERROR_DEVICE);
+    EXPECT_EQ(handler, nullptr);
+    EXPECT_NE(std::strstr(pipe.m_err.message, "'org.example.unreached' refused query"), nullptr)
+        << pipe.m_err.message;
+}
+
 // A pipeline's capabilities are the context's rows and then one row per custom engine of the
 // pipeline and provider usable here: the declared providers the query keeps, in list order,
 // or the CPU path alone for an engine without a list, with the engine's id; every call runs
@@ -2712,8 +2765,8 @@ TEST(AbiEngine, AProviderOptionsSetReachesARegisteredEngineThatConsumesIt) {
               (std::vector<std::pair<std::string, std::string>>{{"units", "cpu"}}));
     ASSERT_EQ(anira_handler_prepare(on_third, contract.native(), &err), ANIRA_OK) << err.message;
     EXPECT_EQ(gain.m_loaded, 2) << "an equal set: the first loaded model, shared";
-    EXPECT_EQ(anira_test::session_of(on_first)->m_plans.at(0).m_loaded,
-              anira_test::session_of(on_third)->m_plans.at(0).m_loaded);
+    EXPECT_EQ(anira_test::session_of(on_first)->m_plans.at(0)->m_loaded,
+              anira_test::session_of(on_third)->m_plans.at(0)->m_loaded);
     anira_handler_destroy(on_first);
     anira_handler_destroy(on_second);
     anira_handler_destroy(on_third);
@@ -3253,10 +3306,10 @@ TEST(AbiEngine, EqualConfigsShareOneLoadedModelStatefulOrNot) {
         EXPECT_EQ(gain.m_instances_seen, (std::vector<uint32_t>{2}));
         EXPECT_EQ(gain.m_flags_seen, (std::vector<uint32_t>{0, 0}));
         EXPECT_EQ(gain.m_bad_prepare_record, 0);
-        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_loaded,
-                  anira_test::session_of(second)->m_plans.at(0).m_loaded)
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0)->m_loaded,
+                  anira_test::session_of(second)->m_plans.at(0)->m_loaded)
             << "the pooled loaded model";
-        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_loaded->model().m_instances, 2U)
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0)->m_loaded->model().m_instances, 2U)
             << "the record agrees with the load record";
         ASSERT_EQ(gain.m_handed_out.size(), 2U);
         EXPECT_EQ(handle_of(gain, 0).m_loaded, handle_of(gain, 1).m_loaded);
@@ -3300,12 +3353,12 @@ TEST(AbiEngine, EqualConfigsShareOneLoadedModelStatefulOrNot) {
             << "no shared slot: the handlers run on what their prepare built";
         EXPECT_EQ(gain.m_flags_seen,
                   (std::vector<uint32_t>{ANIRA_PREPARE_EXCLUSIVE, ANIRA_PREPARE_EXCLUSIVE}));
-        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_loaded,
-                  anira_test::session_of(second)->m_plans.at(0).m_loaded)
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0)->m_loaded,
+                  anira_test::session_of(second)->m_plans.at(0)->m_loaded)
             << "pooled: exclusivity is not in the key";
         for (const anira_handler* handler : {first, second}) {
             const anira::SessionElement::PlanSlot& plan =
-                anira_test::session_of(handler)->m_plans.at(0);
+                *anira_test::session_of(handler)->m_plans.at(0);
             EXPECT_EQ(plan.m_loaded->model().m_instances, 0U)
                 << "the record agrees with the load record";
             ASSERT_NE(plan.m_prepared, nullptr);
@@ -3407,7 +3460,8 @@ TEST(AbiEngine, ASessionExclusiveHandlerHasNoSharedSlotOnAnyEngine) {
     ASSERT_NE(session, nullptr);
     EXPECT_EQ(session->m_plans.size(), anira_test::oracle_engines().size() + 1)
         << "one plan per engine of the build, plus the custom row";
-    for (const anira::SessionElement::PlanSlot& plan : session->m_plans) {
+    for (const std::shared_ptr<anira::SessionElement::PlanSlot>& slot : session->m_plans) {
+        const anira::SessionElement::PlanSlot& plan = *slot;
         ASSERT_NE(plan.m_loaded, nullptr);
         EXPECT_EQ(plan.m_loaded->model().m_instances, 0U) << "the plan of engine " << plan.m_engine;
         EXPECT_EQ(plan.m_loaded->num_instances(), 0U) << "the plan of engine " << plan.m_engine;
@@ -4058,8 +4112,8 @@ TEST(AbiEngine, TwoEngineObjectsUnderOneIdShareNothing) {
     EXPECT_EQ(second_engine.m_loaded, 1);
     EXPECT_EQ(first_engine.m_prepared, 1);
     EXPECT_EQ(second_engine.m_prepared, 1);
-    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0).m_loaded,
-              anira_test::session_of(second_handler)->m_plans.at(0).m_loaded);
+    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0)->m_loaded,
+              anira_test::session_of(second_handler)->m_plans.at(0)->m_loaded);
     ASSERT_NO_FATAL_FAILURE(run_ramp(first_handler, 2));
     ASSERT_NO_FATAL_FAILURE(run_ramp(second_handler, 2));
     EXPECT_EQ(first_engine.m_processed.load(), 2);
@@ -4113,8 +4167,8 @@ TEST(AbiEngine, OneEngineInTwoPipelinesSharesOneLoadedModel) {
     EXPECT_EQ(shared.m_inited, 1) << "one engine object: one init";
     EXPECT_EQ(shared.m_loaded, 1) << "one engine, one model: one load";
     EXPECT_EQ(shared.m_prepared, 2) << "a prepare per handler";
-    EXPECT_EQ(anira_test::session_of(first_handler)->m_plans.at(0).m_loaded,
-              anira_test::session_of(second_handler)->m_plans.at(0).m_loaded);
+    EXPECT_EQ(anira_test::session_of(first_handler)->m_plans.at(0)->m_loaded,
+              anira_test::session_of(second_handler)->m_plans.at(0)->m_loaded);
     ASSERT_NO_FATAL_FAILURE(run_ramp(first_handler, 2));
     ASSERT_NO_FATAL_FAILURE(run_ramp(second_handler, 2));
     EXPECT_EQ(shared.m_processed.load(), 4);
@@ -4161,8 +4215,8 @@ TEST(AbiEngine, OneEngineOverTwoVariantsLoadsTwice) {
         << err.message;
     EXPECT_EQ(gain.m_loaded, 2);
     EXPECT_EQ(gain.m_prepared, 2);
-    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0).m_loaded,
-              anira_test::session_of(second_handler)->m_plans.at(0).m_loaded);
+    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0)->m_loaded,
+              anira_test::session_of(second_handler)->m_plans.at(0)->m_loaded);
     anira_handler_destroy(first_handler);
     anira_handler_destroy(second_handler);
     first.destroy();

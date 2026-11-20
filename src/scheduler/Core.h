@@ -122,10 +122,11 @@ public:
      * @brief Creates and registers a new inference session
      *
      * Applies or reconciles the given context config (see the class description), resolves
-     * the session's instance count (1 for an exclusive session, else the model config's
-     * max_instances: ANIRA_INSTANCES_AUTO becomes the pool's size, at least 1, and a count
-     * above the pool's size is clamped to it, with a warning; every request's instance count
-     * takes the same rule), builds the
+     * the session's instance count (1 for an exclusive session, else the fewest max_instances
+     * of the handler's variants, VariantBounds::m_max_instances: ANIRA_INSTANCES_AUTO becomes
+     * the pool's size, at least 1, and a count above the pool's size is clamped to it, with a
+     * warning; every request's instance count, its own variant's, takes the same rule), builds
+     * the
      * session over the handler's processor runner and configuration, builds its plan table
      * from the requests (one plan per request, in order: a built-in or a registered engine's
      * loaded model is taken from the pool when an equal one exists there and loaded once
@@ -140,9 +141,11 @@ public:
      *
      * @param processor The handler's processor runner: the phases of every chunk, and the port
      * vectors that hold the session's rings
-     * @param model The handler's model config (its variant), read by the session
-     * @param derived What the validator derived for it under the contract, read by the session
-     * @param hard The Hard half of the contract of the prepare, read by the session (the three
+     * @param bounds What sizes the session over the handler's variants: the largest internal
+     * latency per output and the fewest instances (VariantBounds), copied
+     * @param derived The form of the stream: what the validator derived for the handler's
+     * variants under the contract, read by the session
+     * @param hard The Hard half of the contract of the prepare, read by the session (the two
      * outlive the session: the C handler holds them)
      * @param requests One plan per entry, in dense-index order: what the session's plan
      * table holds (the C handler asks for exactly its plans); never empty
@@ -152,6 +155,9 @@ public:
      * handler's own (so anira_handler_rt_error reads one word); nullptr gives the session
      * its own. Reaches the SessionElement constructor and is published by the same
      * lifecycle lock that registers the session
+     * @param selection The atomic that holds the session's selected plan: a 3.x handler's own
+     * (so anira_handler_get_plan reads one word of the handler); nullptr gives the session its
+     * own. Reaches the SessionElement constructor, which sets it to 0
      * @return Shared pointer to the newly created session
      * @throws std::invalid_argument for an empty request list
      *
@@ -160,12 +166,13 @@ public:
      */
     static std::shared_ptr<SessionElement> create_session(
         capi::ProcessorRunner& processor,
-        const anira_model_config& model,
+        const VariantBounds& bounds,
         const capi::Derived& derived,
         const capi::HardContract& hard,
         std::vector<engine::PlanRequest> requests,
         const anira_context_config& context_config,
-        RtLatch* rt_latch = nullptr);
+        RtLatch* rt_latch = nullptr,
+        std::atomic<uint32_t>* selection = nullptr);
 
     /**
      * @brief Releases an inference session and its resources
@@ -181,6 +188,86 @@ public:
      *       concurrently with other sessions' lifecycle calls.
      */
     static void release_session(const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @name A registered session's plan list, changed while its stream runs
+     *
+     * The control side of a plan that joins or leaves a session behind its create: the list
+     * that owns the plan slots (SessionElement::m_plans) changes under the lifecycle lock,
+     * because the release of another session walks the lists of all registered sessions under
+     * it. None of the five publishes anything: the driving thread stamps from the table the
+     * session's handler publishes (SessionElement::publish_plans, or stage_plans and
+     * commit_plans around the change), and a slot that left the list is freed by its remover
+     * once SessionElement::synchronize_plans() and wait_until_unused() returned. Control
+     * threads only; the caller is the session's handler (its control lock serialises its own
+     * calls).
+     * @{
+     */
+
+    /**
+     * @brief Makes room in the session's list for `count` more plan slots
+     *
+     * The one step of an append that can fail (std::bad_alloc; the list is as it was then):
+     * the add_plan_slot() calls that follow, up to `count` of them, allocate nothing. For a
+     * caller that must have everything that can fail behind it before it changes the list
+     * (anira_handler_add_variant's commit). The room stays when it is not used.
+     */
+    static void reserve_plan_slots(const std::shared_ptr<SessionElement>& session, size_t count);
+
+    /**
+     * @brief Appends a plan slot to the session's list
+     *
+     * The slot arrives complete: its loaded model, this session's prepared handle over it, its
+     * wait list, and the id strings interned in THIS session (SessionElement::intern_id, or
+     * SessionElement::StagedIds). Nothing stamps it before the next publication of the list
+     * (SessionElement::publish_plans, commit_plans). It allocates when the list is full, and
+     * not behind reserve_plan_slots().
+     *
+     * @return The plan's index, its position in the list
+     */
+    static uint32_t add_plan_slot(const std::shared_ptr<SessionElement>& session,
+                                  std::shared_ptr<SessionElement::PlanSlot> slot);
+
+    /**
+     * @brief Takes a plan's slot out of the session's list; its entry stays, empty
+     *
+     * The published table still names the slot, and chunks may count on it: the caller holds
+     * the slot it gets until it has published the list again, waited for the read leases
+     * (SessionElement::synchronize_plans) and for the chunks (wait_until_unused). Then it gives
+     * the prepared handle back, lets the pool forget the model (release_loaded_if_unheld) and
+     * drops the slot, on its own thread. Allocates nothing.
+     *
+     * @return The slot, or null for an index the list does not have or an empty entry
+     */
+    static std::shared_ptr<SessionElement::PlanSlot> take_plan_slot(
+        const std::shared_ptr<SessionElement>& session,
+        uint32_t plan);
+
+    /**
+     * @brief Lets the pool's entry of a loaded model go when no registered session's plan list
+     * holds the model any more
+     *
+     * What Core::release_session does for every plan of a session, for one model: the step
+     * behind take_plan_slot() once the taken slot's prepared handle is given back. The model
+     * itself unloads with its last holder (the slot the caller still has).
+     */
+    static void release_loaded_if_unheld(const std::shared_ptr<engine::Loaded>& loaded);
+
+    /**
+     * @brief Waits until no chunk counts on a plan slot any more
+     *
+     * The slot left the published table and SessionElement::synchronize_plans() returned, so
+     * no chunk is stamped with it any more: its count (PlanSlot::active_chunks) only falls. It
+     * reaches 0 without the driving thread: an inference thread ends every chunk that is
+     * queued, waiting for an instance or running. For an exclusive session a pending chunk
+     * whose dispatch passed the gate's release is otherwise kicked by the driving thread's next
+     * call alone, so this call kicks the dispatch chain itself while it waits, and a stopped
+     * transport does not pin it. Blocks for as long as an inference of the plan runs (an engine
+     * call that never returns never lets it return).
+     */
+    static void wait_until_unused(const std::shared_ptr<SessionElement>& session,
+                                  const SessionElement::PlanSlot& slot) ANIRA_BLOCKING;
+    /** @} */
 
     /**
      * @brief Stops and joins the inference thread pool, regardless of registered sessions
@@ -495,8 +582,11 @@ public:
      * reference-output samples (SessionElement::m_pending_pull_samples).
      *
      * @param session Shared pointer to the session that has new data available
+     * @param plans The published plan table every chunk of this call is stamped from: the
+     * version of the read lease the caller holds (SessionElement::claim_plans)
      */
-    static void new_data_submitted(const std::shared_ptr<SessionElement>& session);
+    static void new_data_submitted(const std::shared_ptr<SessionElement>& session,
+                                   const SessionElement::PlanTable& plans);
 
     /**
      * @brief Collects completed inferences on the push side, as far as they fit
@@ -583,6 +673,18 @@ public:
      * @return Vector of the registered sessions' shared pointers
      */
     static std::vector<std::shared_ptr<SessionElement>> get_sessions();
+
+    /**
+     * @brief How many loaded models the pool holds
+     *
+     * One per model a plan of a registered session runs (the pool's entries): two plans of one
+     * model, in one handler or in two, are one. What a handler's release and the removal of a
+     * variant bring down when they let a model's last plan go. Taken under the lifecycle lock;
+     * for tests and diagnostics.
+     *
+     * @return The pool's entries; 0 without a core
+     */
+    static size_t get_num_loaded_models();
 
     /**
      * @brief Wait-free reset of a session, safe on the session's driving (audio) thread.
@@ -858,9 +960,11 @@ private:
      * input data for inference execution.
      *
      * @param session Shared pointer to the session to preprocess
+     * @param plans The published plan table the chunk is stamped from (new_data_submitted's)
      * @return True if preprocessing was successful, false otherwise
      */
-    static bool pre_process(const std::shared_ptr<SessionElement>& session);
+    static bool pre_process(const std::shared_ptr<SessionElement>& session,
+                            const SessionElement::PlanTable& plans);
 
     /**
      * @brief One inference of warm_up_plan(): a free struct stamped with the plan, submitted as
@@ -903,9 +1007,14 @@ private:
      * Claims the session's next task awaiting dispatch and enqueues it into the
      * global inference queue. If the queue is momentarily full, the inference
      * is dropped: the task completes with zeroed output at its stream position,
-     * so the output remains time-aligned. No-op for sessions without a
-     * session-exclusive processor or while one of the session's tasks is
-     * already in flight.
+     * so the output remains time-aligned, the dispatch gate is freed and the
+     * next task awaiting dispatch is claimed in its turn, until one is in the
+     * queue or none waits: a task is never left waiting behind a free gate. No-op
+     * for sessions without a session-exclusive processor or while one of the
+     * session's tasks is already in flight. Real-time safe; besides the session's
+     * driving thread, a control thread calls it for a session that runs (the
+     * warm-up pass, wait_until_unused, another session's drain that had to drop
+     * this session's task), which the gate allows: whoever takes it dispatches.
      *
      * @param session Shared pointer to the session whose task to dispatch
      */
@@ -923,10 +1032,10 @@ private:
      * independently -- means both overloads wait correctly regardless of which
      * one a caller uses.
      *
-     * Also kicks a pending stateful dispatch first: a session-exclusive
-     * processor's next task may still be waiting to be dispatched with none in
-     * flight (a previous attempt found the global queue full and dropped its
-     * task), and no further submission may be coming to restart the chain.
+     * Also kicks a pending stateful dispatch first, the guard of
+     * collect_completed(): should a session-exclusive processor's next task
+     * still be waiting to be dispatched with none in flight, no further
+     * submission may be coming to restart the chain.
      *
      * @param session Shared pointer to the session awaiting completion
      * @param index Index into the session's inference queue to wait on
@@ -981,7 +1090,9 @@ private:
      * single pass's window). The session's placeholders (reserve_inference_capacity) only give
      * their count back. Other sessions' tasks and placeholders are requeued with the
      * allocating enqueue, however many; only if that allocation fails is a task completed as
-     * silence instead of being silently lost.
+     * silence instead of being silently lost, and the dispatch chain of its session, when that
+     * one is exclusive and runs, continued from here (try_dispatch_stateful): the tasks parked
+     * behind the dropped one do not wait for that session's next call.
      *
      * @param session Shared pointer to the session whose queue to drain
      *

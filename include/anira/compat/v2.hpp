@@ -2040,7 +2040,9 @@ public:
     /// the C handler this reads, the rule anira_handler_set_plan states ("not while
     /// anira_handler_prepare runs"). 2.x promised this member while audio runs, never alongside
     /// prepare; a host that switches from a UI thread and re-prepares from another serialises
-    /// the two itself.
+    /// the two itself. Two calls from two threads that meet inside the handler do not wait for
+    /// each other: the request made last is kept, and the thread that drives the handler
+    /// applies it with its next block.
     void set_inference_backend(InferenceBackend inference_backend) noexcept ANIRA_NONBLOCKING {
         m_requested.store(static_cast<uint32_t>(inference_backend), std::memory_order_relaxed);
         if (m_prepared.load(std::memory_order_acquire)) { select(inference_backend); }
@@ -2140,6 +2142,7 @@ public:
                     size_t* num_input_samples,
                     float* const* const* output_data,
                     size_t* num_output_samples) noexcept {
+        apply_requested();
         take_inputs(input_data, num_input_samples);
         present_outputs(output_data, num_output_samples);
         anira_status status = ANIRA_OK;
@@ -2183,6 +2186,7 @@ public:
     }
     /// Every input slot at once. Never waits (2.x waited under set_non_realtime).
     void push_data(const float* const* const* input_data, size_t* num_input_samples) noexcept {
+        apply_requested();
         take_inputs(input_data, num_input_samples);
         anira_handler_push_data_multi(m_handler, m_inputs.data(), num_slots(m_inputs));
     }
@@ -2208,6 +2212,7 @@ public:
     }
     /// Every output slot at once; the counts are written into num_output_samples.
     size_t* pop_data(float* const* const* output_data, size_t* num_output_samples) noexcept {
+        apply_requested();
         present_outputs(output_data, num_output_samples);
         anira_status status = ANIRA_OK;
         const bool waited = m_non_realtime.load(std::memory_order_relaxed);
@@ -2230,6 +2235,7 @@ public:
     size_t* pop_data(float* const* const* output_data,
                      size_t* num_output_samples,
                      std::chrono::steady_clock::time_point wait_until) noexcept {
+        apply_requested();
         present_outputs(output_data, num_output_samples);
         double timeout_ms = ANIRA_WAIT_FOREVER;
         if (!m_non_realtime.load(std::memory_order_relaxed)) {
@@ -2557,11 +2563,27 @@ private:
         return custom.value_or(0);
     }
 
-    /// The first plan of the backend; none keeps the selection and logs once.
+    /// The driving thread's half of set_inference_backend, at the start of every block: a
+    /// request that met another call inside the C handler (select) is applied now. One load
+    /// while there is none.
+    void apply_requested() noexcept ANIRA_NONBLOCKING {
+        if (!m_reselect.load(std::memory_order_acquire)) { return; }
+        m_reselect.store(false, std::memory_order_release);
+        const uint32_t requested = m_requested.load(std::memory_order_relaxed);
+        if (requested != k_no_request) { select(static_cast<InferenceBackend>(requested)); }
+    }
+
+    /// The first plan of the backend; none keeps the selection and logs once. The C handler's
+    /// selection entries run one at a time: a call that meets another thread's inside the
+    /// handler stores nothing (ANIRA_ERROR_CONCURRENT_CALL). The request is in m_requested
+    /// then, and the thread that drives the handler applies it with its next block
+    /// (apply_requested), so no set_inference_backend is lost and none waits for another.
     void select(InferenceBackend backend) noexcept ANIRA_NONBLOCKING {
         for (uint32_t i = 0; i < m_plan_backend.size(); ++i) {
             if (m_plan_backend[i] == backend) {
-                anira_handler_set_plan(m_handler, i);
+                if (anira_handler_set_plan(m_handler, i) == ANIRA_ERROR_CONCURRENT_CALL) {
+                    m_reselect.store(true, std::memory_order_release);
+                }
                 return;
             }
         }
@@ -2681,6 +2703,9 @@ private:
     std::atomic<bool> m_prepared{false};
     std::atomic<bool> m_non_realtime{false};
     std::atomic<uint32_t> m_requested{k_no_request};
+    /// A set_inference_backend met another one inside the C handler and stored nothing
+    /// (select): the driving thread applies m_requested with its next block.
+    std::atomic<bool> m_reselect{false};
     bool m_blocking = false;       ///< the configuration's blocking_ratio is above 0
     bool m_caller_engine = false;  ///< the CUSTOM row runs the caller's engine
     InferenceBackend m_initial_backend = CUSTOM;

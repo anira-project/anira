@@ -30,7 +30,7 @@ struct FileFigures {
     uint32_t m_warm_up = 0;
 };
 
-inline constexpr std::array<FileFigures, 11> k_file_figures{{
+inline constexpr std::array<FileFigures, 12> k_file_figures{{
     {.m_contract_json = k_cnn_contract_json, .m_budget_ms = 42.66, .m_warm_up = 2},
     {.m_contract_json = k_medium_cnn_contract_json, .m_budget_ms = 42.66, .m_warm_up = 0},
     {.m_contract_json = k_small_cnn_contract_json, .m_budget_ms = 42.66, .m_warm_up = 0},
@@ -39,6 +39,7 @@ inline constexpr std::array<FileFigures, 11> k_file_figures{{
     {.m_contract_json = k_gain_contract_json, .m_budget_ms = 5.0, .m_warm_up = 1},
     {.m_contract_json = k_stereo_gain_contract_json, .m_budget_ms = 5.0, .m_warm_up = 1},
     {.m_contract_json = k_stateful_accumulator_contract_json, .m_budget_ms = 5.0, .m_warm_up = 1},
+    {.m_contract_json = k_variant_gain_contract_json, .m_budget_ms = 5.0, .m_warm_up = 1},
     {.m_contract_json = k_rave_funk_drum_contract_json, .m_budget_ms = 42.66, .m_warm_up = 5},
     {.m_contract_json = k_rave_funk_drum_encoder_contract_json,
      .m_budget_ms = 42.66,

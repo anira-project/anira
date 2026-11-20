@@ -459,13 +459,17 @@ const char* drain_word(anira_log_drain drain) {
     return drain == ANIRA_LOG_DRAIN_MANUAL ? "manual" : "thread";
 }
 
-// Whether the plan table of any session of `sessions` holds `loaded`.
+// Whether the plan list of any session of `sessions` holds `loaded` (an entry whose plan was
+// taken out is empty and holds nothing). The caller holds the lifecycle lock, under which alone
+// the lists of the registered sessions change (SessionElement::m_plans).
 bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions,
                     const std::shared_ptr<engine::Loaded>& loaded) {
     return std::ranges::any_of(sessions, [&loaded](const std::shared_ptr<SessionElement>& s) {
-        return std::ranges::any_of(s->m_plans, [&loaded](const SessionElement::PlanSlot& slot) {
-            return slot.m_loaded == loaded;
-        });
+        return std::ranges::any_of(
+            s->m_plans,
+            [&loaded](const std::shared_ptr<SessionElement::PlanSlot>& slot) {
+                return slot != nullptr && slot->m_loaded == loaded;
+            });
     });
 }
 
@@ -896,12 +900,13 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
 }
 
 std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& processor,
-                                                     const anira_model_config& model,
+                                                     const VariantBounds& bounds,
                                                      const capi::Derived& derived,
                                                      const capi::HardContract& hard,
                                                      std::vector<engine::PlanRequest> requests,
                                                      const anira_context_config& context_config,
-                                                     RtLatch* rt_latch) {
+                                                     RtLatch* rt_latch,
+                                                     std::atomic<uint32_t>* selection) {
     if (requests.empty()) {
         throw std::invalid_argument("Core::create_session: an empty plan table");
     }
@@ -927,8 +932,10 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
     const size_t pool_size = prospective_pool_size_locked(state, config);
     const auto resolved_auto = static_cast<uint32_t>(std::max<size_t>(pool_size, 1));
     // An exclusive session runs one inference at a time: one instance, whatever the model
-    // config says (its loaded model has no shared call slot either, the request's count of 0).
-    uint32_t num_instances = derived.m_exclusive ? 1U : model.m_max_instances;
+    // configs say (its loaded models have no shared call slot either, the requests' count of
+    // 0). A shared one is sized for the fewest instances any of its variants allows; each
+    // request keeps its own variant's count.
+    uint32_t num_instances = derived.m_exclusive ? 1U : bounds.m_max_instances;
     if (num_instances == ANIRA_INSTANCES_AUTO) { num_instances = resolved_auto; }
     for (engine::PlanRequest& request : requests) {
         if (request.m_model.m_instances == ANIRA_INSTANCES_AUTO) {
@@ -955,12 +962,13 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
     std::shared_ptr<SessionElement> const session =
         std::make_shared<SessionElement>(session_id,
                                          processor,
-                                         model,
+                                         bounds.m_internal_latency,
                                          derived,
                                          hard,
                                          num_instances,
                                          moodycamel::ProducerToken(state.m_next_inference),
-                                         rt_latch);
+                                         rt_latch,
+                                         selection);
 
     // Everything that can fail — an engine that cannot load its model, a custom
     // backend's prepare(), the pool build — happens before the session is registered.
@@ -975,25 +983,37 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
         // initial plan once the table exists.
         session->m_plans.reserve(requests.size());
         for (const engine::PlanRequest& request : requests) {
-            SessionElement::PlanSlot slot;
-            acquire_loaded_locked(state, request, pool_size, slot);
+            // An object of its own, at one address for its life: the chunks stamped with the
+            // plan carry a pointer to it.
+            std::shared_ptr<SessionElement::PlanSlot> owned =
+                std::make_shared<SessionElement::PlanSlot>();
+            SessionElement::PlanSlot& slot = *owned;
             slot.m_registered = request.m_source == engine::Source::Registered;
+            slot.m_variant = request.m_variant;
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
-            slot.m_engine_id = request.m_model.m_engine_id;
-            slot.m_provider_id = request.m_model.m_provider_id;
+            // The session's copies of the two ids before the loaded model: between the moment
+            // the slot holds its model (which the pool has then) and the moment it is in the
+            // list nothing may fail, or the rollback below would not find the model and the
+            // pool would keep it, loaded. An interned id allocates.
+            slot.m_engine_id = session->intern_id(request.m_model.m_engine_id);
+            slot.m_provider_id = session->intern_id(request.m_model.m_provider_id);
+            acquire_loaded_locked(state, request, pool_size, slot);
             slot.m_state_alias = (slot.m_loaded->flags() &
                                   static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS)) != 0;
             // Into the table before the prepare: a prepare that throws (an exclusive session's
             // own executor, its warm-up) leaves the slot where the rollback below finds its
-            // loaded model and lets the pool entry go.
-            session->m_plans.push_back(std::move(slot));
-            SessionElement::PlanSlot& placed = session->m_plans.back();
+            // loaded model and lets the pool entry go. The list has the room (reserved above).
+            session->m_plans.push_back(std::move(owned));
+            SessionElement::PlanSlot& placed = *session->m_plans.back();
             if (!placed.m_registered) {
                 placed.m_prepared = placed.m_loaded->prepare(
                     engine::PrepareRequest{.m_exclusive = session->exclusive(), .m_info = nullptr});
             }
         }
+        // The table the driving thread stamps from: the list as built, published before the
+        // session can be reached by anybody.
+        session->publish_plans();
 
         apply_or_compare_config_locked(state, config, /*builds_pool=*/true);
         register_session_locked(state, session);
@@ -1001,12 +1021,66 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
         // The session is not registered, so the "another session shares this loaded model"
         // check sees only the sessions that really exist. The prepared handles made so far
         // go back first (nothing ran on them), then the loaded models.
-        for (SessionElement::PlanSlot& slot : session->m_plans) { slot.m_prepared.reset(); }
+        for (const std::shared_ptr<SessionElement::PlanSlot>& slot : session->m_plans) {
+            slot->m_prepared.reset();
+        }
         release_loaded_locked(state, session);
         throw;
     }
 
     return session;
+}
+
+void Core::reserve_plan_slots(const std::shared_ptr<SessionElement>& session, size_t count) {
+    State& state = get_state();
+    // Under the lock like every change of the list: the growth moves its entries, which the
+    // release of another session walks.
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    session->m_plans.reserve(session->m_plans.size() + count);
+}
+
+uint32_t Core::add_plan_slot(const std::shared_ptr<SessionElement>& session,
+                             std::shared_ptr<SessionElement::PlanSlot> slot) {
+    State& state = get_state();
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    session->m_plans.push_back(std::move(slot));
+    return static_cast<uint32_t>(session->m_plans.size() - 1);
+}
+
+std::shared_ptr<SessionElement::PlanSlot> Core::take_plan_slot(
+    const std::shared_ptr<SessionElement>& session,
+    uint32_t plan) {
+    State& state = get_state();
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    if (plan >= session->m_plans.size()) { return nullptr; }
+    // The entry stays, empty: the index is the plan's for the session's life.
+    return std::exchange(session->m_plans[plan], nullptr);
+}
+
+void Core::release_loaded_if_unheld(const std::shared_ptr<engine::Loaded>& loaded) {
+    if (loaded == nullptr) { return; }
+    State& state = get_state();
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    if (any_plan_holds(state.m_sessions, loaded)) { return; }
+    std::erase_if(state.m_loaded_models,
+                  [&loaded](const State::PoolEntry& entry) { return entry.m_loaded == loaded; });
+}
+
+void Core::wait_until_unused(const std::shared_ptr<SessionElement>& session,
+                             const SessionElement::PlanSlot& slot) {
+    while (slot.active_chunks() != 0) {
+        // A chunk of an exclusive session that waits in the pending queue is dispatched by
+        // whoever frees the dispatch gate, without a call of the driving thread: its enqueue and
+        // a release of the gate cannot pass each other, and no release leaves without a look at
+        // the queue (SessionElement::try_acquire_next_dispatch). The kick is the guard against
+        // a release that did, as in the warm-up: the caller does not wait for a call of the
+        // driving thread that may never come (a stopped transport). Nothing while the gate is
+        // held; nothing for a shared session.
+        try_dispatch_stateful(session);
+#ifndef __EMSCRIPTEN__
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+#endif
+    }
 }
 
 std::shared_ptr<engine::BuiltinEngine> Core::builtin_engine(anira_engine engine) {
@@ -1084,14 +1158,15 @@ void Core::acquire_loaded_locked(State& state,
 }
 
 void Core::release_loaded_locked(State& state, const std::shared_ptr<SessionElement>& session) {
-    for (const SessionElement::PlanSlot& slot : session->m_plans) {
-        if (slot.m_loaded == nullptr) { continue; }
+    for (const std::shared_ptr<SessionElement::PlanSlot>& slot : session->m_plans) {
+        // An entry whose plan was taken out holds nothing (its remover let the model go).
+        if (slot == nullptr || slot->m_loaded == nullptr) { continue; }
         // The pool entry stays while the plan table of another registered session holds
         // the loaded model (the releasing session left the registry already, or never
         // entered it); the check is by pointer identity, never by the record.
-        if (any_plan_holds(state.m_sessions, slot.m_loaded)) { continue; }
+        if (any_plan_holds(state.m_sessions, slot->m_loaded)) { continue; }
         std::erase_if(state.m_loaded_models, [&slot](const State::PoolEntry& entry) {
-            return entry.m_loaded == slot.m_loaded;
+            return entry.m_loaded == slot->m_loaded;
         });
     }
 }
@@ -1103,10 +1178,20 @@ void Core::release_session(const std::shared_ptr<SessionElement>& session) {
 
     drain_inference_queue(session);
 
+    // An exclusive session's chunks that still wait for their turn are never dispatched now
+    // (nothing of the session is queued or running, and no driving thread submits): they stop
+    // counting on their plan slots, so every slot's count is zero from here.
+    std::shared_ptr<SessionElement::ThreadSafeStruct> pending;
+    while (session->m_dispatch_pending.try_dequeue(pending)) {
+        if (pending != nullptr) { pending->leave_slot(); }
+    }
+
     // The session's prepared handles go back now, on this thread, after its in-flight
     // inferences drained and before its loaded models are released (a registered engine's
     // unprepare runs here, ahead of any unload): nothing runs on them any more.
-    for (SessionElement::PlanSlot& slot : session->m_plans) { slot.m_prepared.reset(); }
+    for (const std::shared_ptr<SessionElement::PlanSlot>& slot : session->m_plans) {
+        if (slot != nullptr) { slot->m_prepared.reset(); }
+    }
 
     // Everything above only touches this session (the drain waits on its own
     // in-flight inferences), so it runs unlocked. From here on we mutate the
@@ -1336,7 +1421,8 @@ bool Core::inputs_ready(const std::shared_ptr<SessionElement>& session) {
     return true;
 }
 
-void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
+void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session,
+                              const SessionElement::PlanTable& plans) {
     // Return any structs orphaned by a prior wait-free reset to the free pool before
     // trying to claim one below. Cheap (O(num_structs)) and a no-op when no reset is
     // pending; keeps the free pool from draining across repeated onset re-anchors.
@@ -1354,7 +1440,7 @@ void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
             if (session->m_pending_pull_samples < hop) { return; }
             session->m_pending_pull_samples -= hop;
         }
-        bool const success = pre_process(session);
+        bool const success = pre_process(session, plans);
 
         if (!success) {
             // No slot is free: every slot holds a chunk not yet collected. This hop and every
@@ -1408,14 +1494,15 @@ void Core::new_data_request(const std::shared_ptr<SessionElement>& session) {
 // semaphore try_acquire); in non-real-time mode it waits for the oldest in-flight
 // inference like every other collection point.
 bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
-    // A stateful task may still be awaiting dispatch with none in flight: its
-    // dispatch can race a worker's task boundary so that both sides bail (the
-    // audio thread finds the gate briefly held, the worker's recheck misses the
-    // just-enqueued entry), or a prior dispatch attempt found the global queue
-    // full. No further submission may be coming while the caller only polls for
-    // output, so kick the chain here — the same rationale as the kick in
-    // wait_for_completion(). No-op for non-stateful sessions; wait-free (bounded
-    // CAS + at most one token enqueue, the normal dispatch path).
+    // The guard of the stateful dispatch chain. No release of the gate leaves a task
+    // parked behind it: a dispatch and a worker's task boundary cannot both bail (the
+    // fences of SessionElement::try_acquire_next_dispatch), and a dispatch the global
+    // queue refused looks at the pending queue again. Should a release leave one all the
+    // same, no further submission may be coming while the caller only polls for output,
+    // so the chain is kicked here — the same rationale as the kick in
+    // wait_for_completion(). No-op for non-stateful sessions and while a task is in
+    // flight; wait-free (a fence, a bounded CAS and one token enqueue per parked task at
+    // most, the normal dispatch path).
     try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
     while (true) {
@@ -1530,10 +1617,9 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
 // new_data_request() overloads above wait correctly in non-real-time mode
 // regardless of which one is called.
 void Core::wait_for_completion(const std::shared_ptr<SessionElement>& session, size_t index) {
-    // A stateful task may still be awaiting dispatch with none in flight (a
-    // previous dispatch attempt found the global queue full and dropped its
-    // task). No further submission may be coming to restart the chain, so kick
-    // it before blocking.
+    // The guard of the stateful dispatch chain, as in collect_completed(): no further
+    // submission may be coming to restart a chain whose next task a release left parked
+    // with none in flight, so kick it before blocking.
     try_dispatch_stateful(session);
     if (session->uses_semaphore()) {
         session->m_struct_pool[index]->m_done_semaphore.acquire();
@@ -1554,15 +1640,26 @@ std::vector<std::shared_ptr<SessionElement>> Core::get_sessions() {
     return state.m_sessions;
 }
 
-bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
+size_t Core::get_num_loaded_models() {
+    // A query must not allocate the core: no core means no pool.
+    void* existing = s_state.load(std::memory_order_acquire);
+    if (existing == nullptr) { return 0; }
+    State& state = *static_cast<State*>(existing);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
+    return state.m_loaded_models.size();
+}
+
+bool Core::pre_process(const std::shared_ptr<SessionElement>& session,
+                       const SessionElement::PlanTable& plans) {
     for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {
         if (session->m_struct_pool[i]->m_free.exchange(false)) {
-            // The one load of the session's selection for this chunk: the plan index is
-            // stamped on the struct and resolved from there by the hooks, the engine call
-            // and post_process, so a select_plan() that lands later applies from the next
-            // chunk on and never inside this one.
-            const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
-            session->m_struct_pool[i]->m_plan = plan;
+            // The one load of the session's selection for this chunk, out of the table the
+            // running entry holds its read lease on: the plan index is stamped on the struct
+            // with the plan's slot and what it reports, and the hooks, the engine call and
+            // post_process use what the struct carries, so a select_plan() that lands later
+            // applies from the next chunk on and never inside this one, and a table published
+            // later from the next call on.
+            session->stamp_selected_plan(*session->m_struct_pool[i], plans);
             session->m_struct_pool[i]->m_completed_as_zeros = false;
             session->m_struct_pool[i]->m_fills_after = 0;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
@@ -1572,6 +1669,13 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // the first chunk of a new stream, its reset boundary (capi/processor.h).
             session->m_struct_pool[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
+            // The state epoch beside it: a new one when this chunk runs another variant than
+            // the chunk formed before it and the contract starts a variant fresh (its State
+            // pairs and its engine start over ahead of this chunk's inference). No chunk
+            // becomes stale by it: what is in flight is delivered. The variant is the stamped
+            // plan's, from the chunk's copy.
+            session->m_struct_pool[i]->m_state_epoch =
+                session->stamp_state_epoch(session->m_struct_pool[i]->m_variant);
             const anira_status formed =
                 session->m_processor.pre_process(*session->m_struct_pool[i]);
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
@@ -1592,8 +1696,9 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
                 session->enqueue_pending_dispatch(session->m_struct_pool[i]);
                 // If the global queue is full, the claimed task (possibly an
                 // older chunk) is dropped and completes as zeros at its stream
-                // position — either way this submission stands, so fall through
-                // to return true.
+                // position, and so does every task parked behind it while the queue
+                // stays full, this one included — either way this submission stands,
+                // so fall through to return true.
                 try_dispatch_stateful(session);
             } else {
                 enqueue_inference_or_drop(session, session->m_struct_pool[i]);
@@ -1611,10 +1716,22 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
 
 void Core::try_dispatch_stateful(const std::shared_ptr<SessionElement>& session) {
     if (!session->exclusive()) { return; }
-    if (auto next = session->try_acquire_next_dispatch()) {
-        if (!enqueue_inference_or_drop(session, next)) {
-            session->release_dispatch(next->m_dispatch_epoch);
-        }
+    // Until a chunk is in the inference queue or nothing is parked, as an inference thread
+    // dispatches (InferenceThread::dispatch_next_pending): a chunk the queue refuses is dropped,
+    // the gate freed, and the pending queue looked at again, the look every release of the gate
+    // owes while the session runs (SessionElement::try_acquire_next_dispatch). One turn per
+    // parked chunk: on the driving thread at most the chunks parked at the call, since that
+    // thread is the pending queue's one producer. On a control thread that kicks a running
+    // session (wait_until_unused, another session's drain) the driving thread can park more
+    // meanwhile, never more than the struct pool holds at once: it forms a chunk only in a
+    // free struct, and gets a dropped chunk's struct back only by collecting it. Nothing in a
+    // turn blocks or allocates, and a drop logs at its rate-limited site alone
+    // (enqueue_inference_or_drop).
+    while (auto next = session->try_acquire_next_dispatch()) {
+        // The gate's token, ahead of the chunk's done signal on the drop path.
+        const uint64_t gate_token = next->m_dispatch_epoch;
+        if (enqueue_inference_or_drop(session, next)) { return; }
+        session->release_dispatch(gate_token);
     }
 }
 
@@ -1666,7 +1783,7 @@ void Core::post_process(
 }
 
 WarmupFigure Core::warm_up_plan(const std::shared_ptr<SessionElement>& session, uint32_t plan) {
-    if (plan >= session->m_plans.size()) {
+    if (plan >= session->m_plans.size() || session->m_plans[plan] == nullptr) {
         throw StatusError(ANIRA_ERROR_INTERNAL,
                           "the warm-up was asked for plan " + std::to_string(plan) +
                               ", which the session does not have");
@@ -1712,11 +1829,14 @@ int64_t Core::warm_up_inference(const std::shared_ptr<SessionElement>& session, 
     }
     // The stamps pre_process() gives a chunk, without its pre_process and its time stamp: the
     // chunk is no position of the stream.
-    chunk->m_plan = plan;
+    session->stamp_plan(*chunk, plan);
     chunk->m_completed_as_zeros = false;
     chunk->m_fills_after = 0;
     chunk->m_inference_ns = 0;
     chunk->m_dispatch_generation = session->m_generation.load(std::memory_order::relaxed);
+    // The pass is no stream: its chunks carry the epoch as it stands and open none, whatever
+    // variants its plans run (the prepare that runs it starts the state over behind it).
+    chunk->m_state_epoch = session->m_state_epoch;
     if (session->exclusive()) {
         session->enqueue_pending_dispatch(chunk);
         try_dispatch_stateful(session);
@@ -1728,10 +1848,12 @@ int64_t Core::warm_up_inference(const std::shared_ptr<SessionElement>& session, 
     const auto deadline = std::chrono::steady_clock::now() + k_warm_up_timeout;
     bool done = false;
     while (!done) {
-        // An exclusive session's job may still wait in its pending queue: this thread's enqueue
-        // and the inference thread's release of the dispatch gate can pass each other, which a
-        // stream's next submission resolves. The pass has no next submission, so it kicks the
-        // chain itself while it waits (nothing while the gate is held).
+        // An exclusive session's job that found the dispatch gate still held (an inference
+        // thread signals a job done before it frees the gate) is dispatched by that thread's
+        // look at the pending queue behind its release: this thread's enqueue and that release
+        // cannot pass each other (SessionElement::try_acquire_next_dispatch). The kick is the
+        // guard against a release that left without the look: the pass has no next submission
+        // that would restart the chain (nothing while the gate is held).
         if (session->exclusive()) { try_dispatch_stateful(session); }
         if (session->uses_semaphore()) {
 #ifdef __EMSCRIPTEN__
@@ -1917,13 +2039,15 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 // reserve_inference_capacity) only gives its count back. A task: complete it,
                 // never started, as silence at its stream position (kept time-aligned for
                 // callers that continue after the drain) and end its turn on the stateful
-                // dispatch chain so the gate cannot stay wedged.
+                // dispatch chain so the gate cannot stay wedged. No look at the pending queue
+                // behind this release: the session does not run, and what is parked there is
+                // flushed by its prepare or dropped by its release.
                 if (inference_data.m_thread_safe_struct != nullptr) {
+                    // The gate's token, ahead of the chunk's done signal.
+                    const uint64_t gate_token =
+                        inference_data.m_thread_safe_struct->m_dispatch_epoch;
                     session->complete_with_zeros(inference_data.m_thread_safe_struct);
-                    if (session->exclusive()) {
-                        session->release_dispatch(
-                            inference_data.m_thread_safe_struct->m_dispatch_epoch);
-                    }
+                    if (session->exclusive()) { session->release_dispatch(gate_token); }
                 }
                 session->m_active_inferences->fetch_sub(1, std::memory_order::release);
             } else {
@@ -1947,10 +2071,26 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 if (other.m_thread_safe_struct != nullptr) {
                     // A dropped hop of the other handler: its rt_error says so.
                     static_cast<void>(other.m_session->m_rt->record_drop());
+                    // The gate's token, ahead of the chunk's done signal.
+                    const uint64_t gate_token = other.m_thread_safe_struct->m_dispatch_epoch;
                     other.m_session->complete_with_zeros(other.m_thread_safe_struct);
                     if (other.m_session->exclusive()) {
-                        other.m_session->release_dispatch(
-                            other.m_thread_safe_struct->m_dispatch_epoch);
+                        other.m_session->release_dispatch(gate_token);
+                        // The other session runs: the chunks parked behind the dropped one are
+                        // dispatched from here, or they would wait for its driving thread's next
+                        // call. Whoever takes the gate may use the session's producer token,
+                        // whose blocks were reserved, and this thread holds no lock. What makes
+                        // the dispatch safe against a drain of that session is the order: it
+                        // counts the successor on the session before the enqueue, and the
+                        // dropped job's count goes back below, behind it, so that drain never
+                        // reads zero in between (as with an inference thread's job that
+                        // dispatches a successor). The flag is not what makes it safe: it stops
+                        // the chain at a session that is uninitialised, whose parked chunks its
+                        // drainer takes in one step, as a job that finds its session so does
+                        // (InferenceThread::process_job).
+                        if (other.m_session->m_initialized.load(std::memory_order::seq_cst)) {
+                            try_dispatch_stateful(other.m_session);
+                        }
                     }
                 }
                 other.m_session->m_active_inferences->fetch_sub(1, std::memory_order::release);

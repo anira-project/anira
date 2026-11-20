@@ -11,15 +11,17 @@ defineEngine('org.anira-test.pool-double', (env) => {
       await new Promise((resolve) => setTimeout(resolve, 20))
       ready = true
     },
-    process(ctx) {
-      if (!ready) return anira_status.ANIRA_ERROR_INVALID_STATE
-      const { inputs, outputs } = engineTensors(env, ctx)
-      const [input, gain] = inputs
-      const [output] = outputs
-      if (!input?.f32 || !output?.f32) return anira_status.ANIRA_ERROR_NOT_SUPPORTED
-      const factor = 2 * (gain?.f32 ? gain.f32[0] : 1)
-      for (let i = 0; i < output.elements; i++) output.f32[i] = factor * input.f32[i]
-      return anira_status.ANIRA_OK
-    },
+    load: () => ({
+      process(ctx) {
+        if (!ready) return anira_status.ANIRA_ERROR_INVALID_STATE
+        const { inputs, outputs } = engineTensors(env, ctx)
+        const [input, gain] = inputs
+        const [output] = outputs
+        if (!input?.f32 || !output?.f32) return anira_status.ANIRA_ERROR_NOT_SUPPORTED
+        const factor = 2 * (gain?.f32 ? gain.f32[0] : 1)
+        for (let i = 0; i < output.elements; i++) output.f32[i] = factor * input.f32[i]
+        return anira_status.ANIRA_OK
+      },
+    }),
   }
 })

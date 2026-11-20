@@ -29,6 +29,7 @@
 
 #include <string>
 
+#include "../platform/emscripten/em_hooks.h"
 #include "../platform/emscripten/em_worker.h"
 #endif
 
@@ -295,6 +296,12 @@ void InferenceThread::run_loop() {
                                     "continues");
         }
     }
+#ifdef __EMSCRIPTEN__
+    // This thread runs no further engine call: what its JavaScript engines built for the
+    // models still loaded goes here, on its own thread, while the object still counts as
+    // inside its loop (stop() waits for the Worker to leave and terminates it behind this).
+    em::release_all_js_models();
+#endif
 }
 
 #ifndef __EMSCRIPTEN__
@@ -335,9 +342,10 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 #endif
         if (execute()) { return; }
 #ifdef ANIRA_INFERENCE_WAKE_WORD
-        // WebAssembly: the last phase parks on the wake word, bounded, instead of the yield and
-        // sleep (which spin on the clock in this libc). Only a Worker runs run_loop(): the
-        // worklet and the main thread, which may not wait, never get here.
+        // WebAssembly: the last phase parks on the wake word, bounded, instead of the Backoff's
+        // own last phase (a wait nobody ends before its 100 us): an enqueue or a stop ends this
+        // one at once. Only a Worker runs run_loop(): the worklet and the main thread, which
+        // may not wait, never get here.
         if (backoff.in_last_phase()) {
             // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) the builtin's int*
             __builtin_wasm_memory_atomic_wait32(reinterpret_cast<int*>(&s_wake),
@@ -351,6 +359,14 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 }
 
 bool InferenceThread::execute() {
+#ifdef __EMSCRIPTEN__
+    // WebAssembly: a JavaScript engine's object of a loaded model lives in the realm of the
+    // thread that runs its calls, so the model's unload cannot release it from the control
+    // thread. This thread releases its own here, between two jobs: one atomic load while no
+    // model was unloaded since its last look (the unload bumps the wake word, so a parked
+    // Worker gets here at once).
+    em::release_unloaded_js_models();
+#endif
     // Non-tokenized dequeue: scans all producer sub-queues, so a task enqueued
     // via any producer token is reliably found even by a single consumer, and
     // it never allocates (see issue #77).
@@ -420,13 +436,18 @@ void InferenceThread::process_dequeued_inference() {
         // push on another thread may take the job, finish it and let its session's release
         // proceed, which frees the plan slots that hold the model and its list: the session's
         // count is held once more until this thread is done with them (the release waits for
-        // it; a job taken here holds its own session).
+        // it; a job taken here holds its own session), and so is the count of the job's plan
+        // slot, which says on its own that an inference thread still needs the slot's model
+        // and list (a job taken here counts on its own slot, over the same model and list).
         const std::shared_ptr<std::atomic<int>> active = job.m_session->m_active_inferences;
+        SessionElement::PlanSlot* const slot = job.m_thread_safe_struct->m_slot;
         active->fetch_add(1, std::memory_order::seq_cst);
+        slot->retain_chunk();
         s_num_in_flight.fetch_add(1, std::memory_order::acq_rel);
         waiting->push(std::move(job));
         const bool taken = (claimed || loaded->try_claim(hold.m_instance)) &&
                            take_waiting(*waiting, *loaded, hold.m_instance, job);
+        slot->release_chunk();
         active->fetch_sub(1, std::memory_order::release);
         if (!taken) { return; }
         from_wait_list = true;
@@ -462,8 +483,10 @@ InstanceWaitList* InferenceThread::wait_list_of(const InferenceData& job, engine
         !session->m_initialized.load(std::memory_order::seq_cst)) {
         return nullptr;
     }
-    if (chunk.m_plan >= session->m_plans.size()) { return nullptr; }
-    const SessionElement::PlanSlot& slot = session->m_plans[chunk.m_plan];
+    // The slot the chunk was stamped with, which the chunk counts on until its job ends: never
+    // the session's table.
+    if (chunk.m_slot == nullptr) { return nullptr; }
+    const SessionElement::PlanSlot& slot = *chunk.m_slot;
     if (slot.m_waiting == nullptr || slot.m_prepared == nullptr ||
         !slot.m_prepared->claims_instance()) {
         return nullptr;
@@ -504,10 +527,17 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
     // A thread that holds an instance of the job's model takes the model's next waiting job,
     // or gives the instance back, first (take_waiting): while the job counts, its session
     // cannot be released, so the plan slot's model and wait list are alive for that step.
+    // The chunk's plan slot is the job's from here: taken off the chunk while the chunk is this
+    // thread's (ahead of its done signal, after which the driving thread may stamp it anew), used
+    // for the engine call, and its count given back at every exit, behind that same step and
+    // ahead of the session's count, which keeps the slot's owner alive.
     const std::shared_ptr<std::atomic<int>> active = job.m_session->m_active_inferences;
     struct JobGuard {
         JobGuard(InferenceData& data, std::atomic<int>& counter, InstanceHold* hold) noexcept
-            : m_data(data), m_counter(counter), m_hold(hold) {}
+            : m_data(data)
+            , m_counter(counter)
+            , m_hold(hold)
+            , m_slot(data.m_thread_safe_struct->take_slot()) {}
         ~JobGuard() {
             if (m_hold != nullptr) {
                 m_hold->m_taken = take_waiting(*m_hold->m_waiting,
@@ -516,6 +546,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
                                                m_hold->m_next);
             }
             m_data = InferenceData{};
+            if (m_slot != nullptr) { m_slot->release_chunk(); }
             m_counter.fetch_sub(1, std::memory_order::release);
         }
         JobGuard(const JobGuard&) = delete;
@@ -523,6 +554,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
         InferenceData& m_data;
         std::atomic<int>& m_counter;
         InstanceHold* m_hold;
+        SessionElement::PlanSlot* m_slot;
     } const guard(job, *active, hold);
     const std::shared_ptr<SessionElement>& session = job.m_session;
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct =
@@ -532,6 +564,11 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
     // whatever path it takes (a second signal would let a later try_acquire succeed for a
     // struct nobody dispatched).
     bool signalled = false;
+    // The token of the dispatch gate this job holds (an exclusive session's chunk; unused
+    // otherwise), read ahead of the done signal: behind it the struct is the driving thread's
+    // again, to collect and to form the next chunk in, and every release below hands the token
+    // back without reading the struct once more.
+    const uint64_t gate_token = thread_safe_struct->m_dispatch_epoch;
     try {
         // A wait-free reset (Core::reset_session) bumps the session generation. A
         // dispatch whose stamp is now stale would have its output discarded anyway, so
@@ -552,31 +589,51 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
             }
             signalled = true;
             if (session->exclusive()) {
-                session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+                session->release_dispatch(gate_token);
                 dispatch_next_pending(session);
             }
         } else if (session->m_initialized.load(std::memory_order::seq_cst)) {
-            do_inference(session, thread_safe_struct, signalled, instance);
+            do_inference(session, thread_safe_struct, guard.m_slot, signalled, instance);
         } else {
             // Session momentarily uninitialized (prepare/release drain in progress).
             // Complete as silence so the struct is not stranded without a completion
-            // signal, and end the exclusive task's turn on the chain — but NEVER
-            // dispatch a successor here: new work injected into the drain's window
-            // would let drain_inference_queue() return before quiescence. Pending
-            // entries are the drainer's job (force_reset_dispatch_chain in prepare).
+            // signal, and end the exclusive task's turn on the chain without a successor:
+            // the chain stops here. That is what the flag is for in this branch, and all it
+            // is for: a successor would only travel through the inference queue to be
+            // completed as zeros by the drain or by a job like this one, and the drain would
+            // wait for each, while the drainer takes what stays parked in one step
+            // (force_reset_dispatch_chain in prepare, the loop of release_session).
+            //
+            // The flag is NOT what makes a drain safe, and a dispatch needs no test of it for
+            // that. The count is: every dispatch counts its chunk on m_active_inferences
+            // before the enqueue (dispatch_next_pending, Core::enqueue_inference_or_drop),
+            // and the job that dispatches still holds its own count, which the guard above
+            // gives back behind this body. So Core::drain_inference_queue, which returns at a
+            // count of zero, never reads zero between the end of a job and the count of its
+            // successor. The end of a job (do_inference) and the stale skip above dispatch
+            // on that ground alone, into a drain's window too, and no test is missing there.
+            // Once the flag is false it stays false for the job's life: it is set again
+            // behind the drain, which waits for the job.
             session->complete_with_zeros(thread_safe_struct);
             signalled = true;
-            if (session->exclusive()) {
-                session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
-            }
+            if (session->exclusive()) { session->release_dispatch(gate_token); }
         }
     } catch (...) {
         // Last resort (do_inference() catches what the model throws): a struct is never
-        // stranded without its done signal, and never signalled twice.
+        // stranded without its done signal, and never signalled twice. The exclusive task's
+        // turn on the chain ends here as at the end of a job: the gate is freed and the next
+        // parked chunk dispatched, so the chunks behind this one do not wait for the driving
+        // thread's next call. The test of the flag is the one of the branch above, for its
+        // reason alone: the chain stops at a session that is uninitialised by now, whose
+        // parked chunks its drainer takes. The dispatch would be safe without the test: this
+        // job still counts on the session (see there).
         if (!signalled) {
             session->complete_with_zeros(thread_safe_struct);
             if (session->exclusive()) {
-                session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+                session->release_dispatch(gate_token);
+                if (session->m_initialized.load(std::memory_order::seq_cst)) {
+                    dispatch_next_pending(session);
+                }
             }
             if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
                 ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
@@ -588,40 +645,53 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
     }
 }
 void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement>& session) {
-    if (auto next = session->try_acquire_next_dispatch()) {
+    // Until a chunk is in the inference queue (the gate stays busy with it) or nothing is
+    // parked: a chunk the queue refuses is dropped, the gate freed, and the pending queue looked
+    // at again, which is what every release of the gate owes while the session runs
+    // (SessionElement::try_acquire_next_dispatch). To leave behind the freed gate would keep
+    // the chunks behind the dropped one parked until the driving thread's next call. One turn
+    // per parked chunk. Their number is not fixed at the entry here, as it is when the driving
+    // thread runs this loop (Core::try_dispatch_stateful): that thread can park more while
+    // this one loops. Never more than the struct pool holds at once, though: it forms a chunk
+    // only in a free struct, and gets a dropped chunk's struct back only by collecting it.
+    while (auto next = session->try_acquire_next_dispatch()) {
+        // The gate's token, ahead of the chunk's done signal on the drop path below.
+        const uint64_t gate_token = next->m_dispatch_epoch;
         // Safe to use the session's producer token here: the dispatch gate
         // guarantees only one thread at a time enqueues for this session,
         // and its acquire/release ordering publishes the token's state. Counted
         // before it is in the queue (the drain's rule); a drop gives the count back.
         session->m_active_inferences->fetch_add(1, std::memory_order::seq_cst);
-        if (!m_next_inference.try_enqueue(
+        if (m_next_inference.try_enqueue(
                 session->m_producer_token,
                 InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
-            // The task completes as zeros at its stream position, keeping
-            // the output time-aligned instead of stalling the session: a dropped hop,
-            // ANIRA_ERROR_CAPACITY in the handler's rt_error.
-            session->m_active_inferences->fetch_sub(1, std::memory_order::release);
-            static_cast<void>(session->m_rt->record_drop());
-            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NextDispatchDropped,
-                                    log_group::k_scheduler,
-                                    "Could not enqueue next inference! "
-                                    "Dropping the inference and zero-filling its output.");
-            session->complete_with_zeros(next);
-            session->release_dispatch(next->m_dispatch_epoch);
+            notify_work();
             return;
         }
-        notify_work();
+        // The task completes as zeros at its stream position, keeping
+        // the output time-aligned instead of stalling the session: a dropped hop,
+        // ANIRA_ERROR_CAPACITY in the handler's rt_error.
+        session->m_active_inferences->fetch_sub(1, std::memory_order::release);
+        static_cast<void>(session->m_rt->record_drop());
+        ANIRA_LOG_RT_ERROR_ONCE(RtSite::NextDispatchDropped,
+                                log_group::k_scheduler,
+                                "Could not enqueue next inference! "
+                                "Dropping the inference and zero-filling its output.");
+        session->complete_with_zeros(next);
+        session->release_dispatch(gate_token);
     }
 }
 
 void InferenceThread::do_inference(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
+    SessionElement::PlanSlot* slot,
     bool& signalled,
     uint32_t instance) {
-    // The plan the chunk was submitted under (the index stamped in Core::pre_process), never
-    // the session's atomic: the hooks and the engine call below agree with each other and
-    // with the chunk's pre_process and post_process, whatever select_plan() does meanwhile.
+    // The plan the chunk was submitted under (the index stamped in Core::pre_process, and the
+    // slot stamped with it), never the session's atomic or its table: the hooks and the engine
+    // call below agree with each other and with the chunk's pre_process and post_process,
+    // whatever select_plan() does meanwhile.
     const uint32_t plan = thread_safe_struct->m_plan;
     // A before or after hook, or an engine, that throws must not unwind the pool thread: the
     // failed inference delivers zeros, the done signal is published below exactly as on
@@ -639,7 +709,7 @@ void InferenceThread::do_inference(
         // itself) skips the rest, and the chunk delivers zeros.
         anira_status status = session->m_processor.before_inference(*thread_safe_struct);
         if (status == ANIRA_OK) {
-            const anira_status engine = inference(session, plan, *thread_safe_struct, instance);
+            const anira_status engine = inference(session, slot, *thread_safe_struct, instance);
             if (engine == ANIRA_OK) {
                 status = session->m_processor.after_inference(*thread_safe_struct);
             } else {
@@ -698,6 +768,8 @@ void InferenceThread::do_inference(
     thread_safe_struct->m_inference_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                              std::chrono::steady_clock::now() - started)
                                              .count();
+    // The gate's token, ahead of the done signal (see process_job).
+    const uint64_t gate_token = thread_safe_struct->m_dispatch_epoch;
     if (session->uses_semaphore()) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
@@ -710,21 +782,22 @@ void InferenceThread::do_inference(
     // the pool. Only one task per session is ever in flight, keeping execution in
     // order and mutually exclusive with no spinning.
     if (session->exclusive()) {
-        session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+        session->release_dispatch(gate_token);
         dispatch_next_pending(session);
     }
 }
 
 anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
-                                        uint32_t plan,
+                                        SessionElement::PlanSlot* plan_slot,
                                         SessionElement::ThreadSafeStruct& chunk,
                                         uint32_t instance) {
-    // One index, one plan: exactly one plan's prepared handle runs per call. The session's
-    // atomic is not read here (it used to be re-read per engine block, so a switch landing between
-    // two reads ran two engines for one chunk, or none). A stamp is always in range; the check
-    // keeps a defect from reading past the table.
-    if (plan >= session->m_plans.size()) { return ANIRA_ERROR_INTERNAL; }
-    SessionElement::PlanSlot& slot = session->m_plans[plan];
+    // One stamp, one plan: exactly one plan's prepared handle runs per call, the one of the
+    // slot the chunk was stamped with. Neither the session's atomic nor its table is read here
+    // (the atomic used to be re-read per engine block, so a switch landing between two reads
+    // ran two engines for one chunk, or none). A stamp always has a slot; the check keeps a
+    // defect (an index the table did not have) from running on no plan.
+    if (plan_slot == nullptr) { return ANIRA_ERROR_INTERNAL; }
+    SessionElement::PlanSlot& slot = *plan_slot;
 
     // The engine context of the chunk, on this stack for the duration of the call: the
     // struct's descriptor arrays in slot order (State tensors included), the chunk's entry,
@@ -747,10 +820,14 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     // adopted. Per plan: after a reset every plan is reset at its own first inference, so a
     // plan switched to later starts its stream clean too. The chunk's stamp, never the
     // session's atomic: a reset that lands between the stale check and this read belongs to
-    // the next chunk.
+    // the next chunk. The chunk's state epoch is compared beside it: a new one is the plan's
+    // first inference behind a switch to another variant under ANIRA_VARIANT_STATE_FRESH, and
+    // its engine starts over as the declared state does (capi::ProcessorRunner::bind_state).
     bool reset_first = false;
-    if (session->exclusive() && chunk.m_dispatch_generation != slot.m_engine_generation) {
+    if (session->exclusive() && (chunk.m_dispatch_generation != slot.m_engine_generation ||
+                                 chunk.m_state_epoch != slot.m_engine_state_epoch)) {
         slot.m_engine_generation = chunk.m_dispatch_generation;
+        slot.m_engine_state_epoch = chunk.m_state_epoch;
         reset_first = true;
     }
 

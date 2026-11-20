@@ -459,6 +459,29 @@ typedef enum anira_rt_verdict {
 } anira_rt_verdict;
 
 /**
+ * @brief Whether a plan of a handler's table runs (anira_plan_info.state). A plan's dense index
+ * is its position in the table for as long as the handler stays prepared: a plan that
+ * leaves the table keeps its row and its index, marked, so that no index a host holds
+ * ever names another plan.
+ */
+typedef enum anira_plan_state {
+    /**
+     * The plan is loaded and prepared: anira_handler_set_plan, anira_handler_set_model and
+     * anira_handler_set_backend select it.
+     */
+    ANIRA_PLAN_READY = 0,
+    /**
+     * A plan of a variant anira_handler_remove_variant took out: its prepared handle is given
+     * back and its model released. The row says what the plan was; anira_plan_report_find,
+     * anira_handler_set_model and anira_handler_set_backend skip it, and anira_handler_set_plan
+     * on its index is ANIRA_ERROR_NOT_FOUND. The next anira_handler_prepare builds a table
+     * without it.
+     */
+    ANIRA_PLAN_REMOVED = 1,
+    ANIRA_PLAN_STATE_FORCE32 = 0x7fffffff
+} anira_plan_state;
+
+/**
  * @brief What a Hard contract delivers when an inference misses its deadline.
  */
 typedef enum anira_miss_policy {
@@ -477,6 +500,32 @@ typedef enum anira_miss_policy {
     ANIRA_MISS_CALLBACK = 3,
     ANIRA_MISS_POLICY_FORCE32 = 0x7fffffff
 } anira_miss_policy;
+
+/**
+ * @brief What a Hard handler's state is when the stream moves to another variant of its
+ * inference stage (anira_contract_hard_set_variant_state): whether the new variant
+ * starts from its initial state or continues from the state the stream holds. It applies
+ * to the first chunk formed on a plan of another variant than the chunk before it; a
+ * plan switch inside one variant (another backend of the same model) always keeps the
+ * state.
+ */
+typedef enum anira_variant_state {
+    /**
+     * The new variant starts from its initial state (default): ahead of the inference of the
+     * first chunk formed on it, every declared State pair is re-initialised to zeros and the
+     * engine of that chunk's plan is reset (anira_engine_desc.reset, for an exclusive handler),
+     * as at the first inference after anira_handler_reset. Chunks in flight are delivered: the
+     * stream does not restart.
+     */
+    ANIRA_VARIANT_STATE_FRESH = 0,
+    /**
+     * Nothing is re-initialised: the new variant's first inference reads the declared State
+     * pairs as the previous variant's last one left them, which the variants' one form makes
+     * the same tensors.
+     */
+    ANIRA_VARIANT_STATE_KEEP = 1,
+    ANIRA_VARIANT_STATE_FORCE32 = 0x7fffffff
+} anira_variant_state;
 
 /**
  * @brief What an Async contract does with a job past its deadline.
@@ -974,16 +1023,18 @@ typedef enum anira_phase {
  * reads the state before it writes it (in place) or copies for itself, and every address
  * stays put across calls, which a captured graph (CUDA graphs, WebGPU replay) needs.
  * Without the bit the two buffers alternate behind every successful inference
- * (anira/abi/handler.h). The pair is the model's, shared by every plan of the variant: a
- * plan switch between an aliasing engine and one without the bit keeps the state (the
- * one buffer an aliasing plan updates is the buffer a flipping plan reads next); the
- * flipping plan's chunk moves the pair, so the addresses stay put only across the chunks
- * of aliasing plans, and a captured graph is re-captured after such a switch. A failed
- * call of an aliasing engine leaves the buffer as the engine left it, since it writes in
- * place: the last-good rule of a flipping pair (a failed inference does not flip) is the
- * engine's to keep there. The generation rule is the same under both: the first
- * inference of a new stream reads zeros. Reported in anira_plan_info.engine_flags; no
- * built-in engine sets it.
+ * (anira/abi/handler.h). The pair is the stream's, shared by every plan of the handler
+ * (the variants of a stage have one form): a plan switch between an aliasing engine and
+ * one without the bit keeps the state where the switch keeps it at all (inside one
+ * variant, and across variants under ANIRA_VARIANT_STATE_KEEP; the one buffer an
+ * aliasing plan updates is the buffer a flipping plan reads next); the flipping plan's
+ * chunk moves the pair, so the addresses stay put only across the chunks of aliasing
+ * plans, and a captured graph is re-captured after such a switch. A failed call of an
+ * aliasing engine leaves the buffer as the engine left it, since it writes in place: the
+ * last-good rule of a flipping pair (a failed inference does not flip) is the engine's
+ * to keep there. The generation rule is the same under both: the first inference of a
+ * new stream, and the first one behind a variant switch under ANIRA_VARIANT_STATE_FRESH,
+ * reads zeros. Reported in anira_plan_info.engine_flags; no built-in engine sets it.
  */
 #define ANIRA_ENGINE_FLAG_STATE_ALIAS 8u
 
@@ -996,6 +1047,23 @@ typedef enum anira_phase {
  * claim no shared slot of the loaded model. For a processor the bit is informational.
  */
 #define ANIRA_PREPARE_EXCLUSIVE 1u
+
+/**
+ * @brief anira_prepare_info.flags bit (anira/abi/lifecycle.h): the prepare is a live build's.
+ * anira_handler_add_variant prepares the engines of a new variant's plans while the
+ * handler's stream keeps playing, so this prepare, and the load ahead of it, run on a
+ * control thread beside the driver thread and the inference threads, which run the
+ * handler's other plans meanwhile (the engine's own process for another prepared handle
+ * of the same handler included). The record names the playing handler: its entry count
+ * is the playing stream's, its report the one the call publishes when it succeeds
+ * (anira_handler_plan_report answers the previous one until then). From inside such a
+ * prepare the handler's getters are legal; every control entry of the handler
+ * (anira_handler_prepare, anira_handler_add_variant, anira_handler_remove_variant,
+ * anira_handler_destroy) and the two Static entries are refused with
+ * ANIRA_ERROR_INVALID_STATE. Never set for a processor: a live build does not prepare it
+ * again.
+ */
+#define ANIRA_PREPARE_LIVE 2u
 
 /**
  * @brief anira_engine_ctx.flags bit: the call is an exclusive handler's

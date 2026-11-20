@@ -7,23 +7,25 @@ import { anira_status, defineEngine, engineTensors } from '../../dist/scope.js'
 const SLOW_MS = 50
 
 const twoStreams = (slowMs) => (env) => ({
-  process(ctx) {
-    if (slowMs > 0) {
-      const until = performance.now() + slowMs
-      while (performance.now() < until) {
-        // the inference takes its time
+  load: () => ({
+    process(ctx) {
+      if (slowMs > 0) {
+        const until = performance.now() + slowMs
+        while (performance.now() < until) {
+          // the inference takes its time
+        }
       }
-    }
-    const { inputs, outputs } = engineTensors(env, ctx)
-    const [a, b] = inputs
-    const [aOut, bOut] = outputs
-    if (!a?.f32 || !b?.f32 || !aOut?.f32 || !bOut?.f32) {
-      return anira_status.ANIRA_ERROR_NOT_SUPPORTED
-    }
-    for (let i = 0; i < aOut.elements; i++) aOut.f32[i] = 2 * a.f32[i]
-    for (let i = 0; i < bOut.elements; i++) bOut.f32[i] = 3 * b.f32[i]
-    return anira_status.ANIRA_OK
-  },
+      const { inputs, outputs } = engineTensors(env, ctx)
+      const [a, b] = inputs
+      const [aOut, bOut] = outputs
+      if (!a?.f32 || !b?.f32 || !aOut?.f32 || !bOut?.f32) {
+        return anira_status.ANIRA_ERROR_NOT_SUPPORTED
+      }
+      for (let i = 0; i < aOut.elements; i++) aOut.f32[i] = 2 * a.f32[i]
+      for (let i = 0; i < bOut.elements; i++) bOut.f32[i] = 3 * b.f32[i]
+      return anira_status.ANIRA_OK
+    },
+  }),
 })
 
 defineEngine('org.anira-test.two-streams', twoStreams(0))

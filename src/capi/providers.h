@@ -7,7 +7,8 @@
  * (a descriptor without a list serves ANIRA_PROVIDER_CPU alone, one with a list exactly what
  * it lists). The query runs on the main thread only: anira_handler_create asks it for every
  * plan's provider and every provider_options set (handler.cpp check_providers,
- * check_option_sets) and keeps the answers with the handler (QueryAnswers, engine.h), which
+ * check_option_sets) and of every other engine of the pipeline that declares providers (a
+ * plan may reach it later), and keeps the answers with the handler (QueryAnswers, engine.h), which
  * anira_handler_prepare checks the plans against again without asking; the pipeline's
  * capabilities entries ask it to build a custom engine's rows and edges (custom_rows).
  * Private to src/capi.

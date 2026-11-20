@@ -1,8 +1,11 @@
 Class PlanReport
 ================
 
-The plan report of a handler's last prepare, the web twin of ``anira::PlanReport``: what
-:js:meth:`InferenceHandler.prepare` and an audio node's ``prepare`` return. One plan per model
+A plan report of a handler, the web twin of ``anira::PlanReport``: what
+:js:meth:`InferenceHandler.prepare` and an audio node's ``prepare`` return, and what
+:js:meth:`InferenceHandler.planReport` returns anew behind every
+:js:meth:`InferenceHandler.addVariant` and :js:meth:`InferenceHandler.removeVariant` (a report
+taken earlier keeps the rows it had). One plan per variant, model
 entry and candidate that matched, its slots and the extensions it consumes; a dense plan index
 is what :js:meth:`InferenceHandler.setPlan` takes, and :js:meth:`PlanReport.find` looks one up by
 its variant, engine and provider (a ``PlanQuery``, ``anira::PlanQuery``), null where C++ returns an
@@ -13,7 +16,9 @@ code, or the engine's runtime), with ``reason`` saying why, and the window a Str
 spec declared none and the window was derived from the Time axis); a plan row (``PlanInfo``) names the
 memory its provider computes in (``memoryKind``, an ``anira_memory_kind``: unified on the CPU path,
 unknown for a device provider, since a browser exposes no device's memory kind, so its slots read
-``ANIRA_EDGE_UNKNOWN``).
+``ANIRA_EDGE_UNKNOWN``) and whether the plan still runs (``state``, an ``anira_plan_state``:
+``ANIRA_PLAN_REMOVED`` for a plan of a removed variant, whose row keeps its index;
+:ref:`usage-variant-set`).
 
 .. js:autoclass:: PlanReport.PlanReport
    :short-name:

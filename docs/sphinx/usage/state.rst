@@ -48,8 +48,10 @@ What anira does
 - Under a plan whose engine sets ``ANIRA_ENGINE_FLAG_STATE_ALIAS`` both halves are one stable buffer
   that the engine updates in place; addresses stay put across such plans (a chunk of a flipping plan
   in between moves the pair, so a captured graph is captured again after a switch).
-- The pair is the model's: every plan of the variant runs it, in host memory in this pre-release
-  (a ``host_domain`` on the State input overrides it), so **a plan switch keeps the state**.
+- The pair is the stream's: every plan of the handler binds the same two buffers, in host memory in
+  this pre-release (a ``host_domain`` on the State input overrides it), so **a plan switch inside
+  one variant keeps the state**. A switch to a plan of another variant starts the state over at
+  zeros unless the contract keeps it (:ref:`usage-state-variants`).
 - A failed inference does not flip, so the read side keeps the last good state (an aliasing
   engine's buffer holds what the failed call left); a dropped chunk never runs and does not advance
   it; a missed block does not affect it.
@@ -60,6 +62,40 @@ What anira does
 - A model with a pair runs as ``ANIRA_MODEL_STATEFUL`` whatever its ``state`` says: an exclusive
   handler, one inference at a time and in submission order, which makes the feedback well defined
   and lets the buffers go without a latch.
+
+.. _usage-state-variants:
+
+State and model variants
+------------------------
+
+The variants of an inference stage have the same State pairs (the form rule,
+:ref:`usage-variant-form`), so one pair of buffers serves every plan of every variant. What a
+switch does to it depends on which axis of the selection moves:
+
+- **Another backend of the same variant** (``set_backend``, or ``set_plan`` inside one variant):
+  the state is kept. The next inference reads what the last one produced, whichever plan produced
+  it.
+- **Another variant** (``set_model``, or ``set_plan`` across variants): the contract's
+  ``variant_state`` decides (:ref:`usage-variant-state`). Under ``ANIRA_VARIANT_STATE_FRESH``, the
+  default, every State input reads zeros at the first inference on the other variant, as after a
+  ``reset``. Under ``ANIRA_VARIANT_STATE_KEEP`` the other variant reads the state the previous one
+  left.
+- A chunk formed ahead of the switch finishes on the state it ran with, and the stream does not
+  restart: the re-initialisation is keyed on the first chunk formed on the other variant and runs
+  on the inference thread, ahead of that chunk's inference.
+- A variant added at run time is measured on State buffers of its own
+  (:ref:`usage-variant-set`): the stream's state is not touched by the add.
+
+.. code-block:: cpp
+
+    anira::Hard hard{.host_block_min = 64, .host_block_max = 64, .host_rate = 48000,
+                     .variant_state = ANIRA_VARIANT_STATE_KEEP};   // in the file: "variant_state": "keep"
+
+The bundled twin of the accumulator, ``stateful_accumulator_negated.model.json``, has the same
+tensors and subtracts the running sum where the accumulator adds it: the two are variants of one
+stage. Under ``KEEP`` the twin's first block behind the switch is
+its input minus the sum of every sample the accumulator consumed, and the block counter goes on.
+Under ``FRESH`` it is the input alone, and the sum and the counter start over.
 
 What the host and a processor see
 ---------------------------------

@@ -367,8 +367,8 @@ TEST(PlanSwitch, ThePlanTableIsTheSessionsFromCreate) {
     const std::shared_ptr<SessionElement> session = anira_test::session_of(rig.handler());
     ASSERT_NE(session, nullptr);
     ASSERT_EQ(session->m_plans.size(), 2U);
-    ASSERT_NE(session->m_plans[0].m_loaded, nullptr);
-    ASSERT_NE(session->m_plans[1].m_loaded, nullptr);
-    EXPECT_NE(session->m_plans[0].m_loaded, session->m_plans[1].m_loaded)
+    ASSERT_NE(session->m_plans[0]->m_loaded, nullptr);
+    ASSERT_NE(session->m_plans[1]->m_loaded, nullptr);
+    EXPECT_NE(session->m_plans[0]->m_loaded, session->m_plans[1]->m_loaded)
         << "two providers of a row are two records, so two loaded models";
 }

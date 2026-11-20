@@ -964,9 +964,39 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         expect_contains(err.message, "no inference stage");
         EXPECT_EQ(handler, nullptr);
     }
-    EXPECT_EQ(anira_pipeline_add_inference(pipeline, two.data(), 2, nullptr, 0, &err),
-              ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(err.message, "one variant per inference stage");
+    // Several variants are one inference stage: the pipeline takes them as they are, and
+    // anira_handler_create compares their form (test_Variants.cpp has the rule property by
+    // property).
+    {
+        anira_pipeline* twice = nullptr;
+        ASSERT_EQ(anira_pipeline_create(&twice, &err), ANIRA_OK) << err.message;
+        anira_test::add_passthrough(twice);
+        EXPECT_EQ(anira_pipeline_add_inference(twice, two.data(), 2, nullptr, 0, &err), ANIRA_OK)
+            << err.message;
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(anira_handler_create(context.m_context, twice, &handler, &err), ANIRA_OK)
+            << err.message;
+        anira_handler_destroy(handler);
+        anira_pipeline_destroy(twice);
+    }
+    {
+        // A second variant of another form: the gain model beside a model of one mono stream.
+        const ModelConfig other = anira_test::mono_stream_model();
+        const std::array<const anira_model_config*, 2> mixed{model.native(), other.native()};
+        anira_pipeline* unlike = nullptr;
+        ASSERT_EQ(anira_pipeline_create(&unlike, &err), ANIRA_OK) << err.message;
+        anira_test::add_passthrough(unlike);
+        EXPECT_EQ(anira_pipeline_add_inference(unlike, mixed.data(), 2, nullptr, 0, &err), ANIRA_OK)
+            << err.message;
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(anira_handler_create(context.m_context, unlike, &handler, &err),
+                  ANIRA_ERROR_CONFIG);
+        expect_contains(err.message, "variants[1]: the number of input tensors is 1, but 2 in");
+        expect_contains(err.message,
+                        "every variant of an inference stage has the form of the first one");
+        EXPECT_EQ(handler, nullptr);
+        anira_pipeline_destroy(unlike);
+    }
     // A candidate's provider: its syntax here (a value of the enum, never both a provider of
     // the enum and a provider_id, never an empty provider_id), whether the engine serves it at
     // anira_handler_create, against the context's capabilities.
@@ -1596,14 +1626,14 @@ ContractHandle measured_contract(uint32_t block = k_block, double rate = k_rate)
 
 /// The plan row `plan` of a prepared handler's report.
 const anira_plan_info& plan_row(const Handler& handler, uint32_t plan = 0) {
-    return handler.m_handler->m_report.m_plans.at(plan);
+    return handler.m_handler->m_reports.back()->m_plans.at(plan);
 }
 
 /// Every row of a prepared handler: a positive real-time factor over at least one parallel
 /// inference, the verdict the thresholds give its load (0.75, 1), or UNMEASURED with no pass; a
 /// measured row's median at or below its figure.
 void expect_rows_follow_the_thresholds(const Handler& handler) {
-    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+    for (const anira_plan_info& row : handler.m_handler->m_reports.back()->m_plans) {
         EXPECT_GT(row.rt_factor, 0.0);
         EXPECT_GE(row.rt_parallel, 1U);
         if (row.rt_verdict == ANIRA_RT_UNMEASURED) {
@@ -1693,7 +1723,7 @@ TEST(AbiWarmup, FixedRunsItsCountPerPlan) {
         << handler.m_err.message;
     EXPECT_EQ(engine.m_calls.load(), 3);
     EXPECT_DOUBLE_EQ(plan_row(handler).budget_ms, 5.0) << "an explicit budget stays";
-    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+    for (const anira_plan_info& row : handler.m_handler->m_reports.back()->m_plans) {
         EXPECT_EQ(row.warmup_iterations, 3U);
         EXPECT_EQ(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_FIXED));
     }
@@ -1703,7 +1733,7 @@ TEST(AbiWarmup, FixedRunsItsCountPerPlan) {
     measured.hard_warmup(ANIRA_WARMUP_FIXED, 4);
     ASSERT_EQ(handler.prepare(measured), ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(engine.m_calls.load(), 3 + 4);
-    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+    for (const anira_plan_info& row : handler.m_handler->m_reports.back()->m_plans) {
         EXPECT_GT(row.budget_ms, 0.0) << "every plan was measured";
     }
 }
@@ -1718,7 +1748,7 @@ TEST(AbiWarmup, TheSessionRunsTheSlowestPlansFigure) {
     Handler handler(context, gain_with_custom(), candidates, {}, engine.engine());
     ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
     double slowest = 0.0;
-    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+    for (const anira_plan_info& row : handler.m_handler->m_reports.back()->m_plans) {
         EXPECT_GT(row.budget_ms, 0.0);
         slowest = std::max(slowest, row.budget_ms);
     }

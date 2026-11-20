@@ -1,7 +1,8 @@
 // The browser test of the built package: serves web/ with the COOP/COEP headers that cross-origin
 // isolation (SharedArrayBuffer, the shared WebAssembly.Memory) needs, opens each page in a headless
 // browser (Playwright) and prints its checks: test/browser/index.html, ort.html, dtypes.html, config.html,
-// warmup.html, streams.html, boot-stop.html, concurrent.html, quanta.html, growth.html, memory.html and oom.html
+// warmup.html, plan-find.html, engine-loaded.html, variants.html, variant-set.html, streams.html, boot-stop.html,
+// concurrent.html, quanta.html, growth.html, memory.html and oom.html
 // (the package as built) and the check pages of the two examples, processor-and-engine and model-file (as their
 // own Vite builds bundled them). The repository's extras/models is served at /extras/models/, so a
 // page fetches the bundled model configs and their model files (cmake -P extras/fetch-models.cmake
@@ -80,6 +81,9 @@ const allPages = [
   'test/browser/config.html',
   'test/browser/warmup.html',
   'test/browser/plan-find.html',
+  'test/browser/engine-loaded.html',
+  'test/browser/variants.html',
+  'test/browser/variant-set.html',
   'test/browser/streams.html',
   'test/browser/boot-stop.html',
   'test/browser/concurrent.html',

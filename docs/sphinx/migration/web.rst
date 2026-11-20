@@ -40,8 +40,9 @@ Audio Worklet node whose render callback is C.
   ``postProcess``, ``beforeInference``, ``afterInference``), and they receive the
   ``anira_processor_ctx`` pointer instead of buffer vectors.
 - ``JSBackendBase`` and ``registerProcessor(backend, className)`` become ``defineEngine(id,
-  factory)`` in the context's worker module and ``pipeline.addEngine(id, { flags })``; ``process(ctx,
-  prepared)`` reads the ``anira_engine_ctx`` (``engineTensors``), and ``InferenceBackend.CUSTOM``
+  factory)`` in the context's worker module and ``pipeline.addEngine(id, { flags })``; the engine's
+  ``load(info)`` returns the object of one loaded model, whose ``process(ctx)`` reads the
+  ``anira_engine_ctx`` (``engineTensors``), and ``InferenceBackend.CUSTOM``
   becomes the engine id in the model entry. The ONNX Runtime Web backend is ``onnxRuntimeWeb({ model
   })`` from ``@anira-project/anira/engines/onnxruntime-web``; the module's built-in ONNX Runtime
   engine needs no JavaScript.

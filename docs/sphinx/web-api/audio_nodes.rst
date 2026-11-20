@@ -99,6 +99,12 @@ runs a warm-up pass. It returns the
 :js:class:`PlanReport` of that prepare, as :js:meth:`InferenceHandler.prepare` does; read the
 handler's latency again afterwards (``handler.getLatency()``).
 
+Selecting another plan, another backend or another model variant needs no re-prepare and no hold:
+``handler.setPlan``, ``setBackend`` and ``setModel`` apply from the next chunk the render callback
+forms. Nor does a change of the variant set: :js:meth:`InferenceHandler.addVariant` and
+:js:meth:`InferenceHandler.removeVariant` run on the main thread while the node streams, and the
+latency stays (:doc:`basic_usage`, "Model Variants").
+
 Device changes
    An output-device change may change the burst (the callback's size), never the quantum. The
    page measures again with its streaming nodes held (``hold``: each outputs silence and leaves

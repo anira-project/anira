@@ -867,6 +867,69 @@ TEST(AbiReadBack, ALoadedContractFileAnswersTheSame) {
     EXPECT_EQ(anira_contract_edge_cost(async_contract.m_contract), ANIRA_EDGE_ZERO_COPY);
 }
 
+// The state of a variant switch (anira_contract_hard_set_variant_state): FRESH unless set, by the
+// setter or by the contract file's "variant_state"; a Hard option, so WRONG_CONTRACT on Async,
+// and a value the enum does not name, a NULL handle and a NULL out-parameter are
+// INVALID_ARGUMENT, which leave what was stored.
+TEST(AbiReadBack, TheVariantStateIsFreshUnlessSet) {
+    const Contract hard(512, 512, 48000.0);
+    anira_variant_state state = ANIRA_VARIANT_STATE_KEEP;
+    EXPECT_EQ(anira_contract_hard_variant_state(hard.m_contract, &state), ANIRA_OK);
+    EXPECT_EQ(state, ANIRA_VARIANT_STATE_FRESH) << "the default";
+
+    ASSERT_EQ(anira_contract_hard_set_variant_state(hard.m_contract, ANIRA_VARIANT_STATE_KEEP),
+              ANIRA_OK);
+    EXPECT_EQ(anira_contract_hard_variant_state(hard.m_contract, &state), ANIRA_OK);
+    EXPECT_EQ(state, ANIRA_VARIANT_STATE_KEEP);
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange): the value past the last
+    EXPECT_EQ(
+        anira_contract_hard_set_variant_state(hard.m_contract, static_cast<anira_variant_state>(2)),
+        ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_variant_state(nullptr, ANIRA_VARIANT_STATE_FRESH),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_variant_state(nullptr, &state), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_variant_state(hard.m_contract, nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(state, ANIRA_VARIANT_STATE_KEEP) << "a refusal writes nothing";
+    state = ANIRA_VARIANT_STATE_FRESH;
+    EXPECT_EQ(anira_contract_hard_variant_state(hard.m_contract, &state), ANIRA_OK);
+    EXPECT_EQ(state, ANIRA_VARIANT_STATE_KEEP) << "and stores nothing";
+    ASSERT_EQ(anira_contract_hard_set_variant_state(hard.m_contract, ANIRA_VARIANT_STATE_FRESH),
+              ANIRA_OK);
+    EXPECT_EQ(anira_contract_hard_variant_state(hard.m_contract, &state), ANIRA_OK);
+    EXPECT_EQ(state, ANIRA_VARIANT_STATE_FRESH);
+
+    const Contract async_contract;
+    state = ANIRA_VARIANT_STATE_KEEP;
+    EXPECT_EQ(
+        anira_contract_hard_set_variant_state(async_contract.m_contract, ANIRA_VARIANT_STATE_KEEP),
+        ANIRA_ERROR_WRONG_CONTRACT);
+    EXPECT_EQ(anira_contract_hard_variant_state(async_contract.m_contract, &state),
+              ANIRA_ERROR_WRONG_CONTRACT);
+    EXPECT_EQ(state, ANIRA_VARIANT_STATE_KEEP) << "nothing written";
+
+    // The contract file: the key of the hard object, one of two words.
+    const Contract kept(R"({"hard": {"budget": {"ms": 5}, "variant_state": "keep"}})");
+    ASSERT_EQ(kept.m_status, ANIRA_OK) << kept.m_err.message;
+    EXPECT_EQ(anira_contract_hard_variant_state(kept.m_contract, &state), ANIRA_OK);
+    EXPECT_EQ(state, ANIRA_VARIANT_STATE_KEEP);
+    const Contract fresh(R"({"hard": {"budget": {"ms": 5}, "variant_state": "fresh"}})");
+    ASSERT_EQ(fresh.m_status, ANIRA_OK) << fresh.m_err.message;
+    EXPECT_EQ(anira_contract_hard_variant_state(fresh.m_contract, &state), ANIRA_OK);
+    EXPECT_EQ(state, ANIRA_VARIANT_STATE_FRESH);
+    const Contract left_out(R"({"hard": {"budget": {"ms": 5}}})");
+    ASSERT_EQ(left_out.m_status, ANIRA_OK) << left_out.m_err.message;
+    state = ANIRA_VARIANT_STATE_KEEP;
+    EXPECT_EQ(anira_contract_hard_variant_state(left_out.m_contract, &state), ANIRA_OK);
+    EXPECT_EQ(state, ANIRA_VARIANT_STATE_FRESH) << "a file without the key";
+    const Contract unknown(R"({"hard": {"variant_state": "reset"}})");
+    EXPECT_EQ(unknown.m_status, ANIRA_ERROR_JSON);
+    EXPECT_NE(std::string(unknown.m_err.message).find("hard.variant_state"), std::string::npos)
+        << unknown.m_err.message;
+    const Contract misplaced(R"({"async": {"variant_state": "keep"}})");
+    EXPECT_EQ(misplaced.m_status, ANIRA_ERROR_JSON) << "a key of the hard object alone";
+}
+
 // ---- the context config ----------------------------------------------------------------------
 
 TEST(AbiReadBack, ContextConfigThreadsAndLog) {
@@ -1121,6 +1184,7 @@ TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
         .wait_ratio = 0.5,
         .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}, {"mask_out", ANIRA_DTYPE_F32}},
         .latencies = {{"mask_out", 4096}},
+        .variant_state = ANIRA_VARIANT_STATE_KEEP,
         .edge_cost = ANIRA_EDGE_ZERO_COPY,
     };
     const anira::Hard back = anira::ContractHandle(hard).hard();
@@ -1136,6 +1200,7 @@ TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
     EXPECT_EQ(back.wait_ratio, hard.wait_ratio);
     EXPECT_EQ(back.ring_dtypes, hard.ring_dtypes);
     EXPECT_EQ(back.latencies, hard.latencies);
+    EXPECT_EQ(back.variant_state, hard.variant_state);
     EXPECT_EQ(back.edge_cost, hard.edge_cost);
 
     // The handle setters patch what hard() reads, a loaded contract's included.

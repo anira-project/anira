@@ -15,12 +15,16 @@ const copy = (env, ctx) => {
 }
 
 defineEngine('org.anira-test.warmup-copy', (env) => ({
-  process: (ctx) => copy(env, ctx),
+  load: () => ({
+    process: (ctx) => copy(env, ctx),
+  }),
 }))
 
 defineEngine('org.anira-test.warmup-slow', (env) => ({
-  process(ctx) {
-    Atomics.wait(sleeper, 0, 0, 1.5 * HOP_PERIOD_MS)
-    return copy(env, ctx)
-  },
+  load: () => ({
+    process(ctx) {
+      Atomics.wait(sleeper, 0, 0, 1.5 * HOP_PERIOD_MS)
+      return copy(env, ctx)
+    },
+  }),
 }))

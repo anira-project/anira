@@ -47,6 +47,16 @@ export type HardContractOptions = {
    */
   ringDtypes?: Record<string, number>
   /**
+   * The state of a variant switch (`anira::Hard::variant_state`,
+   * `anira_contract_hard_set_variant_state`; an `anira_variant_state` value): what the model's
+   * state is when `setPlan` moves the stream to a plan of another variant of the inference
+   * stage. `ANIRA_VARIANT_STATE_FRESH` (the default, also when left out): the new variant starts
+   * from its initial state, the declared State pairs at zeros and its engine reset ahead of the
+   * first inference formed on it. `ANIRA_VARIANT_STATE_KEEP`: it continues from the state the
+   * stream holds. A plan switch inside one variant always keeps the state.
+   */
+  variantState?: number
+  /**
    * The worst edge class a plan may take for any slot (`anira::Hard::edge_cost`,
    * `anira_contract_set_edge_cost`; an `anira_edge_class` value): prepare drops a plan above
    * it. A class of the cost scale is a limit: `ANIRA_EDGE_DEDICATED_TRANSFER` admits every known
@@ -123,6 +133,8 @@ export class ContractHandle {
       for (const [canonical, dtype] of Object.entries(options.ringDtypes ?? {})) {
         contract.hardRingDtype(canonical, dtype)
       }
+      if (options.variantState !== undefined)
+        contract.hardVariantState(options.variantState)
       if (options.edgeCost !== undefined) contract.edgeCost(options.edgeCost)
     } catch (error) {
       contract.destroy()
@@ -177,6 +189,17 @@ export class ContractHandle {
    */
   hardRingDtype(canonical: string, dtype: number): this {
     this.abi.anira_contract_hard_set_ring_dtype(this.contract, canonical, dtype)
+    return this
+  }
+
+  /**
+   * The state of a variant switch under this Hard contract
+   * (`anira_contract_hard_set_variant_state`, `anira::ContractHandle::hard_variant_state`): an
+   * `anira_variant_state`, `ANIRA_VARIANT_STATE_FRESH` (the library's default) or
+   * `ANIRA_VARIANT_STATE_KEEP`; see `HardContractOptions.variantState`.
+   */
+  hardVariantState(state: number): this {
+    this.abi.anira_contract_hard_set_variant_state(this.contract, state)
     return this
   }
 

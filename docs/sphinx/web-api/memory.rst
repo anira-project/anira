@@ -93,7 +93,22 @@ the address space.
 - **It never shrinks:** WebAssembly memory gives no pages back, so after a large load the memory
   stays that size until the page closes; anira's allocator reuses what is freed.
 - **Out of memory** (the maximum, a tab's limit, a refused commit) is a status,
-  ``ANIRA_ERROR_OUT_OF_MEMORY``, never an abort.
+  ``ANIRA_ERROR_OUT_OF_MEMORY``, never an abort, wherever the allocation that fails is anira's own.
+- **Inside ONNX Runtime's model load it is not guaranteed.** The runtime throws
+  ``std::bad_alloc`` and unwinds, and anira turns what reaches it into the status. With the heap
+  full to within a few tens of KiB, the runtime has freed an invalid pointer while it unwound and
+  ended the page: Chromium's renderer crashed and Firefox trapped in the allocator (measured with
+  one free hole of 24, 32 or 52 KiB in a full heap; a little more or a little less free memory gave
+  the status). A page that loads models up to the maximum keeps headroom and does not rely on the
+  status there.
+- **Inside the JSON library it is not guaranteed either.** anira reads and writes JSON with
+  nlohmann::json, which allocates while it destroys an array or an object, in a destructor that
+  cannot report a failure: an allocation that fails there ends the page. That concerns the calls
+  that read or write JSON text, and ``prepare`` and ``addVariant`` of a handler with a JavaScript
+  engine, which write the variant as JSON text to tell the engine's loaded models apart.
+- **A call that returns the status has changed nothing** where the guides say so:
+  ``addVariant`` and ``removeVariant`` allocate everything they need before the first of their
+  changes is visible (:ref:`usage-variant-set`).
 
 Views after a growth
 --------------------

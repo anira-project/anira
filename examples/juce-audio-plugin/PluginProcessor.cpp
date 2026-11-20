@@ -207,7 +207,7 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
     // range starts at one sample. The latency anira reports covers every block size of that
     // range, and setLatencySamples below hands it to the host, which compensates it. Each
     // processBlock carries its own block (the tensor's extent is set per call). The decoder of
-    // variant 7 anchors on its audio output, so it takes the same host blocks.
+    // MODEL_TO_USE 7 anchors on its audio output, so it takes the same host blocks.
     const auto host_block_max = static_cast<double>(samplesPerBlock);
 #if MODEL_TO_USE != 7
     model.prepare(host_block_max, sampleRate);
@@ -271,7 +271,7 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
                 row.rt_parallel,
                 row.rt_factor / static_cast<double>(row.rt_parallel),
                 verdict_word(row.rt_verdict)));
-            // The worse of the handlers' verdicts (variant 7 runs two): the order of the enum
+            // The worse of the handlers' verdicts (MODEL_TO_USE 7 runs two): the order of the enum
             // is the order of severity, UNMEASURED first.
             if (row.rt_verdict >= verdict) {
                 verdict = row.rt_verdict;
@@ -344,7 +344,19 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const bool runs = verdicts[choice].has_plan.load() && (isNonRealtime() || !held_back(choice));
     const anira::PlanQuery& query = backends[runs ? choice : bypass_choice].query;
 #if MODEL_TO_USE != 7
+#if MODEL_TO_USE == 8
+    // Three variants make the selection two-dimensional, and each choice moves along its own
+    // axis: set_backend keeps the model that runs and moves to the chosen backend, set_model
+    // keeps that backend and moves to the chosen variant (the "Model" parameter). Both are
+    // real-time safe. The next chunk runs the pair; a chunk in flight finishes on its own plan,
+    // nothing restarts and the latency stays. The statuses are not looked at: this thread is
+    // the only one that selects, so no call meets another one (ANIRA_ERROR_CONCURRENT_CALL),
+    // and both are made again with every block anyway.
+    model.handler.set_backend(query.backend);
+    model.handler.set_model(static_cast<uint32_t>(model_variant.load()));
+#else
     model.select(query);
+#endif
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
     gain_value = gain.load();
     model.handler.set_static_input(1, gain_tensor);
@@ -458,6 +470,10 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String& parameterID
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
     } else if (parameterID == PluginParameters::GAIN_ID.getParamID()) {
         gain.store(newValue);
+#endif
+#if MODEL_TO_USE == 8
+    } else if (parameterID == PluginParameters::MODEL_ID.getParamID()) {
+        model_variant.store(static_cast<int>(newValue));
 #endif
 #if MODEL_TO_USE == 7
     } else if (parameterID == PluginParameters::LATENT_0_ID.getParamID()) {

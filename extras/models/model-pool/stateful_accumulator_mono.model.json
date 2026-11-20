@@ -1,0 +1,59 @@
+{
+  "models": [
+    {
+      "engine": "libtorch",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_mono.pt"
+    },
+    {
+      "engine": "onnxruntime",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_mono.onnx"
+    },
+    {
+      "engine": "executorch",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_mono.pte"
+    },
+    {
+      "engine": "tflite",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_mono.tflite"
+    },
+    {
+      "engine": "litert",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_mono.tflite",
+      "tensors": {
+        "processed_data": { "name": "output_0" },
+        "state_out": { "name": "output_1" }
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "name": "state_in",
+      "dtype": "float32",
+      "role": "state",
+      "axes": [["batch", 1], ["channel", 1], ["any", 2]],
+      "state_source": "state_out"
+    },
+    {
+      "name": "data",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 1], ["time", 64]],
+      "window": { "min": 64, "max": 64 }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "processed_data",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 1], ["time", 64]],
+      "window": { "min": 64, "max": 64 }
+    },
+    {
+      "name": "state_out",
+      "dtype": "float32",
+      "role": "state",
+      "axes": [["batch", 1], ["channel", 1], ["any", 2]]
+    }
+  ]
+}

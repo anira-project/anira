@@ -71,7 +71,7 @@ one planar block (:ref:`usage-handler`, :ref:`usage-host-tensors`):
     /* cfg: the model config above; mc: an anira_context_config (anira_context_config_create) */
     if (ANIRA_FAILED(anira_context_create(mc, &context, &err))) { return fail(&err); }
     anira_pipeline_create(&pipe, &err);
-    const anira_model_config* variants[] = { cfg };
+    const anira_model_config* variants[] = { cfg };   /* one model, or several of one form */
     anira_backend_id candidates[] = {
         { sizeof(anira_backend_id), ANIRA_ENGINE_ONNXRUNTIME, ANIRA_PROVIDER_CPU, NULL },
         { sizeof(anira_backend_id), ANIRA_ENGINE_LITERT,      ANIRA_PROVIDER_CPU, NULL },
@@ -105,3 +105,53 @@ one planar block (:ref:`usage-handler`, :ref:`usage-host-tensors`):
 
 ``test/contracts/install/main_c.c`` is a complete C host: a registered engine, a handler prepared
 under a Hard contract and one block through ``anira_handler_process``.
+
+Model variants
+--------------
+
+The list ``anira_pipeline_add_inference`` takes is the variants of the stage, models of one form
+in the order that numbers them (:ref:`usage-variants`). ``half``, ``twice`` and ``inverted`` are
+three such ``anira_model_config`` handles:
+
+.. code-block:: c
+
+    const anira_model_config* variants[] = { half, twice };
+    anira_pipeline_add_inference(pipe, variants, 2, NULL, 0, &err);   /* variants 0 and 1 */
+    /* ... anira_handler_create, anira_contract_hard_set_variant_state(c, ANIRA_VARIANT_STATE_KEEP),
+       anira_handler_prepare ... */
+
+    /* any thread, also while audio runs: one axis of the selection, ANIRA_NONBLOCKING */
+    if (anira_handler_set_model(h, 1) == ANIRA_ERROR_NOT_FOUND) {
+        /* variant 1 has no plan on the backend that runs: the selection is as it was */
+    }
+
+    /* a control thread, while the driver thread runs: both calls block */
+    uint32_t added = 0;
+    if (ANIRA_FAILED(anira_handler_add_variant(h, inverted, &added, &err))) { return fail(&err); }
+    anira_handler_set_model(h, added);                                 /* variant 2 */
+    if (ANIRA_FAILED(anira_handler_remove_variant(h, 0, &err))) { return fail(&err); }
+
+    /* the newest report: a removed plan keeps its row and its index */
+    const anira_plan_report* report = anira_handler_plan_report(h);
+    uint32_t count = anira_plan_report_num_plans(report);
+    anira_plan_info* rows = malloc(count * sizeof *rows);
+    anira_plan_report_plans(report, sizeof(anira_plan_info), &count, rows);
+    for (uint32_t i = 0; i < count; ++i) {
+        if (rows[i].state == ANIRA_PLAN_REMOVED) { continue; }         /* variant 0's plans */
+        printf("plan %u: variant %u, budget %.3f ms\n", i, rows[i].variant, rows[i].budget_ms);
+    }
+    free(rows);
+
+- ``anira_handler_set_plan``, ``anira_handler_set_model`` and ``anira_handler_set_backend`` are
+  ``[thread-safe]`` and ``ANIRA_NONBLOCKING``. They return their status and record a refusal in
+  ``anira_handler_rt_error`` (:ref:`usage-variant-switch`).
+- ``anira_handler_add_variant`` and ``anira_handler_remove_variant`` are **control entries**, like
+  ``anira_handler_prepare`` and ``anira_handler_destroy``: tagged ``[main-thread]``, blocking, one
+  at a time per handler, with an ``anira_error`` last. Unlike prepare, the two are legal while the
+  driver thread runs the Hard entries (:ref:`usage-variant-set`).
+- ``anira_handler_add_variant`` copies the model config, writes the new variant's index to its
+  out-parameter on success and leaves it untouched on failure.
+- ``anira_handler_plan_report`` returns the newest report after either call. A report pointer
+  taken earlier stays valid, with the rows it had, until the next prepare or destroy.
+- ``anira_plan_info.state`` is a tail field: a caller compiled against a header that ends before
+  it gets its rows without it, by the stride rule above.

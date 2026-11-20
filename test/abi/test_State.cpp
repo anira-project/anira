@@ -14,7 +14,8 @@
 // first, and integer-valued ramps stay exact in float32. The engine-backed cases at the end of
 // the file run the bundled file of the model itself (stateful_accumulator.model.json, the
 // stereo export at a 64-sample window) on every engine of the build it names, against the
-// same oracle.
+// same oracle, and then beside its negated twin (stateful_accumulator_negated.model.json) as the
+// two variants of one inference stage: what the state is at a variant switch.
 //
 // One slot space: a slot is the tensor's position in the model config's list of its side, the
 // one number the host's entries, a processor, the engine, the latency vector and the plan report's
@@ -41,6 +42,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <ios>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -58,6 +62,7 @@
 #include "capi/port.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/Core.h"
 #include "scheduler/SessionElement.h"
 
 namespace {
@@ -1564,8 +1569,8 @@ TEST(AbiState, MissFunctionReceivesTheCallersArrays) {
                                     nullptr),
               ANIRA_MISSED);
     ASSERT_EQ(log.m_calls, 2U);
-    EXPECT_EQ(log.m_inputs, h->m_input_tensors.data());
-    EXPECT_EQ(log.m_outputs, h->m_output_tensors.data());
+    EXPECT_EQ(log.m_inputs, h->m_staged_inputs.data());
+    EXPECT_EQ(log.m_outputs, h->m_staged_outputs.data());
     EXPECT_EQ(log.m_num_inputs, 3U);
     EXPECT_EQ(log.m_num_outputs, 3U);
     EXPECT_EQ(log.m_input_requests, (std::vector<int64_t>{0, 0, k_hop}));
@@ -2494,43 +2499,22 @@ TEST(AbiState, AnInt32StatePair) {
 // closed form below holds on every engine because the binding is checked against the shapes
 // at prepare: a swapped pair would be refused, not captured as the state.
 
+using anira_test::built_in_engines;  // the engines of this build: the file names every one
+using anira_test::engine_word;
+
 constexpr uint32_t k_file_hop = 64;      // the file's window (min = max = 64, no overlap)
 constexpr double k_file_rate = 48000.0;  // the host's rate; a contract file carries none
 
-/// The engines of this build the file names, in the order of anira_enabled_engines.
-std::vector<anira_engine> file_engines() {
-    std::vector<anira_engine> out;
-    for (const anira::BackendId& id : anira::enabled_engines()) {
-        const auto engine = static_cast<anira_engine>(id.engine);
-        if (engine == ANIRA_ENGINE_LIBTORCH || engine == ANIRA_ENGINE_ONNXRUNTIME ||
-            engine == ANIRA_ENGINE_EXECUTORCH || engine == ANIRA_ENGINE_TFLITE ||
-            engine == ANIRA_ENGINE_LITERT) {
-            out.push_back(engine);
-        }
-    }
-    return out;
-}
-
-const char* engine_word(anira_engine engine) {
-    switch (engine) {
-        case ANIRA_ENGINE_LIBTORCH: return "libtorch";
-        case ANIRA_ENGINE_ONNXRUNTIME: return "onnxruntime";
-        case ANIRA_ENGINE_EXECUTORCH: return "executorch";
-        case ANIRA_ENGINE_TFLITE: return "tflite";
-        case ANIRA_ENGINE_LITERT: return "litert";
-        default: return "another engine";
-    }
-}
-
 /// The engine of the plan the handler runs: a case tells that it ran on the engine it asked for.
 uint32_t plan_engine(const anira_handler* handler) {
-    return handler->m_report.m_plans.at(anira_handler_get_plan(handler)).engine;
+    return handler->m_reports.back()->m_plans.at(anira_handler_get_plan(handler)).engine;
 }
 
 /// The bundled file on one engine of this build: the handler over the model file with that one
 /// candidate, prepared with the contract file at the host blocks (1 to `host_block_max`
 /// samples at 48 kHz), the two streams driven through the waiting two-slot single form (`data`
-/// is input slot 1 and `processed_data` output slot 0: the file's order).
+/// is input slot 1 and `processed_data` output slot 0: the file's order). The second form runs
+/// the file beside its negated twin, as the two variants of the one stage.
 class EngineRig {
 public:
     /// `as_written`: the contract file as it spells itself (the measured defaults), else with its
@@ -2539,17 +2523,24 @@ public:
                        uint32_t host_block_max = k_file_hop,
                        std::vector<anira_processor_desc> processors = {},
                        bool as_written = false)
-        : m_model(ModelConfig::from_file(k_stateful_accumulator_model_json))
-        , m_candidates{anira_backend_id{.struct_size = sizeof(anira_backend_id),
-                                        .engine = static_cast<uint32_t>(engine),
-                                        .provider = ANIRA_PROVIDER_CPU,
-                                        .engine_id = nullptr}}
-        , m_processors(std::move(processors))
-        , m_handler(m_context, m_model, m_candidates, m_processors)
-        , m_host_block_max(host_block_max)
-        , m_as_written(as_written) {
-        prepare();
-    }
+        : EngineRig({k_stateful_accumulator_model_json},
+                    {engine},
+                    ANIRA_VARIANT_STATE_FRESH,
+                    host_block_max,
+                    std::move(processors),
+                    as_written) {}
+
+    /// The accumulator (variant 0) and its negated twin (variant 1) on `engines`: one plan per
+    /// variant and engine, a variant's plans in the order of `engines`. The contract file is the
+    /// accumulator's with its figures pinned, under `variant_state` (left as the file has it,
+    /// the default, for ANIRA_VARIANT_STATE_FRESH); the host blocks are one hop.
+    EngineRig(const std::vector<anira_engine>& engines, anira_variant_state variant_state)
+        : EngineRig({k_stateful_accumulator_model_json, k_stateful_accumulator_negated_model_json},
+                    engines,
+                    variant_state,
+                    k_file_hop,
+                    {},
+                    /*as_written=*/false) {}
     ~EngineRig() = default;
     EngineRig(const EngineRig&) = delete;
     EngineRig& operator=(const EngineRig&) = delete;
@@ -2561,6 +2552,9 @@ public:
             m_as_written ? anira::ContractHandle::from_file(k_stateful_accumulator_contract_json)
                          : anira_test::pinned_file_contract(k_stateful_accumulator_contract_json);
         contract.hard_host_blocks(1, m_host_block_max, k_file_rate);
+        if (m_variant_state != ANIRA_VARIANT_STATE_FRESH) {
+            contract.hard_variant_state(m_variant_state);
+        }
         ASSERT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
         m_session = anira_test::session_of(m_handler.m_handler);
         ASSERT_NE(m_session, nullptr);
@@ -2598,11 +2592,47 @@ public:
     }
 
 private:
+    EngineRig(const std::vector<const char*>& model_files,
+              const std::vector<anira_engine>& engines,
+              anira_variant_state variant_state,
+              uint32_t host_block_max,
+              std::vector<anira_processor_desc> processors,
+              bool as_written)
+        : m_models(load(model_files))
+        , m_processors(std::move(processors))
+        , m_handler(m_context, natives(m_models), candidates(engines), m_processors)
+        , m_variant_state(variant_state)
+        , m_host_block_max(host_block_max)
+        , m_as_written(as_written) {
+        prepare();
+    }
+
+    static std::vector<ModelConfig> load(const std::vector<const char*>& model_files) {
+        std::vector<ModelConfig> models;
+        models.reserve(model_files.size());
+        for (const char* file : model_files) { models.push_back(ModelConfig::from_file(file)); }
+        return models;
+    }
+    static std::vector<const anira_model_config*> natives(const std::vector<ModelConfig>& models) {
+        std::vector<const anira_model_config*> out;
+        out.reserve(models.size());
+        for (const ModelConfig& model : models) { out.push_back(model.native()); }
+        return out;
+    }
+    static std::vector<anira_backend_id> candidates(const std::vector<anira_engine>& engines) {
+        std::vector<anira_backend_id> out;
+        out.reserve(engines.size());
+        for (const anira_engine engine : engines) {
+            out.push_back(anira_test::cpu_backend(engine));
+        }
+        return out;
+    }
+
     Context m_context{4};
-    ModelConfig m_model;
-    std::array<anira_backend_id, 1> m_candidates;
+    std::vector<ModelConfig> m_models;  ///< one per variant, in variant order
     std::vector<anira_processor_desc> m_processors;
     anira_test::Handler m_handler;
+    anira_variant_state m_variant_state;
     uint32_t m_host_block_max;
     bool m_as_written;
     std::shared_ptr<anira::SessionElement> m_session;
@@ -2612,7 +2642,7 @@ private:
 // the engine-free twin: host blocks above and below the hop, the state fed back by anira
 // across the engine's inferences, and the port's value left with the sums and the count.
 TEST(AbiState, TheBundledModelFollowsTheClosedFormOnEveryEngine) {
-    for (const anira_engine engine : file_engines()) {
+    for (const anira_engine engine : built_in_engines()) {
         SCOPED_TRACE(engine_word(engine));
         EngineRig rig(engine, 2 * k_file_hop);
         ASSERT_TRUE(rig.ready());
@@ -2656,7 +2686,7 @@ TEST(AbiState, TheBundledModelFollowsTheClosedFormOnEveryEngine) {
 // anira_handler_reset on the engine: the state starts over at zeros, and the same input yields
 // the first run's samples bit for bit.
 TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
-    for (const anira_engine engine : file_engines()) {
+    for (const anira_engine engine : built_in_engines()) {
         SCOPED_TRACE(engine_word(engine));
         EngineRig rig(engine);
         ASSERT_TRUE(rig.ready());
@@ -2680,6 +2710,86 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
     }
 }
 
+// A variant added to a playing handler runs on what the build beside the stream made for it, on
+// every engine of the build. The bundled model joins its own handler a second time, from its
+// bytes: another loaded model, whose figure no prepare stored, so the build's own pass measures
+// it on the engine, in the build's session. The handler is exclusive (the declared State pair):
+// the new plan's handle owns its executor, made and run in that session, and runs in the
+// handler's from the first chunk formed on the variant. The state starts over there (the
+// contract's default), the closed form holds across the switch, and it keeps holding when the
+// first variant is removed and its model unloaded.
+TEST(AbiState, TheBundledModelAddedAndRemovedAtRunTimeFollowsTheClosedFormOnEveryEngine) {
+    for (const anira_engine engine : built_in_engines()) {
+        SCOPED_TRACE(engine_word(engine));
+        ASSERT_TRUE(anira_test::fresh_core());
+        EngineRig rig(engine, k_file_hop, {}, /*as_written=*/true);
+        ASSERT_TRUE(rig.ready());
+        anira_handler* h = rig.get();
+        const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
+        const std::vector<size_t> sizes((latency / k_file_hop) + 3, k_file_hop);
+        size_t position = 0;
+        Streams streams;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        ASSERT_NO_FATAL_FAILURE(rig.settle());
+
+        // The same model from its bytes: the entry of this engine, read off the file it names.
+        ModelConfig variant = ModelConfig::from_file(k_stateful_accumulator_model_json);
+        std::vector<std::byte> bytes;
+        for (uint32_t row = 0; row < variant.model_count(); ++row) {
+            if (variant.model_engine(row).kind != engine) { continue; }
+            std::ifstream file(std::string(variant.model_path(row)), std::ios::binary);
+            ASSERT_TRUE(file.good()) << variant.model_path(row);
+            const std::vector<char> text((std::istreambuf_iterator<char>(file)),
+                                         std::istreambuf_iterator<char>());
+            bytes.resize(text.size());
+            std::memcpy(bytes.data(), text.data(), text.size());
+            variant.set_model_bytes(row, bytes);
+        }
+        ASSERT_FALSE(bytes.empty()) << "the file has no entry of the engine";
+
+        const size_t loaded = anira::Core::get_num_loaded_models();
+        uint32_t index = 0;
+        anira_error err = ANIRA_ERROR_INIT;
+        ASSERT_EQ(anira_handler_add_variant(h, variant.native(), &index, &err), ANIRA_OK)
+            << err.message;
+        ASSERT_EQ(index, 1U);
+        EXPECT_EQ(anira::Core::get_num_loaded_models(), loaded + 1);
+        ASSERT_EQ(h->m_reports.back()->m_plans.size(), 2U);
+        const anira_plan_info added = h->m_reports.back()->m_plans.at(1);
+        EXPECT_EQ(added.engine, static_cast<uint32_t>(engine));
+        EXPECT_GE(added.warmup_iterations, 4U) << "the build's pass ran on the engine";
+        EXPECT_NE(added.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
+        EXPECT_EQ(anira_handler_get_latency(h, EngineRig::processed_slot()), latency);
+
+        // The stream moves to the added variant: its state starts over at this position.
+        ASSERT_EQ(anira_handler_set_model(h, 1), ANIRA_OK);
+        const size_t switched_at = position;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        ASSERT_NO_FATAL_FAILURE(rig.settle());
+        // The first variant goes, and its model with it; the stream stays on the second.
+        ASSERT_EQ(anira_handler_remove_variant(h, 0, &err), ANIRA_OK) << err.message;
+        EXPECT_EQ(anira::Core::get_num_loaded_models(), loaded);
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+
+        for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+            const std::vector<float>& out = streams.m_out.at(channel);
+            ASSERT_EQ(out.size(), 3 * sizes.size() * k_file_hop);
+            for (size_t n = 0; n < out.size(); ++n) {
+                float expected = 0.0F;
+                if (n >= latency) {
+                    const size_t sample = n - latency;
+                    expected = expected_sample(channel,
+                                               sample,
+                                               sample < switched_at ? 0 : switched_at,
+                                               k_file_hop);
+                }
+                ASSERT_EQ(out[n], expected) << "channel " << channel << ", sample " << n;
+            }
+        }
+    }
+}
+
 // The contract file runs the defaults (UNTIL_STABLE): four warm-up inferences or more, at prepare
 // through the session,
 // on the inference threads: anira feeds it the pair's read buffer and captures what it produces,
@@ -2689,7 +2799,7 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
 // the identity, and after n hops the counter reads n, not n + 1.
 TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
     ASSERT_TRUE(anira_test::fresh_core());
-    for (const anira_engine engine : file_engines()) {
+    for (const anira_engine engine : built_in_engines()) {
         SCOPED_TRACE(engine_word(engine));
         EngineRig rig(engine, k_file_hop, {}, /*as_written=*/true);
         ASSERT_TRUE(rig.ready());
@@ -2698,7 +2808,7 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
         ASSERT_NE(hard, nullptr);
         EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_UNTIL_STABLE) << "the contract file's defaults";
         EXPECT_EQ(hard->m_budget, ANIRA_BUDGET_MEASURED) << "the contract file's defaults";
-        const anira_plan_info& row = h->m_report.m_plans.at(anira_handler_get_plan(h));
+        const anira_plan_info& row = h->m_reports.back()->m_plans.at(anira_handler_get_plan(h));
         EXPECT_GE(row.warmup_iterations, 4U) << "the pass ran through the session";
         EXPECT_NE(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_REUSED));
         const std::vector<float> fresh = state_values(h, EngineRig::state_slot());
@@ -2761,7 +2871,7 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOfARegisteredEngine) {
 // warm-up pass's inferences at prepare (the file's FIXED 1) on; the closed form holds.
 TEST(AbiState, TheStateAlternatesBetweenTwoBuffersOnEveryEngine) {
     ASSERT_TRUE(anira_test::fresh_core());
-    for (const anira_engine engine : file_engines()) {
+    for (const anira_engine engine : built_in_engines()) {
         SCOPED_TRACE(engine_word(engine));
         PointerLog log;
         EngineRig rig(engine, k_file_hop, {logging_processor(log)});
@@ -2779,6 +2889,307 @@ TEST(AbiState, TheStateAlternatesBetweenTwoBuffersOnEveryEngine) {
         const size_t pass = h->m_contract.hard()->m_warmup_iterations;
         ASSERT_NO_FATAL_FAILURE(expect_two_alternating_buffers(log, pass + sizes.size()));
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    }
+}
+
+// ---- the accumulator and its negated twin: two variants of one stage
+// ------------------------------
+
+// stateful_accumulator_negated.model.json: the accumulator's twin, the same tensors in every
+// format, with processed_data = data - state_in[.., 0] and the state advanced exactly as the
+// accumulator advances it. Beside the accumulator it is the second variant of the stage, and the
+// two answer one state differently: the accumulator delivers the input plus the carry, the twin
+// the input minus it, so a hop says which model ran it and which state it read. Where the state
+// started over the carry is zero and both deliver the input, so the cases stay three hops on a
+// variant: the second hop of a run tells what the first one left.
+
+/// One hop per entry of `variant_of_hop`, each formed on its variant: anira_handler_set_model
+/// ahead of the hop's block (a host block is one hop, so the block's call forms the hop's chunk).
+void drive_variants(EngineRig& rig,
+                    std::span<const uint32_t> variant_of_hop,
+                    size_t& position,
+                    Streams& streams) {
+    const std::array<size_t, 1> one_hop{k_file_hop};
+    for (const uint32_t variant : variant_of_hop) {
+        ASSERT_EQ(anira_handler_set_model(rig.get(), variant), ANIRA_OK);
+        ASSERT_NO_FATAL_FAILURE(drive(rig, one_hop, position, streams));
+    }
+}
+
+/// The hop at which the state hop `hop` read started over: the stream's first under
+/// ANIRA_VARIANT_STATE_KEEP, the first hop of its own run on one variant under
+/// ANIRA_VARIANT_STATE_FRESH.
+size_t state_start(std::span<const uint32_t> variant_of_hop, size_t hop, anira_variant_state mode) {
+    if (mode == ANIRA_VARIANT_STATE_KEEP) { return 0; }
+    size_t first = hop;
+    while (first > 0 && variant_of_hop[first - 1] == variant_of_hop[hop]) { --first; }
+    return first;
+}
+
+/// The delivered stream of the two variants when hop k was formed on `variant_of_hop[k]`: the
+/// latency's zeros, then per hop the accumulator's closed form (variant 0) or its mirror image
+/// (variant 1: the input minus the carry the closed form adds), the carry counted from where the
+/// hop's state started over.
+void expect_variant_form(const Streams& streams,
+                         size_t latency,
+                         std::span<const uint32_t> variant_of_hop,
+                         anira_variant_state mode) {
+    for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+        const std::vector<float>& out = streams.m_out.at(channel);
+        ASSERT_EQ(out.size(), variant_of_hop.size() * k_file_hop);
+        for (size_t n = 0; n < out.size(); ++n) {
+            float expected = 0.0F;
+            size_t hop = 0;
+            if (n >= latency) {
+                const size_t sample = n - latency;
+                hop = sample / k_file_hop;
+                const float accumulated =
+                    expected_sample(channel,
+                                    sample,
+                                    state_start(variant_of_hop, hop, mode) * k_file_hop,
+                                    k_file_hop);
+                expected = variant_of_hop[hop] == 0
+                               ? accumulated
+                               : (2.0F * input_sample(channel, sample)) - accumulated;
+            }
+            ASSERT_EQ(out[n], expected) << "channel " << channel << ", sample " << n << " (hop "
+                                        << hop << " of the stream)";
+        }
+    }
+}
+
+/// The State input at quiescence behind the last hop: per channel the sum and the count of the
+/// hops since the state last started over, whichever of the two models ran them.
+void expect_variant_state(const anira_handler* handler,
+                          std::span<const uint32_t> variant_of_hop,
+                          anira_variant_state mode) {
+    const size_t hops = variant_of_hop.size();
+    const size_t first = state_start(variant_of_hop, hops - 1, mode);
+    const std::vector<float> state = state_values(handler, EngineRig::state_slot());
+    ASSERT_EQ(state.size(), static_cast<size_t>(k_channels) * k_state_width);
+    for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+        float sum = 0.0F;
+        for (size_t n = first * k_file_hop; n < hops * k_file_hop; ++n) {
+            sum += input_sample(channel, n);
+        }
+        EXPECT_EQ(state[channel * k_state_width], sum) << "channel " << channel;
+        EXPECT_EQ(state[(channel * k_state_width) + 1], static_cast<float>(hops - first))
+            << "channel " << channel;
+    }
+}
+
+/// Three hops on each variant in turn, twice over, then on the twin until the last of them is
+/// delivered: three variant switches.
+std::vector<uint32_t> variant_schedule(size_t latency) {
+    std::vector<uint32_t> schedule{0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1};
+    schedule.insert(schedule.end(), (latency / k_file_hop) + 1, 1U);
+    return schedule;
+}
+
+/// The schedule on one engine under `mode`: the stream, the state it leaves, and what the
+/// session counted as a new state (every variant switch under FRESH, none under KEEP).
+void run_variant_schedule(anira_engine engine, anira_variant_state mode) {
+    EngineRig rig(std::vector<anira_engine>{engine}, mode);
+    ASSERT_TRUE(rig.ready());
+    anira_handler* h = rig.get();
+    EXPECT_EQ(h->m_contract.hard()->m_variant_state, mode);
+    const std::vector<anira_plan_info>& rows = h->m_reports.back()->m_plans;
+    ASSERT_EQ(rows.size(), 2U) << "one plan per variant";
+    for (uint32_t variant = 0; variant < rows.size(); ++variant) {
+        EXPECT_EQ(rows[variant].variant, variant);
+        EXPECT_EQ(rows[variant].engine, static_cast<uint32_t>(engine));
+    }
+    EXPECT_TRUE(rig.session().exclusive()) << "a declared State pair";
+    const uint64_t generation = rig.session().m_generation.load();
+    const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
+
+    const std::vector<uint32_t> schedule = variant_schedule(latency);
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive_variants(rig, schedule, position, streams));
+    ASSERT_NO_FATAL_FAILURE(expect_variant_form(streams, latency, schedule, mode));
+    ASSERT_NO_FATAL_FAILURE(rig.settle());
+    expect_variant_state(h, schedule, mode);
+    EXPECT_EQ(rig.session().m_state_epoch, mode == ANIRA_VARIANT_STATE_FRESH ? 3U : 0U);
+    EXPECT_EQ(rig.session().m_generation.load(), generation) << "no chunk was made stale";
+    EXPECT_EQ(anira_handler_get_latency(h, EngineRig::processed_slot()), latency);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+}
+
+// The default, ANIRA_VARIANT_STATE_FRESH (the contract file says nothing), on every engine of
+// the build: the first hop formed on the other variant reads the initial state. The twin's first
+// hop behind a switch is the input, its second the input minus the first one's sum; back on the
+// accumulator the carry starts at zero again. The stream goes on: nothing is filled, no chunk is
+// discarded, the latency stays.
+TEST(AbiState, AVariantSwitchStartsTheBundledModelsFromTheInitialStateOnEveryEngine) {
+    for (const anira_engine engine : built_in_engines()) {
+        SCOPED_TRACE(engine_word(engine));
+        ASSERT_NO_FATAL_FAILURE(run_variant_schedule(engine, ANIRA_VARIANT_STATE_FRESH));
+    }
+}
+
+// ANIRA_VARIANT_STATE_KEEP on every engine: the twin continues from the state the accumulator
+// left (its first hop behind the switch is the input minus the sum of every hop before it), and
+// the accumulator from the twin's; the state at the end is the sum and the count of the whole
+// stream, whichever model ran a hop.
+TEST(AbiState, TheBundledModelsContinueFromTheKeptStateOnEveryEngine) {
+    for (const anira_engine engine : built_in_engines()) {
+        SCOPED_TRACE(engine_word(engine));
+        ASSERT_NO_FATAL_FAILURE(run_variant_schedule(engine, ANIRA_VARIANT_STATE_KEEP));
+    }
+}
+
+// A backend switch inside one variant keeps the state in both modes, between two engines of the
+// build (every engine with the next one of the list, so each is switched to and from): the
+// accumulator on the first engine, on the second, the twin there, the twin on the first, the
+// accumulator there and on the second. The stream is the two-variant form of the hops' variants
+// alone: the engine a hop ran on does not show, and only the two variant switches start the
+// state over, under FRESH.
+TEST(AbiState, ABackendSwitchInsideABundledVariantKeepsTheStateBetweenTwoEngines) {
+    const std::vector<anira_engine> engines = built_in_engines();
+    if (engines.size() < 2) {
+        GTEST_SKIP() << "one built-in engine in this build: the models have no second backend";
+    }
+    for (const anira_variant_state mode : {ANIRA_VARIANT_STATE_FRESH, ANIRA_VARIANT_STATE_KEEP}) {
+        for (size_t i = 0; i < engines.size(); ++i) {
+            const anira_engine first = engines[i];
+            const anira_engine second = engines[(i + 1) % engines.size()];
+            SCOPED_TRACE(std::string(mode == ANIRA_VARIANT_STATE_FRESH ? "fresh" : "keep") + ", " +
+                         engine_word(first) + " and " + engine_word(second));
+            EngineRig rig(std::vector<anira_engine>{first, second}, mode);
+            ASSERT_TRUE(rig.ready());
+            anira_handler* h = rig.get();
+            const std::vector<anira_plan_info>& rows = h->m_reports.back()->m_plans;
+            ASSERT_EQ(rows.size(), 4U) << "two variants on two engines";
+            const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
+
+            struct Step {
+                uint32_t m_variant;
+                anira_engine m_engine;
+            };
+            const std::array<Step, 6> steps{{{.m_variant = 0, .m_engine = first},
+                                             {.m_variant = 0, .m_engine = second},
+                                             {.m_variant = 1, .m_engine = second},
+                                             {.m_variant = 1, .m_engine = first},
+                                             {.m_variant = 0, .m_engine = first},
+                                             {.m_variant = 0, .m_engine = second}}};
+            std::vector<uint32_t> variant_of_hop;
+            size_t position = 0;
+            Streams streams;
+            for (size_t step = 0; step < steps.size(); ++step) {
+                const anira_backend_id backend = anira_test::cpu_backend(steps[step].m_engine);
+                ASSERT_EQ(anira_handler_set_model(h, steps[step].m_variant), ANIRA_OK);
+                ASSERT_EQ(anira_handler_set_backend(h, &backend), ANIRA_OK);
+                const anira_plan_info& row = rows.at(anira_handler_get_plan(h));
+                ASSERT_EQ(row.variant, steps[step].m_variant) << "step " << step;
+                ASSERT_EQ(row.engine, static_cast<uint32_t>(steps[step].m_engine))
+                    << "step " << step;
+                // Three hops; the last step goes on until the hops before it are delivered.
+                const size_t hops = step + 1 < steps.size() ? 3 : 3 + (latency / k_file_hop) + 1;
+                const std::vector<uint32_t> run(hops, steps[step].m_variant);
+                ASSERT_NO_FATAL_FAILURE(drive_variants(rig, run, position, streams));
+                variant_of_hop.insert(variant_of_hop.end(), run.begin(), run.end());
+            }
+            ASSERT_NO_FATAL_FAILURE(expect_variant_form(streams, latency, variant_of_hop, mode));
+            ASSERT_NO_FATAL_FAILURE(rig.settle());
+            expect_variant_state(h, variant_of_hop, mode);
+            EXPECT_EQ(rig.session().m_state_epoch, mode == ANIRA_VARIANT_STATE_FRESH ? 2U : 0U)
+                << "the two variant switches, and no backend switch";
+            EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+        }
+    }
+}
+
+// A model of another form is another handler. The mono export of the accumulator
+// (stateful_accumulator_mono.model.json) has the stereo one's tensors with one channel: as a
+// variant beside it, in either order, it is refused at create with ANIRA_ERROR_CONFIG, naming
+// the variant, the slot, the tensor and the property that differ; a prepared stereo handler
+// refuses it the same way at run time and keeps its plan table. Alone the mono file is a model
+// like the other: every engine of the build prepares it and runs the closed form on its one
+// channel.
+TEST(AbiState, TheMonoAccumulatorIsNoVariantOfTheStereoOne) {
+    const ModelConfig stereo = ModelConfig::from_file(k_stateful_accumulator_model_json);
+    const ModelConfig mono = ModelConfig::from_file(k_stateful_accumulator_mono_model_json);
+    const auto create_status_of = [](std::span<const anira_model_config* const> variants,
+                                     std::string& message) {
+        const Context context;
+        anira_pipeline* pipeline = nullptr;
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
+        EXPECT_EQ(anira_pipeline_add_inference(pipeline,
+                                               variants.data(),
+                                               static_cast<uint32_t>(variants.size()),
+                                               nullptr,
+                                               0,
+                                               &err),
+                  ANIRA_OK)
+            << err.message;
+        anira_handler* created = nullptr;
+        const anira_status status =
+            anira_handler_create(context.m_context, pipeline, &created, &err);
+        message = err.message;
+        anira_handler_destroy(created);
+        anira_pipeline_destroy(pipeline);
+        return status;
+    };
+    std::string message;
+    const std::array<const anira_model_config*, 2> stereo_first{stereo.native(), mono.native()};
+    const char* const refusal = "variants[1]: input slot 0 'state_in': the shape is ";
+    EXPECT_EQ(create_status_of(stereo_first, message), ANIRA_ERROR_CONFIG);
+    EXPECT_NE(message.find(refusal), std::string::npos) << message;
+    EXPECT_NE(message.find("a model of another form is another handler"), std::string::npos)
+        << message;
+    const std::array<const anira_model_config*, 2> mono_first{mono.native(), stereo.native()};
+    EXPECT_EQ(create_status_of(mono_first, message), ANIRA_ERROR_CONFIG);
+    EXPECT_NE(message.find(refusal), std::string::npos) << message;
+    const std::array<const anira_model_config*, 2> mono_twice{mono.native(), mono.native()};
+    EXPECT_EQ(create_status_of(mono_twice, message), ANIRA_OK) << message;
+
+    for (const anira_engine engine : built_in_engines()) {
+        SCOPED_TRACE(engine_word(engine));
+        const Context context;
+        const std::array<anira_backend_id, 1> candidates{anira_test::cpu_backend(engine)};
+        anira_test::Handler handler(context, mono, candidates);
+        anira::ContractHandle contract =
+            anira_test::pinned_file_contract(k_stateful_accumulator_contract_json);
+        contract.hard_host_blocks(k_file_hop, k_file_hop, k_file_rate);
+        ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+        anira_handler* h = handler.m_handler;
+        const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
+        std::vector<float> delivered;
+        for (size_t hop = 0; hop < (latency / k_file_hop) + 3; ++hop) {
+            std::vector<float> in(k_file_hop);
+            std::vector<float> out(k_file_hop, -1.0F);
+            for (size_t i = 0; i < k_file_hop; ++i) {
+                in[i] = input_sample(0, (hop * k_file_hop) + i);
+            }
+            const anira_tensor in_tensor = whole_f32(in.data(), {1, int64_t{k_file_hop}});
+            const anira_tensor out_tensor = whole_f32(out.data(), {1, int64_t{k_file_hop}});
+            ASSERT_EQ(anira_handler_process_wait(h,
+                                                 &in_tensor,
+                                                 EngineRig::data_slot(),
+                                                 &out_tensor,
+                                                 EngineRig::processed_slot(),
+                                                 nullptr,
+                                                 ANIRA_WAIT_FOREVER),
+                      ANIRA_OK);
+            delivered.insert(delivered.end(), out.begin(), out.end());
+        }
+        for (size_t n = 0; n < delivered.size(); ++n) {
+            const float expected =
+                n < latency ? 0.0F : expected_sample(0, n - latency, 0, k_file_hop);
+            ASSERT_EQ(delivered[n], expected) << "sample " << n;
+        }
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+
+        const EngineRig stereo_rig(engine);
+        ASSERT_TRUE(stereo_rig.ready());
+        uint32_t variant = 0;
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_handler_add_variant(stereo_rig.get(), mono.native(), &variant, &err),
+                  ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(err.message).find(refusal), std::string::npos) << err.message;
+        EXPECT_EQ(stereo_rig.get()->m_reports.back()->m_plans.size(), 1U);
     }
 }
 

@@ -10,15 +10,19 @@
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
+#include <tanh/core/threading/RCU.h>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "../utils/RcuReaderSlot.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
@@ -115,6 +119,27 @@ struct CustomLatencies {
 };
 
 /**
+ * @brief What a session is sized by over the variants of its handler's inference stage.
+ *
+ * The variants of a stage have one form (capi::check_same_form), which the session reads from
+ * the handler's derivation, and differ in what the stream cannot see. Two of those figures size
+ * the session, so the handler resolves them over every variant and hands them over as values:
+ * the session holds no model config.
+ */
+struct VariantBounds {
+    /// Per output tensor: the model's own latency in samples of its stream (the spec's
+    /// latency), the largest any variant declares. The reported latency carries it, and the
+    /// receive ring is primed without it, so a variant with less plays that many samples
+    /// early. One entry per tensor of the output list; 0 for an output without a stream.
+    std::vector<size_t> m_internal_latency;
+    /// The shared instances of a stateless model: the fewest any variant allows (its
+    /// max_instances), ANIRA_INSTANCES_AUTO when every variant leaves the count to the pool.
+    /// What Core::create_session resolves the session's instance count from; each plan's
+    /// loaded model keeps its own variant's count.
+    uint32_t m_max_instances = ANIRA_INSTANCES_AUTO;
+};
+
+/**
  * @brief What fills the hops a session's submission drops: the InferenceManager, under the
  * contract's miss policy
  *
@@ -149,29 +174,33 @@ public:
      * @param new_session_id Unique identifier for this session
      * @param processor The handler's processor runner: every phase of a chunk runs on it, and
      * its port vectors hold the session's rings (it outlives the session)
-     * @param model The handler's model config (its variant): the model's own latency of every
-     * output (it outlives the session)
-     * @param derived What the validator derived for the model config under the contract (it
-     * outlives the session)
+     * @param internal_latency The model's own latency of every output, the largest over the
+     * handler's variants (VariantBounds::m_internal_latency), copied
+     * @param derived The form of the stream: what the validator derived for the handler's
+     * variants under the contract, the same for every one (it outlives the session)
      * @param hard The Hard half of the contract the handler is prepared under (it outlives the
      * session)
      * @param num_instances The instance count, resolved by Core::create_session (1 for an
-     * exclusive session, else the model config's max_instances, ANIRA_INSTANCES_AUTO the
-     * pool's size, clamped to the pool)
+     * exclusive session, else the fewest max_instances of the handler's variants,
+     * ANIRA_INSTANCES_AUTO the pool's size, clamped to the pool)
      * @param producer_token Producer token bound to the global inference queue, moved into the
      * session (see m_producer_token)
      * @param rt_latch The real-time latch this session records its failures into (see m_rt):
      * a 3.x handler's own, so anira_handler_rt_error reads one word; nullptr (a 2.x session)
      * gives the session its own latch (m_rt_own)
+     * @param selection The atomic that holds the session's selected plan (see m_current_plan):
+     * a 3.x handler's own, so anira_handler_get_plan reads one word of the handler; nullptr
+     * (a 2.x session) gives the session its own (m_current_plan_own). Set to 0 here.
      */
     SessionElement(int new_session_id,
                    capi::ProcessorRunner& processor,
-                   const anira_model_config& model,
+                   std::vector<size_t> internal_latency,
                    const capi::Derived& derived,
                    const capi::HardContract& hard,
                    uint32_t num_instances,
                    moodycamel::ProducerToken&& producer_token,
-                   anira::RtLatch* rt_latch = nullptr);
+                   anira::RtLatch* rt_latch = nullptr,
+                   std::atomic<uint32_t>* selection = nullptr);
 
     /**
      * @brief Wait-free clear of the session's audio-thread-owned state.
@@ -270,9 +299,9 @@ public:
     /**
      * @name The facts of the configuration the core reads
      *
-     * Read from the handler's model config, what the validator derived for it and the Hard
-     * contract (m_model, m_derived, m_hard), one source each: nothing is copied into the
-     * session. A slot is a tensor's position in its side of the model config.
+     * Read from what the validator derived for the handler's variants (the form they share)
+     * and the Hard contract (m_derived, m_hard), one source each, by reference. A slot is a
+     * tensor's position in its side of the model config.
      * @{
      */
     /// The number of input and output tensors of the model config.
@@ -305,6 +334,9 @@ public:
     /// holds a struct that is not free until its chunk is collected). Valid after prepare.
     size_t queue_capacity() const noexcept;
     /** @} */
+
+    /// One plan of the table (defined below): a chunk points at the slot of its plan.
+    struct PlanSlot;
 
     /**
      * @brief Thread-safe data structure for concurrent inference processing
@@ -363,6 +395,17 @@ public:
         /// The boundary every slot's buffer of this chunk starts on, in bytes.
         size_t alignment() const noexcept { return m_block.alignment(); }
 
+        /// Takes the chunk's plan slot off the chunk (m_slot is NULL afterwards): the caller
+        /// holds the chunk, uses the slot for the rest of the chunk's worker side and gives the
+        /// chunk's count back (PlanSlot::release_chunk) when it is done with the slot. NULL
+        /// when the slot was taken before, or never stamped.
+        PlanSlot* take_slot() noexcept;
+        /// Ends the chunk's count on its plan slot, for a chunk that no inference thread gets
+        /// (dropped before or at an enqueue, discarded from a queue, completed by a drain): the
+        /// slot is taken off the chunk and the count given back at once. Nothing for a chunk
+        /// whose slot was taken before. The caller holds the chunk.
+        void leave_slot() noexcept;
+
         std::atomic<bool> m_free{true};  ///< Atomic flag indicating if this structure is available
                                          ///< for use
         anira::Semaphore m_done_semaphore{0};    ///< Semaphore for blocking wait on inference
@@ -389,16 +432,50 @@ public:
         // stomping a newer era's in-flight dispatch. Plain field: stable for the
         // dispatch's lifetime, synced by the gate/queue handoffs.
         uint64_t m_dispatch_epoch{0};
+        // The state epoch this chunk was formed under (stamped in Core::pre_process beside
+        // the dispatch generation, from SessionElement::m_state_epoch): the driving thread
+        // opens a new one when it forms the first chunk on another variant than the chunk
+        // before it under ANIRA_VARIANT_STATE_FRESH. The declared state's binding and the
+        // plan's engine reset compare it as they compare the generation: a chunk of a new
+        // epoch starts its plan's state over ahead of its inference. Unlike the generation
+        // it makes no chunk stale: what is in flight across a variant switch is delivered.
+        // Plain field, synced by the queue handoffs like the stamps above.
+        uint64_t m_state_epoch{0};
         // The plan this chunk runs on: the dense index into SessionElement::m_plans,
-        // stamped in Core::pre_process from SessionElement::m_current_plan with one load.
-        // The hooks, the engine call and post_process all resolve this stamp and never read
-        // the session's atomic again, so a plan switch that lands while the chunk is queued
-        // or in flight cannot split it across two plans (or run two engines, or none, for
-        // it). The index and not the backend: two plans may run on one backend (two variants
-        // of a model, two providers of an engine), and only the index tells them apart.
+        // stamped in Core::pre_process from SessionElement::m_current_plan with one load
+        // (SessionElement::stamp_plan, which stamps the plan's slot and its copies below with
+        // it). The hooks, the engine call and post_process all use what was stamped and never
+        // read the session's atomic or its table again, so a plan switch that lands while the
+        // chunk is queued or in flight cannot split it across two plans (or run two engines, or
+        // none, for it). The index and not the backend: two plans may run on one backend (two
+        // variants of a model, two providers of an engine), and only the index tells them apart.
         // Plain field: written on the driving thread at dispatch, stable for the dispatch's
         // lifetime, synced by the queue handoffs like the two stamps above.
         uint32_t m_plan{0};
+        // The slot of that plan, for the worker side alone: the chunk counts on it from the
+        // stamp (PlanSlot::active_chunks) until whoever finishes the chunk's worker side took
+        // the pointer off the chunk (take_slot, leave_slot) and gave the count back. NULL from
+        // then on, and for a chunk never stamped: the driving thread's steps behind the
+        // inference (post_process, the collection, the miss path) have the copies below and
+        // never a slot, which nothing keeps alive for them. Plain field: written by the thread
+        // that holds the chunk (the stamp; the taker, ahead of the chunk's done signal or of
+        // its return to the free pool), synced by the queue handoffs like the stamps above.
+        PlanSlot* m_slot = nullptr;
+        // What the chunk's plan reports, copied off its slot at the stamp: the variant and the
+        // backend every phase's processor context names (PlanSlot::m_variant, m_engine,
+        // m_provider and the two ids, the session's own strings, see SessionElement::intern_id)
+        // and whether the plan's engine keeps its own aliasing of a declared State pair
+        // (PlanSlot::m_state_alias). The processor runner reads these and nothing of the slot,
+        // so the chunk's phases on the driving thread need no slot; the state epoch of the
+        // stream compares the variant too (SessionElement::stamp_state_epoch). Variant 0, no
+        // engine and no provider for an index the table did not have. Plain fields, written
+        // with m_plan.
+        uint32_t m_variant = 0;
+        anira_engine m_engine = ANIRA_ENGINE_NONE;
+        anira_provider m_provider = ANIRA_PROVIDER_NONE;
+        const char* m_engine_id = nullptr;
+        const char* m_provider_id = nullptr;
+        bool m_state_alias = false;
         // Whether the chunk completed as zeros: dropped (SessionElement::complete_with_zeros:
         // a full queue, a failed pre_process, a stale or unclaimable task) or failed on the
         // inference thread (a throw, a failed before_inference or after_inference), its output
@@ -458,6 +535,10 @@ public:
     /**
      * @brief One plan of the table: the adapter the plan runs on and what a chunk stamped
      * with the plan reports.
+     *
+     * An object of its own, at one address for its life: the table holds it by pointer, and so
+     * does every chunk stamped with the plan (ThreadSafeStruct::m_slot) until its worker side is
+     * finished. Neither copied nor moved.
      */
     struct PlanSlot {
         /// The loaded model the plan runs on (never null in a registered session): shared with
@@ -484,17 +565,24 @@ public:
         // unique_ptr over a forward-declared type needs its deleter there, not here.
         PlanSlot();
         ~PlanSlot();
-        PlanSlot(PlanSlot&&) noexcept;
-        PlanSlot& operator=(PlanSlot&&) noexcept;
         PlanSlot(const PlanSlot&) = delete;
         PlanSlot& operator=(const PlanSlot&) = delete;
+        PlanSlot(PlanSlot&&) = delete;
+        PlanSlot& operator=(PlanSlot&&) = delete;
+        /// The variant the plan runs: its index in the inference stage's list
+        /// (anira_plan_info.variant), what a processor context reports for the chunk
+        /// (anira_processor_ctx.variant; a chunk copies it at its stamp).
+        uint32_t m_variant = 0;
         /// The backend a processor context reports for the chunk: a built-in engine, or
         /// ANIRA_ENGINE_CUSTOM with m_engine_id for a custom one, on a provider of the enum, or
-        /// ANIRA_PROVIDER_CUSTOM with m_provider_id for a custom one.
+        /// ANIRA_PROVIDER_CUSTOM with m_provider_id for a custom one. The two ids are the
+        /// session's own strings (SessionElement::intern_id), NULL for a built-in engine and a
+        /// provider of the enum: a chunk copies the pointers at its stamp, and they stay valid
+        /// for the session's life whatever happens to the slot.
         anira_engine m_engine = ANIRA_ENGINE_NONE;
         anira_provider m_provider = ANIRA_PROVIDER_CPU;
-        std::string m_engine_id;
-        std::string m_provider_id;
+        const char* m_engine_id = nullptr;
+        const char* m_provider_id = nullptr;
         /// The plan's engine keeps its own aliasing of a declared State pair
         /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the processor runner binds one stable
         /// buffer as both halves of every pair for a chunk of this plan and never flips it.
@@ -514,30 +602,299 @@ public:
          * is never reset: only an exclusive session gets here.
          */
         uint64_t m_engine_generation = k_no_generation;
+        /// The state epoch this plan's engine last ran under, beside m_engine_generation and
+        /// compared with it (ThreadSafeStruct::m_state_epoch): the plan's first inference of a
+        /// new state epoch, behind a switch to another variant under
+        /// ANIRA_VARIANT_STATE_FRESH, resets its engine too. Read and written like the
+        /// generation; 0 after prepare.
+        uint64_t m_engine_state_epoch = 0;
+
+        /**
+         * @brief Who still needs the slot: the chunks stamped with the plan whose worker side
+         * is not finished
+         *
+         * A chunk counts from its stamp (SessionElement::stamp_plan) until nothing on the
+         * worker side touches it or the slot any more: an inference thread finished its job
+         * (run, failed, skipped as stale or given up; after the thread took the next waiting job
+         * of the slot's model or gave its instance back), or the chunk was dropped, discarded
+         * or completed as zeros without one (ThreadSafeStruct::leave_slot). While it waits in an
+         * exclusive session's pending queue, in the inference queue or on the model's wait
+         * list, it counts. An inference thread that put a chunk on the wait list counts once
+         * more until it is done with the slot's model and list. The count does not wait for the
+         * driving thread: a chunk whose inference finished and that nobody collected does not
+         * count. Zero therefore means that no inference thread reads the slot and none will
+         * unless a new chunk is stamped with it.
+         */
+        uint32_t active_chunks() const noexcept {
+            return m_active_chunks.load(std::memory_order::seq_cst);
+        }
+        /// Counts one in: the stamp, and an inference thread's own hold around a wait-list
+        /// push. Sequentially consistent, like the session's count of its jobs.
+        void retain_chunk() noexcept { m_active_chunks.fetch_add(1, std::memory_order::seq_cst); }
+        /// Counts one out: the caller is done with the slot and does not touch it again.
+        void release_chunk() noexcept { m_active_chunks.fetch_sub(1, std::memory_order::release); }
+
+    private:
+        static_assert(std::atomic<uint32_t>::is_always_lock_free,
+                      "the stamp of a chunk on the driving thread requires a lock-free count");
+        std::atomic<uint32_t> m_active_chunks{0};
     };
 
     /**
-     * @brief The plan table: dense plan index -> the plan.
+     * @brief The plans of the session, the control side: dense plan index -> the plan's slot.
      *
-     * Built by Core::create_session from the requests the C handler gives it
-     * (engine::PlanRequest): exactly its plans. Never empty in a registered session, and never
-     * changed afterwards, so the driving thread and the inference threads read it without
-     * synchronization.
+     * The list that OWNS the slots. Built by Core::create_session from the requests the C
+     * handler gives it (engine::PlanRequest): exactly its plans, each an object of its own.
+     * An index is a plan's for the session's life: a plan that is taken out leaves its entry
+     * in place, empty (Core::take_plan_slot), and a plan that is added gets the next index
+     * (Core::add_plan_slot). Never empty in a registered session.
+     *
+     * Read and changed on control threads only, never on a real-time path: by the control
+     * thread of the session's handler (prepare, the warm-up's stamp, the report), and by the
+     * core under its lifecycle lock, where the release of ANOTHER session walks the lists of
+     * all registered sessions (which loaded model is still held). So the list changes under
+     * the lifecycle lock alone (Core::create_session, add_plan_slot, take_plan_slot), and the
+     * handler's control thread, the only one that changes it, reads it without the lock. The
+     * driving thread never reads it: it stamps from the published table (m_plan_table).
      */
-    std::vector<PlanSlot> m_plans;
+    std::vector<std::shared_ptr<PlanSlot>> m_plans;
+
+    /**
+     * @brief The plan table as the driving thread reads it: one published version
+     *
+     * Dense plan index -> the plan's slot, NULL at an index whose plan was taken out. The
+     * pointers do not own: the slots are m_plans' (or, for a slot just taken out, its
+     * remover's). A version is immutable once published, and it is destroyed later than it is
+     * retired (by a later publication), so its destructor must not, and does not, look at a
+     * slot.
+     */
+    struct PlanTable {
+        std::vector<PlanSlot*> m_slots;
+    };
+
+    /// A read lease on the published plan table: the version of the claim, for the lease's
+    /// life (RcuReaderSlot::Lease).
+    using PlanLease = RcuReaderSlot<PlanTable>::Lease;
+
+    /**
+     * @brief Claims the read lease on the published plan table
+     *
+     * What every entry of the driving thread holds for the whole call (the six Hard entries,
+     * their _wait twins, the ring state, reset) and stamps its chunks from: the table's one
+     * reader slot, claimed by compare-and-swap, so the driving thread need not always be the
+     * same thread. One slot, because the driving thread's entries never overlap on one
+     * session: a claim that finds the slot held has met a second driving thread. No
+     * allocation, no lock.
+     *
+     * @return The lease, or nothing while another entry holds the slot
+     * (ANIRA_ERROR_CONCURRENT_CALL; with one driving thread it does not happen)
+     */
+    std::optional<PlanLease> claim_plans() const noexcept ANIRA_NONBLOCKING {
+        return m_plan_reader.claim();
+    }
+
+    /**
+     * @brief Publishes m_plans as the table the driving thread stamps from
+     *
+     * One raw pointer per entry of the list, NULL for an empty one. Control thread (the
+     * handler's, which alone changes the list); allocates and takes the table's writer lock.
+     * A lease claimed from now on sees this version; one that is out keeps its own. When it
+     * throws (std::bad_alloc) nothing was published. stage_plans() and commit_plans() in one
+     * call.
+     */
+    void publish_plans();
+
+    /// A plan table that is built and not yet published: what stage_plans() makes and
+    /// commit_plans() publishes (thl::RCU::Staged). Dropped without a commit, it frees its
+    /// table and the session is as it was.
+    using StagedPlanTable = thl::RCU<PlanTable>::Staged;
+
+    /**
+     * @brief The first half of publish_plans(), for a list the caller is about to change
+     *
+     * Builds the table m_plans will be published as once the caller has appended `added` to
+     * the list, in this order (Core::add_plan_slot), and emptied the entries `removed`
+     * (Core::take_plan_slot), and makes the room the publication needs. Everything of the
+     * publication that can fail happens here: when it throws (std::bad_alloc) nothing was
+     * published and nothing changed. For a control entry that changes the list and what it
+     * publishes beside the playing stream, and must have everything that can fail behind it
+     * before the first change is visible (anira_handler_add_variant,
+     * anira_handler_remove_variant).
+     *
+     * Control thread (the handler's). Between this call and commit_plans() of its result
+     * nothing else publishes the table (thl::RCU::commit's rule: no publish_plans(), no
+     * second commit); the handler's control lock keeps that.
+     *
+     * @param added The slots the caller appends before it commits, in the order it appends them
+     * @param removed The indices of the list whose entries the caller empties before it commits
+     * @return The table, to be given to commit_plans()
+     */
+    StagedPlanTable stage_plans(std::span<const std::shared_ptr<PlanSlot>> added = {},
+                                std::span<const uint32_t> removed = {});
+
+    /**
+     * @brief The second half of publish_plans(): publishes a table stage_plans() built
+     *
+     * The list has been changed as stage_plans() was told (asserted): the table is m_plans,
+     * entry for entry. Allocates nothing and cannot fail. Control thread; takes the table's
+     * writer lock. A lease claimed from now on sees this version.
+     */
+    void commit_plans(StagedPlanTable&& table) noexcept;
+
+    /**
+     * @brief Waits until no read lease claimed before the last publish_plans() is still out
+     *
+     * When it returns, every entry of the driving thread that could stamp a chunk from an
+     * older version has returned: a slot the newest version no longer names is never stamped
+     * again. It frees nothing. The slot is its remover's to free, once nothing counts on it
+     * any more (PlanSlot::active_chunks, Core::wait_until_unused). Control thread; blocks for
+     * as long as such an entry runs (a _wait twin for its timeout).
+     */
+    void synchronize_plans() ANIRA_BLOCKING;
 
     /**
      * @brief The selected plan: the one the next submitted chunk is stamped with.
      *
      * The whole runtime selection is this one atomic (select_plan stores it, a chunk takes
      * it with one load in Core::pre_process), so concurrent callers have no pair to tear.
-     * Always below m_plans.size(). 0 when Core::create_session returns; the C handler
-     * selects its initial plan before the first prepare.
+     * 0 when Core::create_session returns; the C handler selects its initial plan before the
+     * first prepare. The atomic itself is the C handler's (anira_handler::m_selected_plan,
+     * which outlives the session as its latch does), so the handler's getter reads the
+     * selection without reaching into the session; a 2.x session refers to its own,
+     * m_current_plan_own. A value may name an index the table a chunk is stamped from does not
+     * have, or one whose plan was taken out: stamp_selected_plan says what the chunk runs then.
      */
-    std::atomic<uint32_t> m_current_plan{0};
+    std::atomic<uint32_t> m_current_plan_own{0};
+    std::atomic<uint32_t>& m_current_plan;
 
-    /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
+    /// Selects a plan: one relaxed store. False, and nothing stored, for an index the
+    /// published table does not have (its count is an atomic the publication stores: the
+    /// check reads no container, from whatever thread it runs).
     bool select_plan(uint32_t plan) noexcept;
+
+    /// Selects `plan` if `expected` is still the selected plan: one compare-and-swap of the
+    /// selection. False, nothing stored and `expected` the plan selected now, when another
+    /// caller moved it meanwhile (or spuriously: the caller loops), so a selection computed
+    /// from the selected plan (one axis of it kept, the other moved) is never stored over a
+    /// newer one. `plan` is in range (the caller resolved it in the table).
+    bool select_plan_if(uint32_t& expected, uint32_t plan) noexcept ANIRA_NONBLOCKING;
+
+    /// No chunk has been formed since prepare: what m_last_variant holds then, so that the
+    /// stream's first chunk is no variant switch.
+    static constexpr uint32_t k_no_variant = UINT32_MAX;
+
+    /**
+     * @brief The state epoch of the stream: the variant switches that start the state over.
+     *
+     * Core::pre_process stamps every chunk with it (ThreadSafeStruct::m_state_epoch) and
+     * opens a new one (stamp_state_epoch) when the chunk's plan runs another variant than the
+     * chunk formed before it, under ANIRA_VARIANT_STATE_FRESH (the Hard contract's
+     * m_variant_state); under ANIRA_VARIANT_STATE_KEEP, and for a plan switch inside one
+     * variant, it stays. The state binding of the processor runner and the engine reset of
+     * the inference thread compare the chunk's stamp with the one they last ran under.
+     * Driving thread only, like m_last_variant; both start over at prepare.
+     */
+    uint64_t m_state_epoch = 0;
+    uint32_t m_last_variant = k_no_variant;  ///< The variant of the chunk formed last
+
+    /// The state epoch of a chunk formed on a plan of `variant` (the stamped chunk's copy,
+    /// ThreadSafeStruct::m_variant), which becomes the chunk formed last: the current epoch, or
+    /// a new one when the variant differs from the last chunk's under
+    /// ANIRA_VARIANT_STATE_FRESH. Driving thread only; no allocation, no lock.
+    uint64_t stamp_state_epoch(uint32_t variant) noexcept ANIRA_NONBLOCKING;
+
+    /**
+     * @brief Stamps a chunk of the stream with the selected plan, out of a published table
+     *
+     * Where a chunk of the stream gets its plan (Core::pre_process, on the driving thread),
+     * and the one read of the plan table on a real-time path: `table` is the version of the
+     * read lease the running entry holds, one for the whole call, so every chunk the call
+     * forms is stamped from the same table. The chunk gets the index, the plan's slot, on which
+     * it counts from here (PlanSlot::active_chunks), and the slot's variant, backend and
+     * aliasing as copies (ThreadSafeStruct::m_variant and the fields beside it).
+     *
+     * The selection is loaded once. When `table` has no plan under it, the chunk runs the plan
+     * of the chunk formed before it (m_applied_plan; the first plan the table has when that one
+     * is gone too):
+     * - an index beyond the table (a plan selected in a table published after the lease was
+     *   claimed) changes nothing else: the selection stands, and the next call stamps it;
+     * - an index whose plan was taken out moves the selection back to the plan the chunk runs
+     *   (a compare-and-swap, so a selection made meanwhile stands) and records
+     *   ANIRA_ERROR_NOT_FOUND in the session's latch, logged once.
+     * A table without any plan, which a registered session never has, leaves the chunk
+     * without a slot: its inference fails (ANIRA_ERROR_INTERNAL).
+     *
+     * Wait-free, no allocation, no lock. The caller holds the chunk (it took it from the free
+     * pool).
+     */
+    void stamp_selected_plan(ThreadSafeStruct& chunk,
+                             const PlanTable& table) noexcept ANIRA_NONBLOCKING;
+
+    /**
+     * @brief Stamps a chunk with one plan of the session's own list (m_plans)
+     *
+     * The stamp of a chunk that is no part of the stream: a warm-up inference of plan `plan`,
+     * on the control thread of the session's handler (Core::warm_up_inference), which reads
+     * the list and not the published table. The selection and m_applied_plan are not touched.
+     * An index the list does not have, or an empty entry, leaves the chunk without a slot.
+     */
+    void stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept;
+
+    /// The plan of the chunk of the stream formed last: what a chunk runs when the published
+    /// table has no plan under the selection (stamp_selected_plan). The selected plan at
+    /// prepare. Driving thread only, like the state epoch above.
+    uint32_t m_applied_plan = 0;
+
+    /// The boundary every chunk's buffers start on, in bytes: what prepare built the struct
+    /// pool with, the largest any plan of m_plans asked for then
+    /// (engine::Loaded::buffer_alignment). A plan added behind the prepare whose engine asks
+    /// for more cannot bind the chunks in place. 0 before the first prepare.
+    size_t m_chunk_alignment = 0;
+
+    /**
+     * @brief The session's own copy of an id string a plan names, for the session's life
+     *
+     * A custom engine's id or a custom provider's name of a plan request, kept once per
+     * distinct string in a store the session owns and never shrinks: the pointer a plan slot
+     * holds and a chunk copies (PlanSlot::m_engine_id, ThreadSafeStruct::m_engine_id), valid
+     * until the session dies whatever happens to the slot. Allocates: the table's builder
+     * calls it, on a control thread, never a real-time path.
+     *
+     * @param id The string; empty for a built-in engine or a provider of the enum
+     * @return The stored string, or NULL for an empty one
+     */
+    const char* intern_id(const std::string& id);
+
+    /**
+     * @brief intern_id() in two steps: id strings that are not the session's yet
+     *
+     * For a control entry that must have everything that can fail behind it before it changes
+     * the session (anira_handler_add_variant's commit). stage() answers with the pointer the
+     * session holds the string under once adopt_ids() ran: the session's own copy when it has
+     * the string already, else the copy this object makes, in a node that adopt_ids() moves
+     * into the session's store, where it stays at its address. stage() allocates and may
+     * throw; adopt_ids() does neither. Dropped without adopt_ids(), the object frees its
+     * strings and the session is as it was (a pointer stage() gave for a new string is then
+     * dangling). Control thread; nothing else interns in the session between the two calls
+     * (the handler's control lock).
+     */
+    class StagedIds {
+    public:
+        /**
+         * @param session The session the string is for
+         * @param id The string; NULL or empty for a built-in engine or a provider of the enum
+         * @return The string as the session holds it after adopt_ids(), or NULL for none
+         */
+        const char* stage(const SessionElement& session, const char* id);
+
+    private:
+        friend class SessionElement;
+        std::set<std::string> m_ids;  ///< the strings the session lacks: node-based, as its store
+    };
+
+    /// The second half: the staged strings join the session's store, node by node. Allocates
+    /// nothing and cannot fail.
+    void adopt_ids(StagedIds&& ids) noexcept;
 
     unsigned long m_current_queue = 0;         ///< The time stamp of the next submitted chunk
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
@@ -603,13 +960,17 @@ public:
     // sessions are unaffected and keep using the shared thread pool in parallel.
     //
     // Gate word layout: bit 0 = busy (a task of this session is queued or
-    // running), bits 63..1 = dispatch epoch. The epoch gives the gate an owner
-    // identity: force_reset_dispatch_chain() (quiescent contexts only) opens a
-    // new epoch after waiting out any transient holder, and release_dispatch()
-    // is an epoch-checked CAS — so any release still carrying a pre-reset token
-    // is inert, whatever the interleaving. A safety invariant, not a
-    // specific-scenario patch: it holds for every release path (worker tail,
-    // stale skip, dispatch failure, drain).
+    // running), bits 63..1 = dispatch epoch. The epoch tells the eras of the gate
+    // apart, not its holders: force_reset_dispatch_chain() (quiescent contexts only)
+    // opens a new epoch on a free gate, and release_dispatch() is an epoch-checked
+    // CAS — so any release still carrying a pre-reset token is inert, whatever the
+    // interleaving with the new era. A safety invariant, not a specific-scenario
+    // patch: it holds for every release path (worker tail, stale skip, dispatch
+    // failure, drain). Within one epoch every holder carries the same token: a
+    // second release by a holder that released already would free the gate under
+    // the holder that acquired since. So each holder releases exactly once (a job's
+    // last resort is guarded by the flag of its done signal), and the token protects
+    // nothing beyond the epoch.
     static constexpr uint64_t k_dispatch_busy = 1;
     // The wait-free reset()/dispatch guarantees assume these 64-bit atomics are
     // implemented lock-free; a target where they are not would silently reintroduce
@@ -641,9 +1002,9 @@ public:
     /** @brief prepare's step for an exclusive session, after force_reset_dispatch_chain(): gives
      * m_dispatch_producer_token the blocks for every struct of the pool at once (one allocating
      * enqueue_bulk of placeholders, QueueCapacity.h), then takes the placeholders back. Holds
-     * the gate meanwhile: the gate holder is the pending queue's only consumer, so no laggard
-     * worker pops a placeholder (an empty struct pointer) or reuses a block before the ring holds
-     * them all. Blocking (waits out a transient gate holder in 50us steps) and allocating —
+     * the gate meanwhile: the gate holder is the pending queue's only consumer, so nobody else
+     * pops a placeholder (an empty struct pointer) or reuses a block before the ring holds
+     * them all. Blocking (would wait out a gate holder in 50us steps) and allocating —
      * control thread only.
      * @throws std::bad_alloc when the blocks cannot be allocated */
     void reserve_pending_dispatch() ANIRA_BLOCKING;
@@ -655,7 +1016,10 @@ public:
      * to release_dispatch(). */
     std::shared_ptr<ThreadSafeStruct> try_acquire_next_dispatch();
     /** @brief Mark the in-flight stateful task finished, allowing the next to be dispatched.
-     * Epoch-checked: a token from before a force_reset_dispatch_chain() fails silently. */
+     * Epoch-checked: a token from before a force_reset_dispatch_chain() fails silently. While
+     * the session runs, the caller owes the pending queue a look behind this call (a call of
+     * try_acquire_next_dispatch(), repeated until a task is dispatched or none is pending):
+     * the invariant is spelled out there, with the releases that owe none. */
     void release_dispatch(uint64_t token);
     /** @brief Wait-free reset kick for the stateful dispatch chain (driving thread only, called
      * right after the generation bump): if no task is in flight, acquires the gate, returns every
@@ -665,26 +1029,35 @@ public:
      * filters the stale prefix at its next task boundary. */
     void discard_pending_dispatches();
     /** @brief Quiescent-only (a drain has run; no task of this session is queued or running,
-     * though a laggard worker may still transiently hold the gate while filtering stale
-     * entries): waits out any transient gate holder, opens a new dispatch epoch (so any
-     * release carrying a pre-reset token is inert, whatever the interleaving), then flushes
-     * the pending queue. Blocking (sleeps in 50us steps while the gate is held) — called
-     * only from prepare(), never from a real-time path. */
+     * and nothing holds the gate: the drain counts every job from before its enqueue, so no
+     * worker is left that it did not see): opens a new dispatch epoch on a free gate (so any
+     * release carrying a pre-reset token is inert, whatever the interleaving), waiting out a
+     * holder should there be one, then flushes the pending queue. Blocking (sleeps in 50us
+     * steps while the gate is held) — called only from prepare(), never from a real-time
+     * path. */
     void force_reset_dispatch_chain() ANIRA_BLOCKING;
     /** @brief Complete a task without running inference: zero its output tensors and signal
      * completion. Used when the global queue rejects a task, so the dropped inference still
-     * yields (silent) output at its correct stream position and the struct is freed normally. */
-    void complete_with_zeros(const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct);
+     * yields (silent) output at its correct stream position and the struct is freed normally.
+     * The chunk stops counting on its plan slot ahead of the signal
+     * (ThreadSafeStruct::leave_slot), unless an inference thread's job took the slot off it
+     * before (a session momentarily uninitialized, the last resort): that job gives the count
+     * back at its end. Does not throw, so the release of the dispatch gate that follows a
+     * dropped task always runs. */
+    void complete_with_zeros(const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct) noexcept;
 
     capi::ProcessorRunner& m_processor;  ///< The handler's processor runner: the four phases of
                                          ///< every chunk, and the port vectors of the rings
-    const anira_model_config& m_model;   ///< The handler's model config (its variant)
-    const capi::Derived& m_derived;      ///< What the validator derived for it under the contract
-    const capi::HardContract& m_hard;    ///< The Hard half of the contract of the prepare
-    /// The instance count (Core::create_session: 1 for an exclusive session, else the model
-    /// config's, ANIRA_INSTANCES_AUTO resolved and clamped to the pool): at most this many
-    /// inferences of the session run at once (LatencyCalculator's n), and the pending dispatch
-    /// queue of an exclusive session is sized by it.
+    /// The model's own latency of every output, in samples of its stream: the largest over the
+    /// handler's variants (VariantBounds::m_internal_latency), one entry per output tensor.
+    const std::vector<size_t> m_internal_latency;
+    const capi::Derived& m_derived;    ///< The form of the stream: what the validator derived
+                                       ///< for the handler's variants under the contract
+    const capi::HardContract& m_hard;  ///< The Hard half of the contract of the prepare
+    /// The instance count (Core::create_session: 1 for an exclusive session, else the fewest
+    /// any variant allows, ANIRA_INSTANCES_AUTO resolved and clamped to the pool): the count
+    /// the session is sized for (LatencyCalculator's n), and the pending dispatch queue of an
+    /// exclusive session is sized by it.
     const uint32_t m_num_instances;
     /// The inference time the next prepare() sizes the session for, in ms (LatencyCalculator's
     /// T): the contract's explicit budget from the construction on; a 3.x handler sets it before
@@ -738,6 +1111,26 @@ public:
                                                 ///< access)
 
 private:
+    /// The id strings of intern_id(): node-based, so a stored string never moves.
+    std::set<std::string> m_interned_ids;
+
+    /// The published plan table: what publish_plans() replaces and a read lease holds a
+    /// version of. Empty until Core::create_session publishes the list it built.
+    thl::RCU<PlanTable> m_plan_table;
+    /// The reader slot of m_plan_table, the driving thread's, added once, here, on the control
+    /// thread that makes the session; claim_plans() hands out its lease. Declared behind the
+    /// table it reads.
+    RcuReaderSlot<PlanTable> m_plan_reader{m_plan_table};
+    /// The entries of the table published last (its indices, the empty ones included): what
+    /// select_plan checks an index against, from any thread. Stored by publish_plans().
+    std::atomic<uint32_t> m_num_published_plans{0};
+
+    /// The stamp itself: the index and, for a slot, the count and the copies of what the slot
+    /// reports; no slot, variant 0 and no backend for NULL. The caller holds the chunk.
+    static void stamp_slot(ThreadSafeStruct& chunk,
+                           uint32_t plan,
+                           PlanSlot* slot) noexcept ANIRA_NONBLOCKING;
+
     /**
      * @brief Whether any input tensor is streamable
      *
@@ -745,7 +1138,8 @@ private:
      */
     bool has_streamable_input() const;
 
-    /// The model's own latency of an output, in samples of its stream (the spec's latency).
+    /// The model's own latency of an output, in samples of its stream (the spec's latency, the
+    /// largest over the variants: m_internal_latency).
     size_t output_model_latency(size_t slot) const noexcept;
 
 #if DOXYGEN

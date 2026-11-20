@@ -127,6 +127,7 @@ Out of memory is a status, ``ANIRA_ERROR_OUT_OF_MEMORY`` (an :js:class:`AniraErr
 layer), never an abort. The library links ``-sABORTING_MALLOC=0`` into every module that uses it, so
 ``malloc`` returns NULL and ``operator new`` throws ``std::bad_alloc`` where the memory cannot grow,
 and every C entry turns that into the status; a failed handler creation or prepare leaves nothing
-behind. A module that prefers the abort passes ``-sABORTING_MALLOC=1`` after anira's options (the
+behind. The one exception is an allocation that fails inside ONNX Runtime's model load, which the
+runtime itself does not always survive (:ref:`web-memory`). A module that prefers the abort passes ``-sABORTING_MALLOC=1`` after anira's options (the
 last ``-s`` wins). A module that grows with ``-pthread`` and reads the heap from its own JavaScript
 needs the same care as the package: views rebuilt after a growth (:ref:`web-memory`).

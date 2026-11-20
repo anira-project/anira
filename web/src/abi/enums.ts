@@ -31,6 +31,7 @@ export const anira_status = {
   ANIRA_ERROR_DEVICE: -21,
   ANIRA_ERROR_EXTENSION_VERSION: -22,
   ANIRA_ERROR_NOT_FOUND: -23,
+  ANIRA_ERROR_CONCURRENT_CALL: -24,
   ANIRA_ERROR_INTERNAL: -100,
 } as const
 /** @internal */
@@ -210,6 +211,13 @@ export const anira_rt_verdict = {
 /** @internal */
 export type anira_rt_verdict = (typeof anira_rt_verdict)[keyof typeof anira_rt_verdict]
 
+export const anira_plan_state = {
+  ANIRA_PLAN_READY: 0,
+  ANIRA_PLAN_REMOVED: 1,
+} as const
+/** @internal */
+export type anira_plan_state = (typeof anira_plan_state)[keyof typeof anira_plan_state]
+
 export const anira_miss_policy = {
   ANIRA_MISS_BYPASS: 0,
   ANIRA_MISS_HOLD_LAST: 1,
@@ -218,6 +226,13 @@ export const anira_miss_policy = {
 } as const
 /** @internal */
 export type anira_miss_policy = (typeof anira_miss_policy)[keyof typeof anira_miss_policy]
+
+export const anira_variant_state = {
+  ANIRA_VARIANT_STATE_FRESH: 0,
+  ANIRA_VARIANT_STATE_KEEP: 1,
+} as const
+/** @internal */
+export type anira_variant_state = (typeof anira_variant_state)[keyof typeof anira_variant_state]
 
 export const anira_late_policy = {
   ANIRA_LATE_FINISH: 0,
@@ -438,6 +453,7 @@ export const ANIRA_ENGINE_FLAG_REALTIME_SAFE = 2
 export const ANIRA_ENGINE_FLAG_DYNAMIC_TIME = 4
 export const ANIRA_ENGINE_FLAG_STATE_ALIAS = 8
 export const ANIRA_PREPARE_EXCLUSIVE = 1
+export const ANIRA_PREPARE_LIVE = 2
 export const ANIRA_ENGINE_CALL_EXCLUSIVE = 1
 export const ANIRA_LOG_RECORD_REALTIME = 1
 export const ANIRA_LOG_RECORD_CONTRACT_VIOLATION = 2

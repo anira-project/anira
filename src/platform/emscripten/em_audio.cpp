@@ -29,6 +29,7 @@
 
 #include "../../capi/capi_internal.h"
 #include "../../capi/handler.h"
+#include "../../capi/port.h"
 #include "../../capi/words.h"
 
 using anira::capi::translate_exception;
@@ -329,11 +330,12 @@ bool wait_until_idle(NodeSlot& slot, double bound_ms) {
     return true;
 }
 
-// The handler's empty tensors at every position of the multi call, with the served slots'
-// entries rewritten each quantum; rebuilt after a re-prepare, which rebuilds the handler's.
+// The empty tensors of the handler's slot signature at every position of the multi call, with
+// the served slots' entries rewritten each quantum; rebuilt after a re-prepare, which rebuilds
+// the signature's.
 void copy_empty_tensors(NodeState& state) {
-    state.m_input_tensors = state.m_handler->m_input_tensors;
-    state.m_output_tensors = state.m_handler->m_output_tensors;
+    state.m_input_tensors = state.m_handler->m_signature.m_inputs.m_empty;
+    state.m_output_tensors = state.m_handler->m_signature.m_outputs.m_empty;
     state.m_delivered.assign(state.m_output_tensors.size(), 0);
 }
 
@@ -543,12 +545,12 @@ anira_status resolve_streams(const anira_handler& handler,
     return ANIRA_OK;
 }
 
-const anira_tensor_spec* static_spec(const anira_handler& handler, uint32_t slot) {
-    if (handler.m_pipeline.m_variants.empty() || slot >= handler.m_num_inputs) { return nullptr; }
-    const anira_tensor_spec* spec =
-        anira_model_config_input(&handler.m_pipeline.m_variants[0], slot);
-    if (spec == nullptr || anira_tensor_spec_role(spec) != ANIRA_ROLE_STATIC) { return nullptr; }
-    return spec;
+// The Static input at a slot as the handler itself holds it, or NULL for a slot that is none:
+// the role is the port's arm, the rank, the extents and the dtype are its stored value's (the
+// spec's, fixed at anira_handler_create). No read of the pipeline copy, whose variants may come
+// and go while the node streams.
+const anira::capi::StaticSlot* static_input(const anira_handler& handler, uint32_t slot) {
+    return anira::capi::static_slot(handler.m_input_ports, slot);
 }
 
 }  // namespace
@@ -649,17 +651,9 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
     // every slot the node does not serve, and of the Static ones (pushed separately).
     copy_empty_tensors(*state);
     for (uint32_t i = 0; i < num_param_slots; ++i) {
-        const anira_tensor_spec* spec = static_spec(*handler, param_slots[i]);
-        uint64_t elements = 1;
-        const uint32_t ndim = spec != nullptr ? anira_tensor_spec_ndim(spec) : 0;
-        for (uint32_t a = 0; a < ndim; ++a) {
-            anira_axis_tag tag{};
-            int64_t extent = 0;
-            static_cast<void>(anira_tensor_spec_axis(spec, a, &tag, &extent));
-            elements *= extent > 0 ? static_cast<uint64_t>(extent) : 0;
-        }
+        const anira::capi::StaticSlot* spec = static_input(*handler, param_slots[i]);
         ANIRA_CAPI_REQUIRE(
-            spec != nullptr && anira_tensor_spec_dtype(spec) == ANIRA_DTYPE_F32 && elements == 1,
+            spec != nullptr && spec->dtype() == ANIRA_DTYPE_F32 && spec->num_elements() == 1,
             err,
             ANIRA_ERROR_CONFIG,
             "audio node: AudioParam %u drives input slot %u, which is not a "
@@ -671,8 +665,8 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
     }
     for (ParamSlot& p : state->m_params) {
         // The spec's own rank and extents (all 1): the handler checks the tensor against them.
-        const anira_tensor_spec* spec = static_spec(*handler, p.m_slot);
-        const uint32_t ndim = anira_tensor_spec_ndim(spec);
+        const anira::capi::StaticSlot* spec = static_input(*handler, p.m_slot);
+        const auto ndim = static_cast<uint32_t>(spec->shape().size());
         anira_tensor_init_host(&p.m_tensor,
                                &p.m_value,
                                ANIRA_DTYPE_F32,
@@ -691,7 +685,7 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
         }
     }
     for (uint32_t i = 0; i < num_tensor_slots; ++i) {
-        const anira_tensor_spec* spec = static_spec(*handler, tensor_slots[i]);
+        const anira::capi::StaticSlot* spec = static_input(*handler, tensor_slots[i]);
         ANIRA_CAPI_REQUIRE(spec != nullptr,
                            err,
                            ANIRA_ERROR_CONFIG,
@@ -699,8 +693,8 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
                            tensor_slots[i]);
         auto block = std::make_unique<StaticBlock>();
         block->m_slot = tensor_slots[i];
-        const anira_dtype dtype = anira_tensor_spec_dtype(spec);
-        const uint32_t ndim = anira_tensor_spec_ndim(spec);
+        const anira_dtype dtype = spec->dtype();
+        const auto ndim = static_cast<uint32_t>(spec->shape().size());
         ANIRA_CAPI_REQUIRE(ndim <= ANIRA_MAX_RANK,
                            err,
                            ANIRA_ERROR_CONFIG,
@@ -709,9 +703,7 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
                            ndim);
         uint64_t elements = 1;
         for (uint32_t a = 0; a < ndim; ++a) {
-            anira_axis_tag tag{};
-            int64_t extent = 0;
-            static_cast<void>(anira_tensor_spec_axis(spec, a, &tag, &extent));
+            const int64_t extent = spec->shape()[a];
             ANIRA_CAPI_REQUIRE(extent >= 0,
                                err,
                                ANIRA_ERROR_CONFIG,

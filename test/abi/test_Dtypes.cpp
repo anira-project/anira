@@ -628,7 +628,7 @@ struct Copies {
 
 Copies plan_copies(const anira_handler* h) {
     const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(h);
-    const anira::SessionElement::PlanSlot& plan = session->m_plans.at(anira_handler_get_plan(h));
+    const anira::SessionElement::PlanSlot& plan = *session->m_plans.at(anira_handler_get_plan(h));
     Copies copies;
     const auto add = [&copies](const anira::engine::Executor& executor) {
         copies.m_in += executor.copies_in();

@@ -131,6 +131,12 @@ struct HardContract {
     anira_miss_fn m_miss_fn = nullptr;
     void* m_miss_user_data = nullptr;
     double m_wait_ratio = 0.0;
+    /// What the model's state is when the stream moves to a plan of another variant
+    /// (anira_contract_hard_set_variant_state, the JSON key "variant_state"): FRESH, the
+    /// default, re-initialises the declared State pairs and resets the plan's exclusive engine
+    /// ahead of the first inference formed on the other variant (the session's state epoch);
+    /// KEEP does nothing. A plan switch inside one variant never re-initialises.
+    anira_variant_state m_variant_state = ANIRA_VARIANT_STATE_FRESH;
     /// Per-tensor ring dtype by canonical name: the element type the typed Hard entries
     /// carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in
     /// anira converts: the Hard entries copy between the host and the ring, and a ring dtype

@@ -8,6 +8,7 @@
 #include <anira/abi/thread.h>
 #include <concurrentqueue.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <atomic>
@@ -17,6 +18,7 @@
 #include <cstdio>
 #include <memory>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "../abi/handler_support.h"
@@ -550,4 +552,335 @@ TEST(InferenceQueue, AChunkAQueueHasNoRoomForIsADroppedHop) {
     }
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_ERROR_CAPACITY);
     EXPECT_GT(parked, pool) << "the pending queue held fewer entries than the struct pool";
+}
+
+// ---- a refused dispatch and the chunks parked behind it (#252) ---------------------------------
+
+namespace {
+
+using Chunk = SessionElement::ThreadSafeStruct;
+
+/// A gate engine that keeps the first sample of every window it ran, in run order, and passes
+/// the window through.
+class WindowEngine : public anira_test::GateEngine {
+public:
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        const float* in = anira_tensor_data_f32(&ctx.inputs[0]);
+        if (in == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        m_windows.push_back(static_cast<int64_t>(in[0]));
+        return anira_test::passthrough(ctx);
+    }
+
+    std::vector<int64_t> m_windows;  ///< written by the one thread that steps the jobs
+};
+
+/// An exclusive session on a context without a pool, its jobs stepped by hand on a thread of the
+/// host's: nothing runs, dispatches or lifts unless the test's own thread does it, so every count
+/// below is exact. A call is k_hops hops; the first call writes every sample as its position in
+/// the stream plus one (window k starts with k * k_hop + 1, and a zero is no sample of it), every
+/// later call zeros.
+struct SteppedStatefulStream {
+    static constexpr size_t k_hop = 64;
+    static constexpr size_t k_hops = 8;
+    static constexpr size_t k_call = k_hop * k_hops;
+
+    SteppedStatefulStream() {
+        EXPECT_EQ(m_handler.prepare(anira_test::explicit_contract(static_cast<uint32_t>(k_call),
+                                                                  anira_test::k_rate,
+                                                                  ANIRA_MISS_ZEROS,
+                                                                  0.0,
+                                                                  /*budget_ms=*/0.5)),
+                  ANIRA_OK)
+            << m_handler.m_err.message;
+        m_session = anira_test::session_of(m_handler.m_handler);
+    }
+
+    /// One call of the driving thread; its output block is appended to m_out.
+    void call() {
+        std::vector<float> block(k_call, 0.0F);
+        if (m_out.empty()) {
+            for (size_t i = 0; i < k_call; ++i) { block[i] = static_cast<float>(i + 1); }
+        }
+        const std::array<float*, 1> channels{block.data()};
+        const std::array<int64_t, 2> shape{1, static_cast<int64_t>(k_call)};
+        anira_tensor io{};
+        anira_tensor_init_host_planar(&io,
+                                      static_cast<const void*>(channels.data()),
+                                      1,
+                                      ANIRA_DTYPE_F32,
+                                      2,
+                                      shape.data());
+        size_t delivered = 0;
+        static_cast<void>(anira_handler_process(m_handler.m_handler, &io, 0, &io, 0, &delivered));
+        m_out.insert(m_out.end(), block.begin(), block.end());
+    }
+
+    /// A call whose chunks all park behind a gate that nobody holds afterwards: the busy bit is
+    /// set by hand for the call and the gate then freed without a look at the queue. That is
+    /// what a release that left without the look leaves behind, which no path does any more;
+    /// the driving thread takes a free gate only, so its dispatch finds a second chunk parked in
+    /// this state alone.
+    void call_parking_every_chunk() {
+        const uint64_t held =
+            m_session->m_stateful_dispatch_gate.load() | SessionElement::k_dispatch_busy;
+        m_session->m_stateful_dispatch_gate.store(held);
+        call();
+        m_session->release_dispatch(held);
+    }
+
+    /// A call of the driving thread that forms no chunk: it collects, which kicks the chain.
+    void kick() const {
+        size_t available = 0;
+        EXPECT_EQ(anira_handler_get_available_samples(m_handler.m_handler, 0, 0, &available),
+                  ANIRA_OK);
+    }
+
+    /// The chunks waiting in the pending queue.
+    size_t parked() const { return m_session->m_dispatch_pending.size_approx(); }
+
+    /// Takes the parked chunks out, oldest first (white-box: nothing dispatches meanwhile).
+    std::vector<std::shared_ptr<Chunk>> take_parked() const {
+        std::vector<std::shared_ptr<Chunk>> chunks;
+        std::shared_ptr<Chunk> chunk;
+        while (m_session->m_dispatch_pending.try_dequeue(chunk)) {
+            chunks.push_back(std::move(chunk));
+        }
+        return chunks;
+    }
+
+    bool gate_free() const {
+        return (m_session->m_stateful_dispatch_gate.load() & SessionElement::k_dispatch_busy) == 0;
+    }
+
+    /// The first sample of window `hop` of the first call.
+    static int64_t window(size_t hop) { return static_cast<int64_t>((hop * k_hop) + 1); }
+
+    /// Calls (their jobs run between them) until the first call's hops are out, then the whole
+    /// output: the first call's samples at the latency, zeros in the hops of `dropped` and
+    /// everywhere else.
+    void expect_stream(const std::vector<size_t>& dropped) {
+        const size_t latency = anira_handler_get_latency(m_handler.m_handler, 0);
+        ASSERT_GE(latency, k_call) << "a hop of the first call would be due inside that call";
+        while (m_out.size() < latency + k_call) {
+            call();
+            static_cast<void>(m_host.run_queue());
+        }
+        for (size_t i = 0; i < m_out.size(); ++i) {
+            float expected = 0.0F;
+            if (i >= latency && i - latency < k_call) {
+                const size_t hop = (i - latency) / k_hop;
+                const bool is_dropped = std::ranges::find(dropped, hop) != dropped.end();
+                expected = is_dropped ? 0.0F : static_cast<float>(i - latency + 1);
+            }
+            ASSERT_EQ(m_out[i], expected)
+                << "output sample " << i << " (latency " << latency << ")";
+        }
+    }
+
+    WindowEngine m_engine;  ///< before the handler, which dies first
+    anira_test::Context m_context{0};
+    anira_test::Handler m_handler{m_context,
+                                  hop_model(static_cast<int64_t>(k_hop), 1, /*stateful=*/true),
+                                  {},
+                                  {},
+                                  m_engine.engine()};
+    HostThread m_host{m_context};
+    std::shared_ptr<SessionElement> m_session;
+    std::vector<float> m_out;  ///< every output block so far, in order
+};
+
+/// The inference queue's refusal of a session's dispatches, forced white-box. The queue is the
+/// core's own and private to it, and a session's producer in it does not run out of the room its
+/// prepare reserved, so the session's producer token is exchanged for the token of a queue of the
+/// test's whose producer holds no block: a try_enqueue through that token finds no block ahead
+/// and none to take, and never allocates one, on whichever queue it is called (moodycamel's
+/// ExplicitProducer::enqueue). lift() exchanges the tokens back.
+///
+/// The refusal does not end by itself, as a real one does not before a consumer made room. A
+/// dispatch that is to be refused once ends it from inside: lifting() gives a parked chunk a
+/// pointer whose last owner lifts the refusal, and the last owner of a chunk that is refused is
+/// the dispatching thread, behind that chunk's drop and ahead of its next look at the pending
+/// queue. Declared behind the session's handler: the destructor lifts ahead of the handler's
+/// destroy, which uses the token.
+class Refusal {
+public:
+    explicit Refusal(std::shared_ptr<SessionElement> session)
+        : m_state(std::make_shared<State>(std::move(session))) {}
+    ~Refusal() {
+        m_state->lift();
+        m_state->m_lifting.reset();
+    }
+    Refusal(const Refusal&) = delete;
+    Refusal& operator=(const Refusal&) = delete;
+    Refusal(Refusal&&) = delete;
+    Refusal& operator=(Refusal&&) = delete;
+
+    void lift() const noexcept { m_state->lift(); }
+    bool lifted() const noexcept { return m_state->m_session == nullptr; }
+
+    /// `chunk` behind a pointer whose last owner lifts the refusal. That owner may be inside a
+    /// real-time call (the driving thread's dispatch), where nothing is freed: this object
+    /// keeps the pointer's control block until its own end.
+    std::shared_ptr<Chunk> lifting(const std::shared_ptr<Chunk>& chunk) const {
+        std::shared_ptr<Chunk> pointer(chunk.get(), [state = m_state, chunk](Chunk*) noexcept {
+            state->lift();
+        });
+        m_state->m_lifting = pointer;
+        return pointer;
+    }
+
+private:
+    struct State {
+        explicit State(std::shared_ptr<SessionElement> session) : m_session(std::move(session)) {
+            m_session->m_producer_token.swap(m_no_room);
+        }
+
+        void lift() noexcept {
+            if (m_session == nullptr) { return; }
+            m_session->m_producer_token.swap(m_no_room);
+            m_session.reset();
+        }
+
+        std::shared_ptr<SessionElement> m_session;  ///< none once lifted
+        InferenceQueue m_queue{0};                  ///< no block in its pool
+        moodycamel::ProducerToken m_no_room{m_queue};
+        std::weak_ptr<Chunk> m_lifting;  ///< the control block of lifting()'s pointer
+    };
+
+    std::shared_ptr<State> m_state;
+};
+
+/// Parks the stream's waiting chunks again in their order, the oldest behind the refusal's
+/// lifting pointer: the dispatch of that chunk is refused, and the refusal ends with it. Returns
+/// that chunk.
+std::shared_ptr<Chunk> refuse_the_oldest_once(const SteppedStatefulStream& stream,
+                                              const Refusal& refusal) {
+    const std::vector<std::shared_ptr<Chunk>> parked = stream.take_parked();
+    for (size_t i = 0; i < parked.size(); ++i) {
+        stream.m_session->enqueue_pending_dispatch(i == 0 ? refusal.lifting(parked[i]) : parked[i]);
+    }
+    return parked.empty() ? nullptr : parked.front();
+}
+
+}  // namespace
+
+// An inference thread that finished a chunk dispatches the next parked one. When the inference
+// queue refuses that one, it is a dropped hop: zeros at its stream position, ANIRA_ERROR_CAPACITY
+// in rt_error. The thread then looks at the pending queue again, and the chunk behind the refused
+// one goes to the queue; it used to free the gate and leave, so the chunks behind stayed parked
+// until the driving thread's next call. Here the driving thread makes no further call: one job
+// runs chunk 0 and its thread dispatches (chunk 1 refused, once; chunk 2 handed over), and the
+// host's thread then runs every chunk behind the refused one.
+TEST(InferenceQueue, AnInferenceThreadDispatchesTheChunkBehindARefusedOne) {
+    SteppedStatefulStream stream;
+    ASSERT_NE(stream.m_session, nullptr);
+    constexpr size_t k_hops = SteppedStatefulStream::k_hops;
+    stream.call();
+    ASSERT_EQ(stream.parked(), k_hops - 1) << "chunk 0 is queued, the others wait behind it";
+    {
+        const Refusal refusal(stream.m_session);
+        const std::shared_ptr<Chunk> refused = refuse_the_oldest_once(stream, refusal);
+        ASSERT_NE(refused, nullptr);
+        ASSERT_EQ(anira_handler_rt_error(stream.m_handler.m_handler), ANIRA_OK);
+
+        ASSERT_NE(anira_inference_thread_execute(stream.m_host.m_thread), 0U);
+        EXPECT_EQ(stream.m_engine.m_windows, std::vector<int64_t>{stream.window(0)});
+        EXPECT_TRUE(refusal.lifted()) << "the dispatch of chunk 1 was not refused";
+        EXPECT_EQ(anira_handler_rt_error(stream.m_handler.m_handler), ANIRA_ERROR_CAPACITY);
+        EXPECT_TRUE(refused->m_completed_as_zeros);
+        EXPECT_EQ(stream.parked(), k_hops - 3) << "chunk 2 was not handed to the queue";
+    }
+    EXPECT_EQ(stream.m_host.run_queue(), k_hops - 2)
+        << "the chunks behind the refused one wait for a call of the driving thread";
+    std::vector<int64_t> ran{stream.window(0)};
+    for (size_t hop = 2; hop < k_hops; ++hop) { ran.push_back(stream.window(hop)); }
+    EXPECT_EQ(stream.m_engine.m_windows, ran);
+    EXPECT_TRUE(stream.gate_free());
+    stream.expect_stream({1});
+}
+
+// The same on the driving thread, in the one state in which its dispatch has a chunk behind the
+// one it takes (SteppedStatefulStream::call_parking_every_chunk). One kick: chunk 0 is refused,
+// once, and chunk 1 goes to the queue; the kick used to free the gate behind the refused chunk
+// and return, and every chunk behind it waited for the next call.
+TEST(InferenceQueue, TheDrivingThreadDispatchesTheChunkBehindARefusedOne) {
+    SteppedStatefulStream stream;
+    ASSERT_NE(stream.m_session, nullptr);
+    constexpr size_t k_hops = SteppedStatefulStream::k_hops;
+    stream.call_parking_every_chunk();
+    ASSERT_EQ(stream.parked(), k_hops);
+    ASSERT_TRUE(stream.gate_free());
+    {
+        const Refusal refusal(stream.m_session);
+        const std::shared_ptr<Chunk> refused = refuse_the_oldest_once(stream, refusal);
+        ASSERT_NE(refused, nullptr);
+        ASSERT_EQ(anira_handler_rt_error(stream.m_handler.m_handler), ANIRA_OK);
+
+        stream.kick();
+        EXPECT_TRUE(refusal.lifted()) << "the dispatch of chunk 0 was not refused";
+        EXPECT_EQ(anira_handler_rt_error(stream.m_handler.m_handler), ANIRA_ERROR_CAPACITY);
+        EXPECT_EQ(stream.parked(), k_hops - 2) << "chunk 1 was not handed to the queue";
+    }
+    EXPECT_TRUE(stream.m_engine.m_windows.empty());
+    EXPECT_EQ(stream.m_host.run_queue(), k_hops - 1)
+        << "the chunks behind the refused one wait for the next call of the driving thread";
+    std::vector<int64_t> ran;
+    for (size_t hop = 1; hop < k_hops; ++hop) { ran.push_back(stream.window(hop)); }
+    EXPECT_EQ(stream.m_engine.m_windows, ran);
+    EXPECT_TRUE(stream.gate_free());
+    stream.expect_stream({0});
+}
+
+// While the queue goes on refusing, every parked chunk is a dropped hop in its turn, in stream
+// order, and the dispatch ends with the pending queue empty and the gate free: nothing waits
+// behind a free gate, and each refused chunk gave its count on the session back. On an inference
+// thread (behind chunk 0, which ran) and on the driving thread (the state made by hand, as
+// above); each used to drop one chunk and leave the others parked.
+TEST(InferenceQueue, AnInferenceThreadDropsEveryParkedChunkWhileTheQueueRefuses) {
+    SteppedStatefulStream stream;
+    ASSERT_NE(stream.m_session, nullptr);
+    constexpr size_t k_hops = SteppedStatefulStream::k_hops;
+    stream.call();
+    ASSERT_EQ(stream.parked(), k_hops - 1);
+    std::vector<size_t> dropped;
+    {
+        const Refusal refusal(stream.m_session);
+        ASSERT_NE(anira_inference_thread_execute(stream.m_host.m_thread), 0U);
+        EXPECT_FALSE(refusal.lifted());
+        EXPECT_EQ(stream.parked(), 0U) << "a chunk stayed parked behind the refused one";
+        EXPECT_TRUE(stream.gate_free());
+        EXPECT_EQ(stream.m_session->m_active_inferences->load(), 0);
+        EXPECT_EQ(anira_handler_rt_error(stream.m_handler.m_handler), ANIRA_ERROR_CAPACITY);
+        // Chunk k of the first call is struct k of the pool.
+        for (size_t hop = 1; hop < k_hops; ++hop) {
+            EXPECT_TRUE(stream.m_session->m_struct_pool[hop]->m_completed_as_zeros) << hop;
+            dropped.push_back(hop);
+        }
+    }
+    EXPECT_EQ(stream.m_host.run_queue(), 0U);
+    EXPECT_EQ(stream.m_engine.m_windows, std::vector<int64_t>{stream.window(0)});
+    stream.expect_stream(dropped);
+}
+
+TEST(InferenceQueue, TheDrivingThreadDropsEveryParkedChunkWhileTheQueueRefuses) {
+    SteppedStatefulStream stream;
+    ASSERT_NE(stream.m_session, nullptr);
+    constexpr size_t k_hops = SteppedStatefulStream::k_hops;
+    stream.call_parking_every_chunk();
+    ASSERT_EQ(stream.parked(), k_hops);
+    ASSERT_TRUE(stream.gate_free());
+    std::vector<size_t> dropped;
+    {
+        const Refusal refusal(stream.m_session);
+        stream.kick();
+        EXPECT_FALSE(refusal.lifted());
+        EXPECT_EQ(stream.parked(), 0U) << "a chunk stayed parked behind the refused one";
+        EXPECT_TRUE(stream.gate_free());
+        EXPECT_EQ(stream.m_session->m_active_inferences->load(), 0);
+        EXPECT_EQ(anira_handler_rt_error(stream.m_handler.m_handler), ANIRA_ERROR_CAPACITY);
+        for (size_t hop = 0; hop < k_hops; ++hop) { dropped.push_back(hop); }
+    }
+    EXPECT_EQ(stream.m_host.run_queue(), 0U);
+    EXPECT_TRUE(stream.m_engine.m_windows.empty());
+    stream.expect_stream(dropped);
 }

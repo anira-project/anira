@@ -114,8 +114,12 @@ Every phase receives an ``anira_processor_ctx`` (C++ :cpp:class:`anira::Processo
 on anira's stack for the call: ``phase``, the plan's ``engine`` and ``provider`` (whole through
 ``anira_processor_engine`` / ``_provider``, ``ctx.engine()`` / ``ctx.provider()``), ``variant``, the
 two lists' lengths, ``ticket`` (``ANIRA_TICKET_INVALID`` under Hard), ``entry`` and an opaque
-``frame``. A callback asks **per slot** (:ref:`usage-slots`) through six accessors, ``[callback-safe]``
-and ``ANIRA_NONBLOCKING``:
+``frame``. ``variant`` (``ctx.variant()``) is the variant of the chunk's plan, its index in the
+inference stage (:ref:`usage-variants`): the same in every phase of a chunk, also when the
+selection moves while the chunk is in flight. The variants of a stage have one form, so every
+tensor and every ring is the same under each of them, and one prepared object serves them all; a
+processor that treats two variants differently branches on the field. A callback asks **per slot**
+(:ref:`usage-slots`) through six accessors, ``[callback-safe]`` and ``ANIRA_NONBLOCKING``:
 
 - ``input_role`` / ``output_role``: the slot's ``anira_role``, the same in every phase;
 - ``input_ring`` / ``output_ring``: a Streamed slot's ring, in ``pre_process`` (inputs) and
@@ -224,19 +228,25 @@ more (:doc:`custom_engines`).
        back this handler's *prepared* object (C: ``prepared``, ``NULL`` legal; C++: the
        ``Processor::Prepared``), which every phase, the reset and the unprepare of this handler
        receive. It may call the ``[callback-safe]`` entries, the handler's
-       getters and the Static entries, never ``prepare``, ``destroy`` or a Hard entry. A refusal fails
+       getters and the Static entries, never a Hard entry or a control entry of the handler
+       (``prepare``, ``add_variant``, ``remove_variant``, ``destroy``: ``ANIRA_ERROR_INVALID_STATE``
+       from inside a callback). A refusal fails
        the prepare (``the processor refused prepare``), and no unprepare follows. Under any warm-up
        but ``ANIRA_WARMUP_NONE``, unless the model's figure is reused, the pass then runs the hooks on this prepared object (never
        ``pre_process`` or ``post_process``), so a hook must accept an entry ``pre_process`` never
        filled. Under a measured budget ``prepare`` may run twice in one ``anira_handler_prepare``:
        ``prepare``, the pass, then ``unprepare`` and ``prepare`` again with the final record when the
-       pass moved the entry count.
+       pass moved the entry count. A variant added or removed at run time calls neither ``prepare``
+       nor ``unprepare``: the processor is prepared once per handler, for shapes every variant has,
+       and its prepared object and entry count stay. No phase runs for an add's own warm-up, so the
+       figure of an added plan lacks the hooks until the next prepare (:ref:`usage-variant-set`).
    * - ``reset(ctx)``
      - For the first chunk of a new stream (after prepare, after ``anira_handler_reset``), before its
        ``pre_process`` and on its thread, in ``ANIRA_PHASE_RESET`` (the accessors answer the role only):
        a resampler, an overlap buffer, a filter's history starts over. C++ fills the slot with
        ``k_reset`` in ``phases()``; under a Hard contract it needs its own bit in
-       ``realtime_phases``.
+       ``realtime_phases``. A switch to another variant is no new stream and calls no ``reset``
+       (:ref:`usage-variant-state`).
    * - ``unprepare(prepared)``
      - Once per successful prepare, at the next prepare of the handler (after the old session is
        released; a next prepare that fails earlier undoes the previous one too) and at its destroy,

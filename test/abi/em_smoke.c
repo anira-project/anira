@@ -2,10 +2,10 @@
  * The node smoke test of anira/anira_em.h (WebAssembly only): one thread, no Worker.
  * em_smoke.pre.js installs the scope's registry before main runs; this file runs a JavaScript
  * processor (pre_process, post_process, reset, init, prepare, unprepare, release) and a JavaScript
- * engine (process, query) on one Hard handler, driving the inference queue itself with
- * anira_inference_thread_execute, catches a throwing hook in the trampoline, and receives a log
- * record through the JavaScript log hook. Exit code 0 on success; every failed check prints one
- * line.
+ * engine (process, query, and the crossing behind a model's unload) on one Hard handler, driving
+ * the inference queue itself with anira_inference_thread_execute, catches a throwing hook in the
+ * trampoline, and receives a log record through the JavaScript log hook. Exit code 0 on success;
+ * every failed check prints one line.
  */
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -111,21 +111,114 @@ static void check_throwing_hook(void) {
     check(smoke_count("reported") == 1u, "one console report for the three throws");
 }
 
-static anira_model_config* smoke_model(anira_error* err) {
-    static const char k_json[] =
-        "{\"models\": [{\"engine\": \"" SMOKE_ENGINE_ID
-        "\", \"path\": \"never-opened.bin\"}],"
-        " \"inputs\": [{\"name\": \"in\", \"dtype\": \"float32\", \"role\": \"streamed\","
-        " \"axes\": [[\"batch\", 1], [\"channel\", 1], [\"time\", 128]],"
-        " \"window\": {\"min\": 128, \"max\": 128}}],"
-        " \"outputs\": [{\"name\": \"out\", \"dtype\": \"float32\", \"role\": \"streamed\","
-        " \"axes\": [[\"batch\", 1], [\"channel\", 1], [\"time\", 128]],"
-        " \"window\": {\"min\": 128, \"max\": 128}}]}";
+#define SMOKE_MODEL_JSON(path)                                                           \
+    "{\"models\": [{\"engine\": \"" SMOKE_ENGINE_ID "\", \"path\": \"" path              \
+    "\"}],"                                                                              \
+    " \"inputs\": [{\"name\": \"in\", \"dtype\": \"float32\", \"role\": \"streamed\","   \
+    " \"axes\": [[\"batch\", 1], [\"channel\", 1], [\"time\", 128]],"                    \
+    " \"window\": {\"min\": 128, \"max\": 128}}],"                                       \
+    " \"outputs\": [{\"name\": \"out\", \"dtype\": \"float32\", \"role\": \"streamed\"," \
+    " \"axes\": [[\"batch\", 1], [\"channel\", 1], [\"time\", 128]],"                    \
+    " \"window\": {\"min\": 128, \"max\": 128}}]}"
+
+static anira_model_config* model_of(const char* json, size_t size, anira_error* err) {
     anira_model_config* model = NULL;
-    check_status(anira_model_config_from_json(k_json, sizeof k_json - 1, NULL, &model, err),
+    check_status(anira_model_config_from_json(json, size, NULL, &model, err),
                  err,
                  "anira_model_config_from_json");
     return model;
+}
+
+static anira_model_config* smoke_model(anira_error* err) {
+    static const char k_json[] = SMOKE_MODEL_JSON("never-opened.bin");
+    return model_of(k_json, sizeof k_json - 1, err);
+}
+
+/* The same form over another file: another loaded model of the engine. */
+static anira_model_config* other_smoke_model(anira_error* err) {
+    static const char k_json[] = SMOKE_MODEL_JSON("never-opened-either.bin");
+    return model_of(k_json, sizeof k_json - 1, err);
+}
+
+/* A prepared handler over `model` on the JavaScript engine, without a processor. */
+static anira_handler* engine_handler(anira_context* context,
+                                     const anira_model_config* model,
+                                     const anira_contract* contract) {
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_pipeline* pipeline = NULL;
+    check_status(anira_pipeline_create(&pipeline, &err), &err, "anira_pipeline_create");
+    const anira_model_config* variants[1] = {model};
+    anira_backend_id candidate;
+    memset(&candidate, 0, sizeof candidate);
+    candidate.struct_size = sizeof candidate;
+    candidate.engine = ANIRA_ENGINE_CUSTOM;
+    candidate.provider = ANIRA_PROVIDER_CPU;
+    candidate.engine_id = SMOKE_ENGINE_ID;
+    check_status(anira_pipeline_add_inference(pipeline, variants, 1, &candidate, 1, &err),
+                 &err,
+                 "anira_pipeline_add_inference");
+    check_status(anira_em_pipeline_add_js_engine(pipeline,
+                                                 SMOKE_ENGINE_ID,
+                                                 SMOKE_ENGINE_KEY,
+                                                 0,
+                                                 ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                                 NULL,
+                                                 NULL,
+                                                 &err),
+                 &err,
+                 "anira_em_pipeline_add_js_engine");
+    anira_handler* handler = NULL;
+    check_status(anira_handler_create(context, pipeline, &handler, &err),
+                 &err,
+                 "anira_handler_create");
+    anira_pipeline_destroy(pipeline);
+    check_status(anira_handler_prepare(handler, contract, &err), &err, "anira_handler_prepare");
+    return handler;
+}
+
+/* A JavaScript engine's objects of a loaded model live in the scope that ran its calls, which
+   the control thread of an unload cannot reach: the unload takes the model off the list of the
+   loaded ones, and the thread that runs engine calls hands that list to its registry at its
+   next look at the queue (ANIRA_PHASE_UNLOAD), once per unload. `handler` ran the stream on the
+   pipeline's model; a second handler of the pipeline shares that loaded model (one engine
+   object, an equal model), and a third, on a pipeline of its own, holds another one. */
+static void check_unload_crossing(anira_context* context,
+                                  const anira_pipeline* pipeline,
+                                  const anira_contract* contract,
+                                  anira_handler* handler,
+                                  anira_inference_thread* thread) {
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_handler* sharing = NULL;
+    check_status(anira_handler_create(context, pipeline, &sharing, &err),
+                 &err,
+                 "anira_handler_create");
+    check_status(anira_handler_prepare(sharing, contract, &err), &err, "anira_handler_prepare");
+    anira_model_config* other_model = other_smoke_model(&err);
+    anira_handler* other = engine_handler(context, other_model, contract);
+    anira_model_config_destroy(other_model);
+    (void)anira_inference_thread_execute(thread);
+    check(smoke_count("unload") == 0u, "no model was unloaded yet: nothing crosses");
+
+    anira_handler_destroy(handler);
+    (void)anira_inference_thread_execute(thread);
+    check(smoke_count("unload") == 0u,
+          "a model another handler still holds stays loaded: its release crosses nothing");
+
+    anira_handler_destroy(sharing);
+    check(smoke_count("unload") == 0u,
+          "the unload itself crosses nothing: the thread that runs the engine does");
+    (void)anira_inference_thread_execute(thread);
+    check(smoke_count("unload") == 1u,
+          "the first look at the queue behind the unload crosses once");
+    check(smoke_count("stillLoaded") == 1u && smoke_count("lastRunListed") == 0u,
+          "with the loaded models of now: the other handler's, not the one the engine ran");
+    (void)anira_inference_thread_execute(thread);
+    check(smoke_count("unload") == 1u, "one crossing per unload");
+
+    anira_handler_destroy(other);
+    (void)anira_inference_thread_execute(thread);
+    check(smoke_count("unload") == 2u && smoke_count("stillLoaded") == 0u,
+          "the last model's unload crosses with no model loaded");
 }
 
 /* A JavaScript engine with a providers list, built with anira_em_engine_desc_init: the
@@ -396,10 +489,12 @@ static void check_pipeline(void) {
           "the processor's post_process crossed per block");
     check(smoke_count("reset") == 1u, "the processor's reset crossed once, for the first chunk");
 
+    /* Destroys the handler, and a second handler of the pipeline it makes. */
+    check_unload_crossing(context, pipeline, contract, handler, thread);
     anira_inference_thread_destroy(thread);
-    anira_handler_destroy(handler);
-    check(smoke_count("unprepare") == 1u,
-          "the processor's unprepare crossed at anira_handler_destroy");
+    check(smoke_count("prepare") == 2u && smoke_count("unprepare") == 2u,
+          "the processor's unprepare crossed at the anira_handler_destroy of each prepared "
+          "handler");
     anira_pipeline_destroy(pipeline);
     check(smoke_count("release") == 1u, "the processor's release crossed with the last carrier");
     check_unpromised_processor(context, contract);

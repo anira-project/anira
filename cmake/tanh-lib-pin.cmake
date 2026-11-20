@@ -12,11 +12,21 @@
 include_guard(GLOBAL)
 
 set(ANIRA_TANH_LIB_REPOSITORY https://github.com/tanh-lab/tanh-lib.git)
-# v0.5.0 (tanh-lab/tanh-lib#84). Needed since v0.5.0: tanh_add_core_library in
-# cmake/core-library.cmake and the inline ABI namespace (thl::inline THL_ABI_NAMESPACE), through
-# which CMakeLists.txt builds anira_tanh_core in thl::anira. Needed since v0.4.0: the strided
-# RingBuffer calls (tanh-lab/tanh-lib#50: push_block / pop_block / peek_past_block with a stride)
-# that anira_ring forwards to. Needed since v0.3.0: the logger carriers (tanh-lab/tanh-lib#37:
-# platform identity, per-record flags, the drop count on the record) and the compiled log
-# ceiling (#38). tanh-tooling v0.3.0, the same tooling tag this tree pins.
-set(ANIRA_TANH_LIB_COMMIT a62f61649edcb6666de041830d1ef97c7f02e17f)
+# v0.6.0 (tanh-lab/tanh-lib#101). Needed since v0.6.0: thl::RCU's publication in two steps
+# (RCU::stage_update() / stage_replace(), which build the next version and reserve what its
+# publication needs and may throw, and RCU::commit(Staged&&), which is noexcept and allocates
+# nothing), through which
+# anira_handler_add_variant and anira_handler_remove_variant publish a session's plan table and
+# a handler's plan rows together, behind everything that can fail. Needed since v0.5.1
+# (tanh-lab/tanh-lib#68): thl::RCU's reader slots (RCU::add_reader(), read_scope(Reader)), a read
+# section that allocates nothing, locks nothing and registers no thread, which a handler's plan
+# table is read through on the driving thread while a control thread replaces it, and the nested
+# read scopes and the reader-node lifetime fix that come with them. Needed since v0.5.0
+# (tanh-lab/tanh-lib#84): tanh_add_core_library in cmake/core-library.cmake and the inline ABI
+# namespace (thl::inline THL_ABI_NAMESPACE), through which CMakeLists.txt builds anira_tanh_core
+# in thl::anira. Needed since v0.4.0: the strided RingBuffer calls (tanh-lab/tanh-lib#50:
+# push_block / pop_block / peek_past_block with a stride) that anira_ring forwards to. Needed
+# since v0.3.0: the logger carriers (tanh-lab/tanh-lib#37: platform identity, per-record flags,
+# the drop count on the record) and the compiled log ceiling (#38). tanh-tooling v0.3.0, the
+# same tooling tag this tree pins.
+set(ANIRA_TANH_LIB_COMMIT 63f9ff67d7b96cccfb0d886b874c6f403e7f9d4d)

@@ -9,6 +9,7 @@ import {
   anira_edge_class,
   anira_engine,
   anira_memory_kind,
+  anira_plan_state,
   anira_provider,
   anira_rt_verdict,
   anira_status,
@@ -190,7 +191,7 @@ test('a slot row reads the mover beside the class and the window in its tail, at
   assert.equal(row.hop, 2048)
 })
 
-test('a plan row reads the memory kind in its tail, at the wasm32 offset of anira_plan_info', () => {
+test('a plan row reads the memory kind and the state in its tail, at the wasm32 offsets of anira_plan_info', () => {
   const buffer = new ArrayBuffer(65536)
   const u32 = new Uint32Array(buffer)
   let next = 1024
@@ -216,8 +217,15 @@ test('a plan row reads the memory kind in its tail, at the wasm32 offset of anir
       out: number
     ) => {
       strides.push(stride)
-      u32[count >>> 2] = 1
+      u32[count >>> 2] = 2
       if (out === 0) return anira_status.ANIRA_OK
+      // The second row: a plan of a removed variant. Its state is the word at 96, behind
+      // reserved2 at 92; a reader one word off would see the marker instead.
+      const second = out + stride
+      u32[(second + 4) >>> 2] = 1
+      u32[(second + 92) >>> 2] = 0xdead
+      u32[(second + 96) >>> 2] = anira_plan_state.ANIRA_PLAN_REMOVED
+      u32[(second + 100) >>> 2] = 0xdead
       u32[(out + 44) >>> 2] = anira_memory_kind.ANIRA_MEMORY_DEDICATED
       // The warm-up and real-time fields of the tail, at their wasm32 offsets.
       const f64 = new Float64Array(buffer)
@@ -231,8 +239,11 @@ test('a plan row reads the memory kind in its tail, at the wasm32 offset of anir
       return anira_status.ANIRA_OK
     },
   } as unknown as AniraBindings
-  const [plan] = new PlanReport(abi, 1024).plans()
-  assert.deepEqual(strides, [96, 96], 'the caller passes its sizeof as the stride')
+  const [plan, removed] = new PlanReport(abi, 1024).plans()
+  assert.deepEqual(strides, [104, 104], 'the caller passes its sizeof as the stride')
+  assert.equal(plan.state, anira_plan_state.ANIRA_PLAN_READY)
+  assert.equal(removed.variant, 1, 'the second row starts one stride behind the first')
+  assert.equal(removed.state, anira_plan_state.ANIRA_PLAN_REMOVED)
   assert.equal(plan.memoryKind, anira_memory_kind.ANIRA_MEMORY_DEDICATED)
   assert.equal(plan.warmupIterations, 6)
   assert.equal(plan.measuredMs, 1.842)

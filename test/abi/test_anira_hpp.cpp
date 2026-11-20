@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <ios>
 #include <limits>
 #include <memory>
@@ -429,6 +430,28 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_TRUE(zero.ring_dtypes.empty());
     EXPECT_TRUE(zero.latencies.empty());
     EXPECT_FALSE(zero.edge_cost.has_value()) << "no limit, the C ANIRA_EDGE_UNKNOWN";
+
+    // The state of a variant switch: fresh by default, kept by the aggregate's field or the
+    // handle's setter, read back by hard().
+    EXPECT_EQ(plain.variant_state, ANIRA_VARIANT_STATE_FRESH);
+    EXPECT_EQ(zero.variant_state, ANIRA_VARIANT_STATE_FRESH);
+    EXPECT_EQ(minted.variant_state, ANIRA_VARIANT_STATE_FRESH);
+    anira::Hard keeping{};
+    keeping.variant_state = ANIRA_VARIANT_STATE_KEEP;
+    ContractHandle kept(keeping);
+    EXPECT_EQ(kept.hard().variant_state, ANIRA_VARIANT_STATE_KEEP);
+    EXPECT_EQ(kept.native()->hard()->m_variant_state, ANIRA_VARIANT_STATE_KEEP);
+    EXPECT_EQ(&kept.hard_variant_state(ANIRA_VARIANT_STATE_FRESH), &kept) << "the setter chains";
+    EXPECT_EQ(kept.hard().variant_state, ANIRA_VARIANT_STATE_FRESH);
+    const Thrown out_of_range = thrown_by([&] {
+        // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange): the value past the last
+        kept.hard_variant_state(static_cast<anira_variant_state>(2));
+    });
+    EXPECT_TRUE(out_of_range.m_thrown);
+    EXPECT_EQ(out_of_range.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    const ContractHandle from_file =
+        ContractHandle::from_json(R"({"hard": {"budget": {"ms": 5}, "variant_state": "keep"}})");
+    EXPECT_EQ(from_file.hard().variant_state, ANIRA_VARIANT_STATE_KEEP);
 }
 
 // The edge cost of anira.hpp is an optional: std::nullopt, the aggregates' default, is no limit
@@ -894,6 +917,156 @@ TEST(AbiCxx, RegisteredExtKindsListsEntry) {
     EXPECT_NE(std::ranges::find(kinds, "entry"), kinds.end());
 }
 
+// InferenceHandler::set_model and set_backend over two variants of the bundled gain model plus
+// the custom row: each returns the C status, moves one axis of the selection and keeps the
+// other; a pair without a plan is ANIRA_ERROR_NOT_FOUND with the selection as it was.
+TEST(AbiCxx, SetModelAndSetBackendMoveOneAxisOfTheSelection) {
+    anira::Context context(anira::ContextConfig{}.threads(2).log_level(ANIRA_LOG_ERROR));
+    const anira::ModelConfig model = anira_test::gain_with_custom(false);
+    anira::Pipeline pipe;
+    anira_test::add_passthrough(pipe.native());
+    pipe.add_inference({std::cref(model), std::cref(model)}, {});
+    anira::InferenceHandler handler(context, pipe);
+    EXPECT_EQ(handler.set_model(1), ANIRA_ERROR_NOT_PREPARED);
+    const anira::PlanReport report = handler.prepare(anira_test::explicit_contract());
+    const std::vector<anira_plan_info> plans = report.plans();
+    ASSERT_GE(plans.size(), 2U);
+    ASSERT_EQ(plans.size() % 2, 0U) << "the same plans per variant";
+    const auto per_variant = static_cast<uint32_t>(plans.size() / 2);
+    // The custom row is the last entry of the model: the last plan of either variant.
+    const anira::PlanQuery::Backend custom{.engine = ANIRA_ENGINE_CUSTOM,
+                                           .engine_id = anira_test::k_custom};
+    EXPECT_EQ(report.find({.variant = 1, .backend = custom}), plans.size() - 1);
+
+    EXPECT_EQ(handler.get_plan(), 0U);
+    EXPECT_EQ(handler.set_model(1), ANIRA_OK);
+    EXPECT_EQ(handler.get_plan(), per_variant) << "variant 1, on the backend that ran";
+    EXPECT_EQ(handler.set_backend(custom), ANIRA_OK);
+    EXPECT_EQ(handler.get_plan(), plans.size() - 1) << "variant 1 still, on the custom engine";
+    EXPECT_EQ(handler.set_model(0), ANIRA_OK);
+    EXPECT_EQ(handler.get_plan(), per_variant - 1) << "variant 0, on the custom engine still";
+    EXPECT_EQ(handler.set_backend({}), ANIRA_OK) << "any backend: the variant's first plan";
+    EXPECT_EQ(handler.get_plan(), 0U);
+
+    EXPECT_EQ(handler.set_model(2), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(handler.set_backend({.engine = ANIRA_ENGINE_CUSTOM, .engine_id = "org.example.none"}),
+              ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(handler.get_plan(), 0U) << "a refusal leaves the selection";
+    EXPECT_EQ(handler.rt_error(), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(handler.set_backend({.engine = ANIRA_ENGINE_CUSTOM}), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "the pair rule";
+}
+
+// InferenceHandler::add_variant and remove_variant over the bundled gain model plus the custom
+// row: add_variant returns the variant's index (the next of the stage, never one given out
+// before), on an unprepared handler and on a prepared one; a prepared handler publishes a new
+// report at each call, which plan_report() returns, while a PlanReport taken earlier keeps its
+// rows; a removed variant's rows stay at their indices with anira_plan_info.state
+// ANIRA_PLAN_REMOVED, and find and the selection entries pass over them; a refusal is an
+// anira::Error with the C status and its message, and changes nothing.
+TEST(AbiCxx, AddVariantAndRemoveVariantChangeTheVariantsOfAHandler) {
+    anira::Context context(anira::ContextConfig{}.threads(2).log_level(ANIRA_LOG_ERROR));
+    const anira::ModelConfig model = anira_test::gain_with_custom(false);
+    anira::Pipeline pipe;
+    anira_test::add_passthrough(pipe.native());
+    pipe.add_inference(model);
+    anira::InferenceHandler handler(context, pipe);
+    const auto states_of = [](const anira::PlanReport& report) {
+        std::vector<uint32_t> states;
+        for (const anira_plan_info& plan : report.plans()) { states.push_back(plan.state); }
+        return states;
+    };
+    const auto variants_of = [](const anira::PlanReport& report) {
+        std::vector<uint32_t> variants;
+        for (const anira_plan_info& plan : report.plans()) { variants.push_back(plan.variant); }
+        return variants;
+    };
+    // `count` rows of each value in `values`, in that order: the rows of a report by variant.
+    const auto rows = [](uint32_t count, std::initializer_list<uint32_t> values) {
+        std::vector<uint32_t> out;
+        for (const uint32_t value : values) { out.insert(out.end(), count, value); }
+        return out;
+    };
+
+    // Unprepared: the variant joins the handler's copy of the pipeline, the prepare builds it.
+    EXPECT_EQ(handler.add_variant(model), 1U);
+    const anira::PlanReport prepared = handler.prepare(anira_test::explicit_contract());
+    ASSERT_GE(prepared.num_plans(), 2U);
+    ASSERT_EQ(prepared.num_plans() % 2, 0U) << "the same plans per variant";
+    const uint32_t per_variant = prepared.num_plans() / 2;
+    EXPECT_EQ(variants_of(prepared), rows(per_variant, {0U, 1U}));
+    EXPECT_EQ(handler.plan_report().native(), prepared.native());
+
+    // Prepared: the plans are appended behind the existing ones in a new report.
+    const uint32_t entries = handler.num_entries();
+    const uint32_t latency = handler.get_latency();
+    EXPECT_EQ(handler.add_variant(model), 2U);
+    const anira::PlanReport added = handler.plan_report();
+    EXPECT_NE(added.native(), prepared.native()) << "an add publishes a new report";
+    EXPECT_EQ(prepared.num_plans(), 2 * per_variant) << "the earlier view keeps its rows";
+    EXPECT_EQ(variants_of(added), rows(per_variant, {0U, 1U, 2U}));
+    EXPECT_EQ(states_of(added), rows(3 * per_variant, {ANIRA_PLAN_READY}));
+    EXPECT_EQ(added.find({.variant = 2}), 2 * per_variant);
+    EXPECT_EQ(handler.get_plan(), 0U) << "an add leaves the selection";
+    EXPECT_EQ(handler.num_entries(), entries);
+    EXPECT_EQ(handler.get_latency(), latency);
+
+    // A model of another form is refused, with the reason, and nothing is published.
+    const anira::ModelConfig other = anira_test::mono_stream_model();
+    const Thrown form = thrown_by([&] { handler.add_variant(other); });
+    EXPECT_TRUE(form.m_thrown);
+    EXPECT_EQ(form.m_status, ANIRA_ERROR_CONFIG);
+    EXPECT_NE(form.m_what.find("variants[3]: the number of input tensors is 1, but 2 in"),
+              std::string::npos)
+        << form.m_what;
+    EXPECT_EQ(handler.plan_report().native(), added.native());
+
+    // The refusals of a removal: no such variant, the variant of the selected plan.
+    const Thrown unknown = thrown_by([&] { handler.remove_variant(3); });
+    EXPECT_TRUE(unknown.m_thrown);
+    EXPECT_EQ(unknown.m_status, ANIRA_ERROR_NOT_FOUND) << unknown.m_what;
+    const Thrown selected = thrown_by([&] { handler.remove_variant(0); });
+    EXPECT_TRUE(selected.m_thrown);
+    EXPECT_EQ(selected.m_status, ANIRA_ERROR_INVALID_STATE) << selected.m_what;
+    EXPECT_EQ(handler.plan_report().native(), added.native())
+        << "a refused removal changes nothing";
+
+    // A removal: the rows stay, marked, in a new report; nothing selects them any more.
+    EXPECT_EQ(handler.set_model(2), ANIRA_OK);
+    EXPECT_EQ(handler.get_plan(), 2 * per_variant);
+    handler.remove_variant(0);
+    const anira::PlanReport removed = handler.plan_report();
+    EXPECT_NE(removed.native(), added.native()) << "a removal publishes a new report";
+    EXPECT_EQ(variants_of(removed), rows(per_variant, {0U, 1U, 2U}));
+    std::vector<uint32_t> marked = rows(per_variant, {ANIRA_PLAN_REMOVED});
+    marked.insert(marked.end(), size_t{2} * per_variant, ANIRA_PLAN_READY);
+    EXPECT_EQ(states_of(removed), marked);
+    EXPECT_EQ(states_of(added), rows(3 * per_variant, {ANIRA_PLAN_READY}))
+        << "the earlier view keeps its rows";
+    EXPECT_EQ(removed.find({.variant = 0}), std::nullopt);
+    EXPECT_EQ(removed.find({}), per_variant) << "the first ready plan";
+    EXPECT_EQ(handler.get_plan(), 2 * per_variant) << "a removal leaves the selection";
+    EXPECT_EQ(handler.set_plan(0), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(handler.set_model(0), ANIRA_ERROR_NOT_FOUND);
+    EXPECT_EQ(handler.get_plan(), 2 * per_variant);
+    const Thrown again = thrown_by([&] { handler.remove_variant(0); });
+    EXPECT_TRUE(again.m_thrown);
+    EXPECT_EQ(again.m_status, ANIRA_ERROR_NOT_FOUND) << again.m_what;
+
+    // The last variant stays; an index is never given out again.
+    handler.remove_variant(1);
+    const Thrown last = thrown_by([&] { handler.remove_variant(2); });
+    EXPECT_TRUE(last.m_thrown);
+    EXPECT_EQ(last.m_status, ANIRA_ERROR_INVALID_STATE) << last.m_what;
+    EXPECT_EQ(handler.add_variant(model), 3U);
+    EXPECT_EQ(variants_of(handler.plan_report()), rows(per_variant, {0U, 1U, 2U, 3U}));
+
+    // A prepare keeps the indices of the variants that remain and numbers the plans anew.
+    const anira::PlanReport again_prepared = handler.prepare(anira_test::explicit_contract());
+    EXPECT_EQ(variants_of(again_prepared), rows(per_variant, {2U, 3U}));
+    EXPECT_EQ(states_of(again_prepared), rows(2 * per_variant, {ANIRA_PLAN_READY}));
+}
+
 TEST(AbiCxx, EmptyTextIsAJsonErrorNotANullPointer) {
     const Thrown empty = thrown_by([] { ModelConfig::from_json(std::string_view{}); });
     EXPECT_TRUE(empty.m_thrown);
@@ -921,14 +1094,26 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
     EXPECT_EQ(second.m_status, ANIRA_ERROR_CONFIG);
     EXPECT_NE(second.m_what.find("a second inference stage"), std::string::npos) << second.m_what;
 
-    const Thrown variants = thrown_by([&] {
+    // Several variants are one inference stage; that they have one form is the handler's
+    // question at create (ANIRA_ERROR_CONFIG naming the variant and the property).
+    {
+        anira::Context context(anira::ContextConfig{}.threads(2).log_level(ANIRA_LOG_ERROR));
         anira::Pipeline two;
+        anira_test::add_passthrough(two.native());
         two.add_inference({std::cref(model), std::cref(model)}, {});
-    });
-    EXPECT_TRUE(variants.m_thrown);
-    EXPECT_EQ(variants.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    EXPECT_NE(variants.m_what.find("one variant per inference stage"), std::string::npos)
-        << variants.m_what;
+        const anira::InferenceHandler alike(context, two);
+        EXPECT_NE(alike.native(), nullptr);
+        const anira::ModelConfig other = anira_test::mono_stream_model();
+        anira::Pipeline unlike;
+        anira_test::add_passthrough(unlike.native());
+        unlike.add_inference({std::cref(model), std::cref(other)}, {});
+        const Thrown form = thrown_by([&] { const anira::InferenceHandler h(context, unlike); });
+        EXPECT_TRUE(form.m_thrown);
+        EXPECT_EQ(form.m_status, ANIRA_ERROR_CONFIG);
+        EXPECT_NE(form.m_what.find("variants[1]: the number of input tensors is 1, but 2 in"),
+                  std::string::npos)
+            << form.m_what;
+    }
 
     // A candidate's provider is checked for its syntax here (the pair rule: a provider of the
     // enum and a provider_id at once); whether an engine serves it is the handler's question at

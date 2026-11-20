@@ -7,10 +7,13 @@
  * on a provider per plan, and the default-set rule), and the per-slot facts it resolves from
  * the contract and the model (ring dtypes, host domains, declared state pairs). What the
  * pipeline's processor and engines mean to it arrives as ProcessorFacts and EngineFacts. It is what
- * anira_handler_create and anira_handler_prepare run before anything is loaded; the C
- * handler keeps what it derived at prepare (anira_handler::m_derived), and the session reads
- * it for as long as it lives. Private to src/capi (the scheduler's .cpp files and the tests
- * reach it through the src/ include directory).
+ * anira_handler_create and anira_handler_prepare run before anything is loaded, once per
+ * variant of the inference stage, each variant compared with the first (check_same_form: the
+ * variants of a stage have one form); the C handler keeps what it derived at prepare (every
+ * variant's derivation in anira_handler::m_variant_derived, the form they share in
+ * anira_handler::m_derived), and the session reads the form for as long as it lives. Private
+ * to src/capi (the scheduler's .cpp files and the tests reach it through the src/ include
+ * directory).
  *
  * Every function here throws anira::StatusError (the status the C boundary returns, with the
  * message the caller reads); the exported entries catch at the boundary and say it once.
@@ -219,6 +222,34 @@ void validate(const anira_model_config& model,
               const ProcessorFacts* processors = nullptr,
               const EngineFacts* engines = nullptr,
               bool default_set = false);
+
+/// The form rule of an inference stage: every variant derives the form of the first one, so
+/// that nothing of the stream depends on which variant runs (one set of rings, one chunk pool,
+/// one set of State buffers, one latency model). Compares what the validator derived for the
+/// variant `other_variant` under the contract the first was derived under: the number of tensors
+/// per side and, at every position, the role, the canonical name, the dtype, the resolved extents,
+/// the channel count, the window in effect (its minimum, its maximum, the overlap and the
+/// value a flexible one is pinned to), the hop and the Time axis; then the anchor, the State
+/// pairs (which output feeds which input) and whether the handler is exclusive. The comparison
+/// is on the resolved quantities, so two configs that spell a window differently (declared
+/// against derived from the Time extent) and resolve to the same one are variants. Never
+/// compared, free per variant: the model entries (engines, providers, files or bytes), their
+/// layouts and binding names, the extensions, default_engine and default_provider,
+/// max_instances and the internal latency. Throws StatusError with ANIRA_ERROR_CONFIG naming
+/// the variant, the side, the slot, the tensor's canonical name, the property and both values.
+/// `other_variant` and `first_variant` are the two variants' indices in the stage, which the
+/// message names them by: the first one is variant 0 unless a handler removed that one.
+void check_same_form(const anira_model_config& first,
+                     const Derived& first_derived,
+                     const anira_model_config& other,
+                     const Derived& other_derived,
+                     size_t other_variant,
+                     size_t first_variant = 0);
+
+/// The form of the stream alone: a derivation's tensors, anchor and exclusivity without its
+/// rows and plans, which are one variant's own. What a handler over several variants keeps
+/// beside each variant's derivation and its session reads by reference.
+Derived form_of(const Derived& derived);
 
 /// The ring dtype of every slot: two vectors sized to the model's input and output lists,
 /// each slot's spec's dtype, then each entry of the Hard contract's ring dtypes resolved

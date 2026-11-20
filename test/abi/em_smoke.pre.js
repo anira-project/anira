@@ -5,6 +5,8 @@
 // em_smoke.c (offsetof), set into Module.smoke.layout before the first crossing.
 Module.smoke = {
   layout: null,
+  // The serial of the loaded model the engine ran last: the fifth word of the call's record.
+  serial: 0,
   counts: {
     pre: 0,
     post: 0,
@@ -14,6 +16,11 @@ Module.smoke = {
     unprepare: 0,
     release: 0,
     process: 0,
+    // The crossings behind an unload, the loaded models the last one listed, and whether the
+    // model the engine ran last was among them.
+    unload: 0,
+    stillLoaded: 0,
+    lastRunListed: 0,
     query: 0,
     log: 0,
     thrown: 0,
@@ -40,8 +47,11 @@ const PHASE = {
   RESET: 7,
   UNPREPARE: 8,
   INIT: 9,
+  UNLOAD: 11,
   QUERY: 12,
 };
+// The loaded model's serial in the record an engine call receives as its prepared pointer.
+const RECORD_SERIAL = 16;
 const THROWING_KEY = 99;
 
 globalThis[Symbol.for('anira.registry')] = {
@@ -88,10 +98,25 @@ globalThis[Symbol.for('anira.registry')] = {
       HEAPU32[(b >>> 2) + 1] = 0;
       return 0;
     }
+    if (phase === PHASE.UNLOAD) {
+      // What a thread that runs engine calls hands over once a model was unloaded: the serials
+      // of the models loaded now (a) and their count (b). The package's registry destroys its
+      // object of every other model here.
+      counts.unload += 1;
+      counts.stillLoaded = b;
+      counts.lastRunListed = 0;
+      for (let i = 0; i < b; ++i) {
+        if (HEAPU32[(a >>> 2) + i] === Module.smoke.serial) {
+          counts.lastRunListed = 1;
+        }
+      }
+      return 0;
+    }
     if (phase !== PHASE.INFERENCE) {
       return -1;
     }
     counts.process += 1;
+    Module.smoke.serial = HEAPU32[(b + RECORD_SERIAL) >>> 2];
     const input = HEAPU32[(a + layout.ctxInputs) >>> 2];
     const output = HEAPU32[(a + layout.ctxOutputs) >>> 2];
     const src = Module._anira_tensor_data_f32(input) >>> 2;

@@ -24,9 +24,18 @@ export type PlanQuery = {
   providerId?: string
 }
 
+/**
+ * The backend fields of a `PlanQuery` (`anira::PlanQuery::Backend`): what
+ * `InferenceHandler.setBackend` takes, an engine and a provider, each exact or left out.
+ */
+export type PlanQueryBackend = Omit<PlanQuery, 'variant'>
+
 /** One plan of a report (`anira_plan_info`): the engine and provider it runs on, its budget. */
 export type PlanInfo = {
-  /** The variant of the inference stage; 0 in this pre-release. */
+  /**
+   * The variant the plan runs: its index in the list `Pipeline.addInference` took, or the one
+   * `InferenceHandler.addVariant` returned.
+   */
   variant: number
   /** `anira_engine`; `ANIRA_ENGINE_CUSTOM` beside `engineId`. */
   engine: number
@@ -74,6 +83,11 @@ export type PlanInfo = {
    * never gated by it.
    */
   rtVerdict: number
+  /**
+   * `anira_plan_state`: `ANIRA_PLAN_READY`, or `ANIRA_PLAN_REMOVED` for a plan of a variant
+   * `InferenceHandler.removeVariant` took out, whose row stays at its index with what it said.
+   */
+  state: number
 }
 
 /** One slot of a plan (`anira_plan_slot`): the edge its tensor takes into the engine. */
@@ -136,12 +150,13 @@ export type PlanExtension = {
 }
 
 // The wasm32 layouts of the three Tier-2 rows (anira/abi/handler.h): 4-byte pointers, the
-// double of anira_plan_info at 24, its memory_kind in the tail at 44 and the warm-up and
-// real-time fields behind it (the doubles at 56, 64 and 80), the two int64_t of
+// double of anira_plan_info at 24, its memory_kind in the tail at 44, the warm-up and
+// real-time fields behind it (the doubles at 56, 64 and 80) and the state at 96 (behind
+// reserved2 at 92; reserved3 at 100 ends the record), the two int64_t of
 // anira_plan_slot's tail at 64 and 72. The rows are enumerated at these strides (the entries take
 // the caller's element size and write the fields the stride covers).
 const PLAN_INFO = {
-  size: 96,
+  size: 104,
   variant: 4,
   engine: 8,
   provider: 12,
@@ -159,6 +174,7 @@ const PLAN_INFO_TAIL = {
   rtParallel: 76,
   rtFactor: 80,
   rtVerdict: 88,
+  state: 96,
 }
 const PLAN_SLOT = {
   size: 80,
@@ -185,12 +201,39 @@ const PLAN_EXT = { size: 20, index: 4, host: 8, kind: 12, consumer: 16 }
 const PLAN_QUERY = { size: 28, variant: 4, backend: 8 }
 const BACKEND_ID = { size: 20, engine: 4, provider: 8, engineId: 12, providerId: 16 }
 
+/** @internal The bytes of an `anira_backend_id` record on wasm32. */
+export const BACKEND_ID_SIZE = BACKEND_ID.size
+
 /**
- * The plan report of a handler's last prepare (`anira_plan_report`): one plan per model entry
- * and candidate that matched, in plan order, with its slots and the extensions it consumes;
- * what `InferenceHandler.prepare` returns, as `anira::PlanReport` of `anira.hpp`. A view: it
- * reads the handler's report at every call, valid until the handler's next prepare or its
- * destroy. A plan is a dense index below `numPlans()`, what `InferenceHandler.setPlan` takes.
+ * @internal Writes an `anira_backend_id` at `at` from the backend fields of a query, a field
+ * left out as `ANIRA_ENGINE_NONE` / `ANIRA_PROVIDER_NONE` (any). The two ids are C strings the
+ * caller placed (0 for none), which live as long as the record is read.
+ */
+export function writeBackendId(
+  u32: Uint32Array,
+  at: number,
+  backend: PlanQueryBackend,
+  engineId: number,
+  providerId: number
+): void {
+  u32[at >>> 2] = BACKEND_ID.size
+  u32[(at + BACKEND_ID.engine) >>> 2] = backend.engine ?? anira_engine.ANIRA_ENGINE_NONE
+  u32[(at + BACKEND_ID.provider) >>> 2] =
+    backend.provider ?? anira_provider.ANIRA_PROVIDER_NONE
+  u32[(at + BACKEND_ID.engineId) >>> 2] = engineId
+  u32[(at + BACKEND_ID.providerId) >>> 2] = providerId
+}
+
+/**
+ * A plan report of a handler (`anira_plan_report`): one plan per variant, model entry and
+ * candidate that matched, in plan order, with its slots and the extensions it consumes; what
+ * `InferenceHandler.prepare` returns, as `anira::PlanReport` of `anira.hpp`. A view: it reads
+ * the handler's report at every call, valid until the handler's next prepare or its destroy. A
+ * plan is a dense index below `numPlans()`, what `InferenceHandler.setPlan` takes. A handler
+ * makes a new report at every prepare and at every `InferenceHandler.addVariant` and
+ * `removeVariant` that succeeds, and leaves the earlier ones of that prepare as they were: a
+ * `PlanReport` taken before such a call keeps reading the rows it had, and
+ * `InferenceHandler.planReport()` returns the newest.
  */
 export class PlanReport {
   readonly abi: AniraBindings
@@ -201,12 +244,20 @@ export class PlanReport {
     this.report = report
   }
 
-  /** The number of plans (`anira_plan_report_num_plans`). */
+  /**
+   * The number of plans, the rows of removed variants included
+   * (`anira_plan_report_num_plans`).
+   */
   numPlans(): number {
     return this.abi.anira_plan_report_num_plans(this.report)
   }
 
-  /** One row per plan, in plan order (`anira_plan_report_plans`). */
+  /**
+   * One row per plan, in plan order (`anira_plan_report_plans`). A plan keeps its index between
+   * two prepares: `InferenceHandler.addVariant` appends rows, and `removeVariant` leaves the
+   * rows of the variant it takes out where they are, their `state` `ANIRA_PLAN_REMOVED`
+   * (`ANIRA_PLAN_READY` for every plan that runs). A prepare numbers the plans anew.
+   */
   plans(): PlanInfo[] {
     return this.rows(
       PLAN_INFO.size,
@@ -228,6 +279,7 @@ export class PlanReport {
         rtParallel: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.rtParallel) >>> 2],
         rtFactor: heap(m).HEAPF64[(row + PLAN_INFO_TAIL.rtFactor) >>> 3],
         rtVerdict: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.rtVerdict) >>> 2],
+        state: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.state) >>> 2],
       })
     )
   }
@@ -288,10 +340,11 @@ export class PlanReport {
 
   /**
    * The first plan, in plan order, that has every property the query names
-   * (`anira_plan_report_find`, as `anira::PlanReport::find`): the index `InferenceHandler.setPlan`
-   * takes, or null when no plan has them (where C++ returns an empty optional). Allocates
-   * nothing on the heap. A query against the pair rule (`ANIRA_ENGINE_CUSTOM` without
-   * `engineId`, an id beside a built-in value) throws an AniraError.
+   * (`anira_plan_report_find`, as `anira::PlanReport::find`; a row marked `ANIRA_PLAN_REMOVED`
+   * is skipped): the index `InferenceHandler.setPlan` takes, or null when no plan has them
+   * (where C++ returns an empty optional). Allocates nothing on the heap. A query against the
+   * pair rule (`ANIRA_ENGINE_CUSTOM` without `engineId`, an id beside a built-in value) throws
+   * an AniraError.
    */
   find(query: PlanQuery = {}): number | null {
     if (this.report === 0) {
@@ -308,16 +361,10 @@ export class PlanReport {
       const providerId =
         query.providerId === undefined ? 0 : m.stringToUTF8OnStack(query.providerId)
       const q = m.stackAlloc(PLAN_QUERY.size)
-      const b = q + PLAN_QUERY.backend
       const u32 = heap(m).HEAPU32
       u32[q >>> 2] = PLAN_QUERY.size
       u32[(q + PLAN_QUERY.variant) >>> 2] = query.variant ?? ANIRA_VARIANT_ANY
-      u32[b >>> 2] = BACKEND_ID.size
-      u32[(b + BACKEND_ID.engine) >>> 2] = query.engine ?? anira_engine.ANIRA_ENGINE_NONE
-      u32[(b + BACKEND_ID.provider) >>> 2] =
-        query.provider ?? anira_provider.ANIRA_PROVIDER_NONE
-      u32[(b + BACKEND_ID.engineId) >>> 2] = engineId
-      u32[(b + BACKEND_ID.providerId) >>> 2] = providerId
+      writeBackendId(u32, q + PLAN_QUERY.backend, query, engineId, providerId)
       try {
         return this.abi.anira_plan_report_find(this.report, q)
       } catch (error) {

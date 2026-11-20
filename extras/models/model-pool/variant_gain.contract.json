@@ -1,0 +1,6 @@
+{
+  "hard": {
+    "budget": "measured",
+    "warmup": "until_stable"
+  }
+}

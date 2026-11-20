@@ -49,6 +49,36 @@ keeps in flight, so a wait-free ``reset`` never runs short; :doc:`latency`, *Inf
 Under an Async contract, refused at prepare in this pre-release, every phase runs on an inference
 thread.
 
+The plan table
+--------------
+
+A session holds one *plan slot* per plan: the loaded model, the session's prepared handle over it
+and the list of jobs waiting for an instance of it. The plans of every model variant of the
+inference stage are slots of the one table, and one stream runs them all (:ref:`usage-variants`).
+
+- **A chunk carries its plan.** When the driver thread forms a chunk it stamps the selected plan on
+  it: the index, the slot, and copies of what the later phases report (the variant, the engine and
+  the provider). The inference thread and every later phase read the chunk, never the table, so a
+  chunk in flight finishes on the plan it was formed on whatever is selected or removed meanwhile.
+- **A slot counts the chunks that need it.** The count goes up at the stamp and down when an
+  inference thread is done with the chunk. It does not depend on the driver thread collecting the
+  result, so a stopped transport holds no slot.
+- **The table is a published snapshot.** The session publishes its table through an RCU
+  (``thl::RCU`` of the private tanh-lib copy). An entry of the driver thread that can form a chunk
+  reads it through the table's one reader slot, held until the entry returns, and stamps every
+  chunk of the call from that one version; reading allocates nothing and locks nothing. A control
+  thread publishes a new table when a variant is added or removed and waits for the reader that
+  was out. The handler's plan rows are published the same way for the three selection entries,
+  with a reader slot of their own, so neither group holds the other up. An entry that finds its
+  group's slot held returns ``ANIRA_ERROR_CONCURRENT_CALL``: from a selection entry a legal
+  overlap (the caller calls again), from a driver entry a second driver thread, which the thread
+  contract forbids.
+- **The control lock.** One mutex per handler serialises ``prepare``, ``add_variant``,
+  ``remove_variant`` and ``destroy``. No real-time path takes it.
+
+An add publishes the session's table first and the rows second, a removal the rows first and the
+table second, so every index a thread can select has a slot in the table the driver thread reads.
+
 Threads
 -------
 

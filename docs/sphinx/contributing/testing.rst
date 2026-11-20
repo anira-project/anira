@@ -33,9 +33,14 @@ directory decides the binary (``test/CMakeLists.txt``).
   library-unload harness, the installed-package consumers. ``test/support/`` is shared
   infrastructure.
 - A binary is white-box or black-box (``anira_add_test_binary(<target> [WHITE_BOX] ...)``). The
-  white-box ones (``test_utils``, ``test_scheduler``, ``test_engines``, ``test_abi``) link the
-  library's objects with ``src/`` on the include path and ``ANIRA_STATIC``; every other binary links
-  ``anira::anira`` and sees only what a consumer sees.
+  white-box ones (``test_utils``, ``test_scheduler``, ``test_engines``, ``test_abi``,
+  ``test_abi_allocation``) link the library's objects with ``src/`` on the include path and
+  ``ANIRA_STATIC``; every other binary links ``anira::anira`` and sees only what a consumer sees.
+- ``test_abi_allocation`` (``test/abi/test_VariantSetAllocation.cpp``) is a binary of its own
+  because it replaces the global ``operator new`` and ``operator delete``: it counts the
+  allocations of a control entry and makes each of them fail in turn. It is built on Linux and
+  macOS, and not under ThreadSanitizer or LeakSanitizer, whose runtimes define these operators
+  themselves (``test/CMakeLists.txt`` has the reasons).
 - The core's C++ headers are private and never installed. What anira installs is the list of
   ``cmake/public-headers.cmake``; a header under ``include/anira`` that is not listed fails the
   configure.

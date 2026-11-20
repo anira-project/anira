@@ -40,7 +40,7 @@ else()
 	set(FORMATS_TO_BUILD VST3 Standalone)
 endif()
 
-# The model the plugin runs. Every variant loads its model file and contract file from
+# The model the plugin runs. Every value loads its model file and contract file from
 # extras/models (model_files.h) the same way; see PluginProcessor.h.
 # 0 -> steerable-nafx CNN
 # 1 -> steerable-nafx CNN, with the configuration files and the model files compiled into the
@@ -51,7 +51,9 @@ endif()
 # 5 -> SimpleGainNetwork, stereo
 # 6 -> RAVE funk drum
 # 7 -> RAVE funk drum as an encoder and a decoder handler
-set(MODEL_TO_USE 1 CACHE STRING "The model the example plugin runs, 0 to 7; see PluginProcessor.h")
+# 8 -> VariantGainNetwork: three models of one form (y = 0.5 x, 2 x, -x) as the variants of one
+#      inference stage, switched by the "Model" parameter
+set(MODEL_TO_USE 1 CACHE STRING "The model the example plugin runs, 0 to 8; see PluginProcessor.h")
 add_compile_definitions(MODEL_TO_USE=${MODEL_TO_USE})
 
 set (TARGET_NAME anira-juce-plugin-example)
@@ -134,7 +136,7 @@ target_link_libraries(${TARGET_NAME}
 )
 
 if(MODEL_TO_USE EQUAL 1)
-	# Variant 1 ships without the model tree: the CNN's model file, its contract file and the
+	# Value 1 ships without the model tree: the CNN's model file, its contract file and the
 	# four exports the model file names are compiled into the plugin. The symbol names are
 	# JUCE's (the file name without punctuation, the extension after an underscore).
 	set(_cnn_dir "${ANIRA_EXTRAS_MODELS_DIR}/cnn")

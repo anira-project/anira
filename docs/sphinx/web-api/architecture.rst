@@ -12,7 +12,10 @@ The main thread
    context, the configs, the pipeline, the handler, its prepare), and so do the main-thread
    phases of a JavaScript processor (``init``, ``prepare``, ``unprepare``, ``release``) and an
    engine's ``query``. A prepare whose contract warms up spins here while the Workers run the pass,
-   so it needs them in their loops first (:js:meth:`Context.ready`). There is no log drain thread
+   so it needs them in their loops first (:js:meth:`Context.ready`). The control entries that run
+   beside a playing stream, :js:meth:`InferenceHandler.addVariant` and
+   :js:meth:`InferenceHandler.removeVariant`, run here too, while the audio thread renders: the
+   main thread blocks for the call, the audio thread never waits for it. There is no log drain thread
    on the web: :js:meth:`Anira.startLogPump` drains the real-time records on an interval.
 
 The context's inference Workers
@@ -76,7 +79,8 @@ Where Each Phase Runs
    * - processor ``preProcess``, ``postProcess``, ``reset`` (Hard contract)
      - the audio worklet (a ``workletModules`` module of
        :js:meth:`InferenceHandler.createAudioNode`)
-   * - processor ``beforeInference``, ``afterInference``; engine ``process``, ``reset``
+   * - processor ``beforeInference``, ``afterInference``; engine ``init``, ``load`` and a loaded
+       model's ``process``, ``reset``, ``destroy``
      - the inference Workers (the context's ``workerModule``)
    * - processor ``init``, ``prepare``, ``unprepare``, ``release``; engine ``query``
      - the main thread
@@ -95,7 +99,7 @@ globals, its own module graph, its own instance of the module's glue. Only the W
 is shared. No closure, object or class of the main thread reaches a Worker or the worklet, so a
 processor or an engine is defined in the realm that runs it, by the module that realm imports (the
 context's worker module, a ``workletModules`` module), and a pool of *N* threads builds *N*
-instances of each engine: *N* model loads.
+instances of each engine: up to *N* loads of each model, one in every Worker that runs it.
 
 A Worker runs the engines' ``init`` (which may be asynchronous: a fetch, a runtime to
 instantiate) and then enters the C loop, which blocks: it parks on ``memory.atomic.wait32`` while
@@ -110,9 +114,9 @@ Once the Workers run, what reaches a processor or an engine is what the shared m
   tensor);
 * a processor's ``prepared`` pointer, written by its ``prepare`` on the main thread and read by
   every phase in every realm;
-* an engine's model entry, read by anira's load on the main thread and handed to every call as
-  ``prepared`` (``load(model)``, :js:func:`~registry.engineModel`: the bytes the config's
-  loader attached, a view of the shared memory);
+* an engine's model entry, read by anira's load on the main thread and handed to the engine's
+  ``load`` in each Worker that runs the model (``info.modelBytes``: the bytes the config's loader
+  attached, a view of the shared memory; :ref:`web-engine-loaded`);
 * a block of the page's own in the WebAssembly heap (``anira.module._malloc``), coordinated with
   ``Atomics``.
 

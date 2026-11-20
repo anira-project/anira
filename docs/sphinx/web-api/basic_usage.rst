@@ -89,7 +89,7 @@ model entry whose engine the module compiled in (the ONNX Runtime one) or a Java
 fetches the entry's file relative to the config's URL and attaches it as bytes
 (``anira_model_config_set_model_bytes``); the other entries (a LibTorch or a TFLite one) keep
 their paths unfetched. A JavaScript engine reads its entry's bytes from that memory in every
-Worker (``load(model)``, :doc:`custom_inference_backends`; the ONNX Runtime Web engine does), so
+Worker (``load(info)``, :doc:`custom_inference_backends`; the ONNX Runtime Web engine does), so
 each model file is fetched once. Serve the model files beside the config the way its paths say. A contract
 file may leave the Hard host blocks to the host: :js:func:`~renderGeometry.measureRenderGeometry` gives them, blocks
 from the render quantum up to the context's burst at the context's rate. A live context renders
@@ -127,7 +127,9 @@ JavaScript engine, ``{ provider }`` for a provider whatever its engine. It retur
 plan matches and throws an :js:class:`AniraError` for a query against the pair rule (an id beside
 a built-in value, ``ANIRA_ENGINE_CUSTOM`` without one), and the index goes to
 :js:meth:`InferenceHandler.setPlan`. A re-prepare starts on the default again, so the example
-picks its plan in the report of every prepare.
+picks its plan in the report of every prepare. :js:meth:`InferenceHandler.setBackend` selects a
+backend without the lookup, and :js:meth:`InferenceHandler.setModel` another variant of the
+inference stage (`Model Variants`_).
 
 5. The Audio Node
 -----------------
@@ -175,6 +177,71 @@ are running already: the prepare awaited ``context.ready()``).
    :dedent:
 
 C objects are freed by their ``destroy``, never by the garbage collector.
+
+Model Variants
+--------------
+
+A handler runs several models of one form in one stream and switches between them while the node
+renders (:ref:`usage-variants`). The members are ``anira.hpp``'s: :js:meth:`Pipeline.addInference`
+takes the list, :js:meth:`InferenceHandler.setModel` and :js:meth:`InferenceHandler.setBackend`
+move one axis of the selection, :js:meth:`InferenceHandler.addVariant` and
+:js:meth:`InferenceHandler.removeVariant` change the set at run time, and ``variantState`` of
+:js:meth:`ContractHandle.hard` is ``anira::Hard::variant_state``. ``half``, ``twice`` and
+``inverted`` are three :js:class:`ModelConfig` objects of one form, each from its own model file:
+
+.. code-block:: ts
+
+   const pipeline = Pipeline.create(anira).addInference([half, twice]) // variants 0 and 1
+   const handler = InferenceHandler.create(context, pipeline)
+   const contract = ContractHandle.hard(anira, {
+     hostBlockMin: geometry.quantum,
+     hostBlockMax: geometry.burst,
+     hostRate: audioContext.sampleRate,
+     variantState: anira_variant_state.ANIRA_VARIANT_STATE_KEEP, // left out: ANIRA_VARIANT_STATE_FRESH
+   })
+   await context.ready()
+   handler.prepare(contract) // every plan of both variants, loaded and measured
+   const audioNode = await handler.createAudioNode(audioContext)
+
+   handler.setModel(1) // from the next chunk the render callback forms
+
+   // while the node renders
+   const added = handler.addVariant(inverted) // variant 2; blocks this thread: the load, the warm-up
+   handler.setModel(added)
+   handler.removeVariant(0) // blocks until variant 0's model is released
+   for (const plan of handler.planReport().plans()) {
+     if (plan.state === anira_plan_state.ANIRA_PLAN_REMOVED) continue // variant 0's rows keep their indices
+     console.log(`variant ${plan.variant}: budget ${plan.budgetMs} ms`)
+   }
+
+- **The selection** (``setPlan``, ``setModel``, ``setBackend``) is a store the render callback
+  reads when it forms its next chunk. A chunk in flight finishes on its plan, and nothing
+  restarts. ``setModel`` and ``setBackend`` throw an :js:class:`AniraError` with
+  ``ANIRA_ERROR_NOT_FOUND`` when the variant has no plan on that backend; the selection is then as
+  it was (:ref:`usage-variant-switch`).
+- **The control entries run on the main thread while the worklet renders.**
+  ``addVariant`` and ``removeVariant`` block the main thread like ``prepare``, and the audio thread
+  keeps calling the handler meanwhile: the render callback is the driver thread and reads the plan
+  table through a reader slot it holds for one quantum. :js:meth:`InferenceHandler.prepare` is
+  refused while an audio node streams (re-prepare through the node, :doc:`audio_nodes`);
+  ``addVariant`` and ``removeVariant`` are not, and need no hold.
+- ``addVariant`` **warms up on the Workers.** Under a contract that warms up, the new plans without
+  a stored figure are measured on the inference Workers, beside the stream's own inferences, while
+  the main thread waits; the Workers must be in their loops (``await context.ready()``), as for a
+  prepare. Quanta may miss during the call.
+- ``removeVariant`` **waits** for the quantum in flight to return and for the variant's inferences
+  on the Workers to end, then releases the variant's model. It throws ``ANIRA_ERROR_INVALID_STATE``
+  for the variant of the selected plan and for the last variant, ``ANIRA_ERROR_NOT_FOUND`` for an
+  index that names no variant.
+- **Read the report again.** Each call makes a new report: ``handler.planReport()`` returns the
+  newest, and a :js:class:`PlanReport` taken earlier keeps the rows it had until the next prepare.
+  ``PlanInfo.state`` is ``ANIRA_PLAN_READY`` or ``ANIRA_PLAN_REMOVED``; a removed plan keeps its
+  row and its index, and a variant's index is never given to another variant. A prepare numbers
+  the plans anew and keeps the variants' indices (:ref:`usage-variant-set`).
+- **The state of a switch** is the contract's: ``variantState`` (the contract file's
+  ``"variant_state"``), ``ANIRA_VARIANT_STATE_FRESH`` when left out (:ref:`usage-variant-state`).
+- Every variant stays loaded until it is removed, in the module's one memory
+  (:ref:`the memory <web-memory>`).
 
 Complete Examples
 -----------------

@@ -187,8 +187,13 @@ The gates
        on a Wasm Worker), ``anira_em_mutex`` (two threads building and tearing down handlers),
        ``anira_em_pool`` (a context of two Worker threads with a worker module),
        ``anira_em_console`` (one warning reaches ``console.warn`` once), ``anira_em_runtime`` (a
-       library module keeps its runtime alive) and ``anira_em_oom`` (a full heap refuses a handler
-       with ``ANIRA_ERROR_OUT_OF_MEMORY``). ``build_web`` then checks that ``web/wasm/AniraWeb.d.ts``
-       exports exactly the three symbol lists plus ``_malloc`` and ``_free``.
+       library module keeps its runtime alive), ``anira_em_oom`` (a full heap refuses a handler
+       with ``ANIRA_ERROR_OUT_OF_MEMORY``) and ``anira_em_backoff`` (the backoff of the library's
+       polling loops waits on a Wasm Worker, which is no pthread). The gates link with Emscripten's
+       assertions, and each one that runs threads links ``test/abi/em_gate.pre.js``: an abort on
+       any of its threads, and an error no code of a Worker catches, ends the process with a
+       failure (a Worker's would otherwise end that Worker alone and leave the verdict to the main
+       thread). ``build_web`` then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the
+       three symbol lists plus ``_malloc`` and ``_free``.
 
 An ``abidiff`` against the last tag joins the gates at the v3.0.0 freeze.

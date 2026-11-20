@@ -71,11 +71,14 @@ the worklet's module):
 import { anira_status, defineEngine, engineTensors } from '@anira-project/anira/scope'
 
 defineEngine('org.example.double', (env) => ({
-  process(ctx: number) {
-    const { inputs, outputs } = engineTensors(env, ctx)
-    outputs[0].f32!.set(inputs[0].f32!.map((x) => 2 * x))
-    return anira_status.ANIRA_OK
-  },
+  // once per loaded model, in each Worker that runs it: the object its inferences run on
+  load: () => ({
+    process(ctx: number) {
+      const { inputs, outputs } = engineTensors(env, ctx)
+      outputs[0].f32!.set(inputs[0].f32!.map((x) => 2 * x))
+      return anira_status.ANIRA_OK
+    },
+  }),
 }))
 ```
 
@@ -89,7 +92,9 @@ const pipeline = Pipeline.create(anira)
   .addEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
 ```
 
-A JavaScript engine reads its model entry in each Worker (`load(model)`: the bytes
+A JavaScript engine has the shape of `anira::Engine`: its `load(info)` returns one object per
+loaded model (`process`, `reset`, and `destroy` when the model is unloaded), in each Worker that
+runs the model. It reads its model entry there (`info.modelBytes`: the bytes
 `ModelConfig.fromUrl` attached, a view of the shared memory), so a model file is fetched once:
 `defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb())` runs the model the config names for
 `org.anira.onnxruntime-web`, and the page adds it with `addEngine(ONNXRUNTIME_WEB_ENGINE_ID)`,

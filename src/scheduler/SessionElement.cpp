@@ -1,6 +1,7 @@
 #include "SessionElement.h"
 
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <concurrentqueue.h>
@@ -44,37 +45,203 @@ namespace anira {
 // complete (the public header forward-declares them).
 SessionElement::PlanSlot::PlanSlot() = default;
 SessionElement::PlanSlot::~PlanSlot() = default;
-SessionElement::PlanSlot::PlanSlot(PlanSlot&&) noexcept = default;
-SessionElement::PlanSlot& SessionElement::PlanSlot::operator=(PlanSlot&&) noexcept = default;
 
 SessionElement::SessionElement(int new_session_id,
                                capi::ProcessorRunner& processor,
-                               const anira_model_config& model,
+                               std::vector<size_t> internal_latency,
                                const capi::Derived& derived,
                                const capi::HardContract& hard,
                                uint32_t num_instances,
                                moodycamel::ProducerToken&& producer_token,
-                               anira::RtLatch* rt_latch)
-    : m_session_id(new_session_id)
+                               anira::RtLatch* rt_latch,
+                               std::atomic<uint32_t>* selection)
+    : m_current_plan(selection != nullptr ? *selection : m_current_plan_own)
+    , m_session_id(new_session_id)
     , m_producer_token(std::move(producer_token))
     // No blocks: an exclusive session's prepare reserves them for its struct pool through the
     // token (reserve_pending_dispatch), so enqueue_pending_dispatch() never allocates.
     , m_dispatch_pending(0)
     , m_dispatch_producer_token(m_dispatch_pending)
     , m_processor(processor)
-    , m_model(model)
+    , m_internal_latency(std::move(internal_latency))
     , m_derived(derived)
     , m_hard(hard)
     , m_num_instances(num_instances)
     , m_budget_ms(hard.m_budget_ms)
     // A 2.x session records into its own latch; a 3.x session into its handler's, which
     // outlives the session (the handler destroys its manager first).
-    , m_rt(rt_latch != nullptr ? rt_latch : &m_rt_own) {}
+    , m_rt(rt_latch != nullptr ? rt_latch : &m_rt_own) {
+    // A new session starts on plan 0, whoever owns the atomic: a handler's keeps the value of
+    // the session before this one.
+    m_current_plan.store(0, std::memory_order_relaxed);
+}
 
 bool SessionElement::select_plan(uint32_t plan) noexcept {
-    if (plan >= m_plans.size()) { return false; }
+    if (plan >= m_num_published_plans.load(std::memory_order_acquire)) { return false; }
     m_current_plan.store(plan, std::memory_order_relaxed);
     return true;
+}
+
+void SessionElement::publish_plans() {
+    commit_plans(stage_plans());
+}
+
+SessionElement::StagedPlanTable SessionElement::stage_plans(
+    std::span<const std::shared_ptr<PlanSlot>> added,
+    std::span<const uint32_t> removed) {
+    return m_plan_table.stage_replace([this, added, removed](PlanTable& table) {
+        table.m_slots.reserve(m_plans.size() + added.size());
+        for (const std::shared_ptr<PlanSlot>& slot : m_plans) {
+            table.m_slots.push_back(slot.get());
+        }
+        for (const std::shared_ptr<PlanSlot>& slot : added) { table.m_slots.push_back(slot.get()); }
+        for (const uint32_t plan : removed) {
+            if (plan < m_plans.size()) { table.m_slots[plan] = nullptr; }
+        }
+    });
+}
+
+void SessionElement::commit_plans(StagedPlanTable&& table) noexcept {
+    assert(std::ranges::equal(table->m_slots,
+                              m_plans,
+                              [](const PlanSlot* published, const std::shared_ptr<PlanSlot>& slot) {
+                                  return published == slot.get();
+                              }) &&
+           "the plan list is not the one the table was staged for");
+    const auto num_plans = static_cast<uint32_t>(table->m_slots.size());
+    m_plan_table.commit(std::move(table));
+    // Behind the table: an index select_plan lets through is one the newest table has.
+    m_num_published_plans.store(num_plans, std::memory_order_release);
+}
+
+void SessionElement::synchronize_plans() {
+    m_plan_table.synchronize();
+}
+
+bool SessionElement::select_plan_if(uint32_t& expected, uint32_t plan) noexcept ANIRA_NONBLOCKING {
+    return m_current_plan.compare_exchange_weak(expected,
+                                                plan,
+                                                std::memory_order_relaxed,
+                                                std::memory_order_relaxed);
+}
+
+uint64_t SessionElement::stamp_state_epoch(uint32_t variant) noexcept ANIRA_NONBLOCKING {
+    if (variant != m_last_variant) {
+        // The stream's first chunk is no switch, and under KEEP a switch starts nothing over.
+        if (m_last_variant != k_no_variant && m_hard.m_variant_state == ANIRA_VARIANT_STATE_FRESH) {
+            ++m_state_epoch;
+        }
+        m_last_variant = variant;
+    }
+    return m_state_epoch;
+}
+
+void SessionElement::stamp_slot(ThreadSafeStruct& chunk,
+                                uint32_t plan,
+                                PlanSlot* slot) noexcept ANIRA_NONBLOCKING {
+    chunk.m_plan = plan;
+    if (slot == nullptr) {
+        chunk.m_slot = nullptr;
+        chunk.m_variant = 0;
+        chunk.m_engine = ANIRA_ENGINE_NONE;
+        chunk.m_provider = ANIRA_PROVIDER_NONE;
+        chunk.m_engine_id = nullptr;
+        chunk.m_provider_id = nullptr;
+        chunk.m_state_alias = false;
+        return;
+    }
+    // Counted before anything else can see the chunk: the slot is needed from here until the
+    // chunk's worker side is finished, whatever path the chunk takes. On the driving thread
+    // this is inside the entry's read lease, so whoever takes the slot out of the table and
+    // waits for the leases (synchronize_plans) reads a count that has this chunk in it.
+    slot->retain_chunk();
+    chunk.m_slot = slot;
+    chunk.m_variant = slot->m_variant;
+    chunk.m_engine = slot->m_engine;
+    chunk.m_provider = slot->m_provider;
+    chunk.m_engine_id = slot->m_engine_id;
+    chunk.m_provider_id = slot->m_provider_id;
+    chunk.m_state_alias = slot->m_state_alias;
+}
+
+void SessionElement::stamp_selected_plan(ThreadSafeStruct& chunk,
+                                         const PlanTable& table) noexcept ANIRA_NONBLOCKING {
+    const std::vector<PlanSlot*>& slots = table.m_slots;
+    const auto slot_of = [&slots](uint32_t plan) noexcept -> PlanSlot* {
+        return plan < slots.size() ? slots[plan] : nullptr;
+    };
+    // The one load of the selection for this chunk.
+    const uint32_t selected = m_current_plan.load(std::memory_order_relaxed);
+    uint32_t plan = selected;
+    PlanSlot* slot = slot_of(plan);
+    if (slot == nullptr) {
+        // This table has no plan under the selection: the chunk runs the plan of the chunk
+        // before it, or the first plan the table has when that one was taken out as well.
+        plan = m_applied_plan;
+        slot = slot_of(plan);
+        for (uint32_t first = 0; slot == nullptr && first < slots.size(); ++first) {
+            plan = first;
+            slot = slots[first];
+        }
+        if (slot == nullptr) {
+            // A table without a plan: anira's own bug, and the chunk fails.
+            stamp_slot(chunk, selected, nullptr);
+            return;
+        }
+        if (selected < slots.size()) {
+            // The index is the table's and its plan was taken out: the selection goes back to
+            // the plan the stream runs, unless a caller selected another one meanwhile. An
+            // index beyond the table is a plan of a newer table: it stands, silently.
+            uint32_t expected = selected;
+            static_cast<void>(m_current_plan.compare_exchange_strong(expected,
+                                                                     plan,
+                                                                     std::memory_order_relaxed,
+                                                                     std::memory_order_relaxed));
+            if (m_rt->record(ANIRA_ERROR_NOT_FOUND)) {
+                ANIRA_LOG_RT_VIOLATION(log_group::k_scheduler,
+                                       "session %d: the selected plan %u was removed; the stream "
+                                       "stays on plan %u",
+                                       m_session_id,
+                                       static_cast<unsigned int>(selected),
+                                       static_cast<unsigned int>(plan));
+            }
+        }
+    }
+    m_applied_plan = plan;
+    stamp_slot(chunk, plan, slot);
+}
+
+void SessionElement::stamp_plan(ThreadSafeStruct& chunk, uint32_t plan) noexcept {
+    stamp_slot(chunk, plan, plan < m_plans.size() ? m_plans[plan].get() : nullptr);
+}
+
+const char* SessionElement::intern_id(const std::string& id) {
+    if (id.empty()) { return nullptr; }
+    return m_interned_ids.insert(id).first->c_str();
+}
+
+const char* SessionElement::StagedIds::stage(const SessionElement& session, const char* id) {
+    if (id == nullptr || *id == '\0') { return nullptr; }
+    std::string key(id);
+    if (const auto held = session.m_interned_ids.find(key); held != session.m_interned_ids.end()) {
+        return held->c_str();
+    }
+    return m_ids.insert(std::move(key)).first->c_str();
+}
+
+void SessionElement::adopt_ids(StagedIds&& ids) noexcept {
+    // Node by node: nothing is copied, so nothing is allocated and a string stays where
+    // stage() found it. A string the store has already would stay behind; stage() makes none.
+    m_interned_ids.merge(ids.m_ids);
+    assert(ids.m_ids.empty() && "a staged id was the session's already");
+}
+
+SessionElement::PlanSlot* SessionElement::ThreadSafeStruct::take_slot() noexcept {
+    return std::exchange(m_slot, nullptr);
+}
+
+void SessionElement::ThreadSafeStruct::leave_slot() noexcept {
+    if (PlanSlot* const slot = take_slot()) { slot->release_chunk(); }
 }
 
 SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<capi::DerivedSpec>& inputs,
@@ -209,7 +376,7 @@ size_t SessionElement::queue_capacity() const noexcept {
 }
 
 size_t SessionElement::output_model_latency(size_t slot) const noexcept {
-    return static_cast<size_t>(m_model.m_outputs[slot].m_latency);
+    return slot < m_internal_latency.size() ? m_internal_latency[slot] : 0;
 }
 
 void SessionElement::clear() {
@@ -281,6 +448,18 @@ void SessionElement::enqueue_pending_dispatch(
 std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_next_dispatch() {
     // Only one task may be dispatched at a time. Whoever flips the busy bit from
     // 0 to 1 (same epoch) owns the right to release the next pending task.
+    //
+    // The driving thread enqueues a chunk and then calls this function; the gate's holder
+    // releases the gate and then looks at the queue once more (below). Each side writes one
+    // word and then reads the other's, which is the store-buffering pattern: without a full
+    // barrier between its write and its read, both may read the old value, the enqueuer "busy"
+    // and the holder "empty", and the chunk stays parked behind a free gate until the driving
+    // thread's next call. One sequentially consistent fence per side, between that side's write
+    // and its read, rules it out: of the two fences one comes first, and the read behind the
+    // later one observes the write ahead of the earlier one. The queue's own stores and loads
+    // are moodycamel's (release and relaxed), so the fences are explicit. This one stands
+    // behind any enqueue of the calling thread and ahead of its read of the gate.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
     if ((gate & k_dispatch_busy) != 0 ||
         !m_stateful_dispatch_gate.compare_exchange_strong(gate,
@@ -305,6 +484,9 @@ std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_ne
                 // check and the new_data_request generation guard catch it, at the
                 // cost of one wasted dispatch. Do not "fix" this into a stronger
                 // invariant.
+                // No inference thread gets the entry: its count on its plan slot goes back
+                // first, while the chunk is still the gate-holder's.
+                next->leave_slot();
                 next->m_free.store(true, std::memory_order_release);
                 continue;
             }
@@ -312,8 +494,28 @@ std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_ne
             return next;  // keep busy; the task is now in flight
         }
         // Nothing pending: release ownership. Re-check to avoid a lost task that
-        // was enqueued between the failed dequeue and the release.
+        // was enqueued between the failed dequeue and the release. The fence between the
+        // release and the re-check is the holder's half of the pair described above.
+        //
+        // The invariant, for every site that frees the gate (release_dispatch) while the
+        // session runs: the same thread then passes a sequentially consistent fence and looks
+        // at the pending queue, and takes the gate again when the queue is not empty and the
+        // gate still free. Here that is the code below. Everywhere else it is a call of this
+        // function behind the release, whose first fence, acquire and dequeue are that look,
+        // repeated until a chunk is in the inference queue (the gate stays busy with it) or
+        // this function returns none: the end of a job and a dispatch the inference queue
+        // refused (InferenceThread::dispatch_next_pending), the same refusal on the driving
+        // thread (Core::try_dispatch_stateful), the last resort of a job that threw
+        // (InferenceThread::process_job) and the drain that could not requeue another
+        // session's job (Core::drain_inference_queue). A release without the look leaves the
+        // chunks behind it parked until the driving thread's next call. The releases that need
+        // none: the driving thread's discard_pending_dispatches, which emptied the queue while
+        // it held the gate and is the queue's one producer; reserve_pending_dispatch, at a
+        // prepare; and every release for a session that does not run (found uninitialised by
+        // a job, by its last resort or by another session's drain, or drained itself), whose
+        // parked chunks its prepare flushes or its release drops.
         release_dispatch(token);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         if (m_dispatch_pending.size_approx() == 0) { return nullptr; }
         gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
         if ((gate & k_dispatch_busy) != 0 || (gate | k_dispatch_busy) != token ||
@@ -358,7 +560,9 @@ void SessionElement::discard_pending_dispatches() {
     std::shared_ptr<ThreadSafeStruct> pending;
     while (m_dispatch_pending.try_dequeue(pending)) {
         // Never handed to a worker while we hold the gate — the direct-free is
-        // exclusive. Only m_free is written (see the filter above for why).
+        // exclusive. Only m_free is written (see the filter above for why), behind the
+        // chunk's count on its plan slot, which goes back with it.
+        pending->leave_slot();
         pending->m_free.store(true, std::memory_order_release);
     }
     release_dispatch(token);
@@ -366,16 +570,16 @@ void SessionElement::discard_pending_dispatches() {
 
 void SessionElement::force_reset_dispatch_chain() {
     // Quiescent contexts only (Core::drain_inference_queue has run): no task of
-    // this session is queued or running, but a laggard worker — one that was
-    // invisible to the drain and woke on the stale-skip path — may still
-    // TRANSIENTLY hold the gate while it filters the pending queue. Never erase a
-    // live holder's busy bit (an unconditional store here would let a later
-    // dispatch acquire the "freed" gate while the laggard still believes it owns
-    // it — two holders, mutual exclusion broken). Instead bump the epoch with a
-    // CAS that only succeeds on a free gate, waiting out any transient holder.
-    // Bounded: with the session generation already bumped by the caller's flow, a
-    // laggard holder only filters stale pending entries and releases — it never
-    // dispatches, so the busy phase is microseconds.
+    // this session is queued or running, its driving thread is in no call, and nothing holds
+    // the gate. A job counts on the session from before its enqueue until its thread is done
+    // with it (m_active_inferences), an inference thread touches the gate only inside such a
+    // job, and the drain returns at a count of zero: the laggard worker this function was
+    // written for, one the drain did not see, which woke later and held the gate while it
+    // filtered the pending queue, no longer exists. The epoch is still bumped with a CAS that
+    // only succeeds on a free gate, waiting out a holder, and never with a store: a store
+    // would erase a live holder's busy bit if there ever were one again (a later dispatch
+    // would acquire the "freed" gate while that holder still believes it owns it — two
+    // holders, mutual exclusion broken), and the loop costs nothing while there is none.
     uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
     while ((gate & k_dispatch_busy) != 0 ||
            !m_stateful_dispatch_gate.compare_exchange_weak(gate,
@@ -385,16 +589,20 @@ void SessionElement::force_reset_dispatch_chain() {
         std::this_thread::sleep_for(std::chrono::microseconds(50));
         gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
     }
-    // Epoch bumped first: a laggard acquiring from here on does so under the new
-    // epoch and finds only stale entries to filter. Flush whatever remains — the
-    // entries reference structs the caller is about to rebuild or wipe.
+    // Epoch bumped first: a release that still carried a token of the old epoch would be
+    // inert from here. Flush whatever remains — the entries reference structs the caller is
+    // about to rebuild or wipe. No inference thread gets them: each gives its count on its
+    // plan slot back, since the slots outlive the structs.
     std::shared_ptr<ThreadSafeStruct> drained;
-    while (m_dispatch_pending.try_dequeue(drained)) {}
+    while (m_dispatch_pending.try_dequeue(drained)) {
+        if (drained != nullptr) { drained->leave_slot(); }
+    }
 }
 
 void SessionElement::reserve_pending_dispatch() {
-    // The gate, busy under the current epoch, for the whole reservation: a laggard worker
-    // waits it out as in force_reset_dispatch_chain, and only a holder dequeues.
+    // The gate, busy under the current epoch, for the whole reservation: only a holder
+    // dequeues. Nothing else holds it at a prepare (see force_reset_dispatch_chain); the loop
+    // takes it as that function does.
     uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
     while ((gate & k_dispatch_busy) != 0 ||
            !m_stateful_dispatch_gate.compare_exchange_weak(gate,
@@ -423,13 +631,20 @@ void SessionElement::reserve_pending_dispatch() {
 }
 
 void SessionElement::complete_with_zeros(
-    const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct) {
+    const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct) noexcept {
     // The global queue rejected the task (momentarily full), so this inference is
     // dropped. Completing it with zeroed output keeps the stream time-aligned:
     // the output side consumes the task at its correct position like any other
     // and frees the struct, it just yields silence for this chunk.
+    // noexcept: a memset, plain stores, and the done signal (an atomic store, or the
+    // semaphore's release, see anira::Semaphore). The release of the dispatch gate that
+    // follows a drop therefore always runs.
     thread_safe_struct->zero_outputs();
     thread_safe_struct->m_completed_as_zeros = true;  // before the done signal
+    // No inference thread gets a chunk dropped here: its count on its plan slot goes back
+    // while the chunk is still the caller's. Nothing for a chunk an inference thread's job
+    // completes this way: the job took the slot and gives the count back at its end.
+    thread_safe_struct->leave_slot();
     if (uses_semaphore()) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
@@ -545,8 +760,8 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
 
     // The pending-dispatch chain must not survive the struct rebuild below: a
     // leftover entry would reference an orphaned struct and could be dispatched
-    // into the rebuilt session. Also opens a new dispatch epoch, invalidating
-    // any gate token a laggard worker may still hold from before the drain.
+    // into the rebuilt session. Also opens a new dispatch epoch: a gate token from
+    // before the drain, should a release still carry one, is inert.
     force_reset_dispatch_chain();
     // An exclusive session parks its chunks in the pending queue until the gate lets one go:
     // room for every struct of the pool there, as the inference queue gets (Core::
@@ -571,11 +786,12 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     // Every chunk's buffers start on the boundary the session's engines need to bind them in
     // place: the largest any plan's engine asks for (engine::Loaded::buffer_alignment).
     size_t alignment = engine::Loaded::k_default_buffer_alignment;
-    for (const PlanSlot& plan : m_plans) {
-        if (plan.m_loaded != nullptr) {
-            alignment = std::max(alignment, plan.m_loaded->buffer_alignment());
+    for (const std::shared_ptr<PlanSlot>& plan : m_plans) {
+        if (plan != nullptr && plan->m_loaded != nullptr) {
+            alignment = std::max(alignment, plan->m_loaded->buffer_alignment());
         }
     }
+    m_chunk_alignment = alignment;
     for (size_t i = 0; i < m_num_structs; ++i) {
         m_struct_pool.emplace_back(std::make_shared<ThreadSafeStruct>(m_derived.m_inputs,
                                                                       m_derived.m_outputs,
@@ -587,8 +803,18 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     }
 
     // The first inference of the new session is the first of a new stream: the engine of each
-    // session-exclusive plan resets before its own first one.
-    for (PlanSlot& plan : m_plans) { plan.m_engine_generation = k_no_generation; }
+    // session-exclusive plan resets before its own first one. The state epoch starts over with
+    // it: no chunk has been formed, so the stream's first one is no variant switch.
+    for (const std::shared_ptr<PlanSlot>& plan : m_plans) {
+        if (plan == nullptr) { continue; }  // an index whose plan was taken out
+        plan->m_engine_generation = k_no_generation;
+        plan->m_engine_state_epoch = 0;
+    }
+    m_state_epoch = 0;
+    m_last_variant = k_no_variant;
+    // The plan the stream starts on: the selection as it stands (the C handler selected its
+    // initial plan before this prepare).
+    m_applied_plan = m_current_plan.load(std::memory_order_relaxed);
 
     m_time_stamps.clear();
     m_time_stamps.reserve(m_num_structs);

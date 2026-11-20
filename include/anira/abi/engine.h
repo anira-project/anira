@@ -386,12 +386,14 @@ typedef anira_status (ANIRA_CALL* anira_engine_process_fn)(const anira_engine_ct
 /**
  * @brief Re-initialises the state the engine keeps per handler: for an exclusive handler
  * (ANIRA_PREPARE_EXCLUSIVE at its prepare), at the first inference of a new stream
- * (after prepare, after anira_handler_reset), on the inference thread, with that
- * inference's context, right before its process. The boundary is the plan's: after
- * prepare or a reset every plan of the handler is reset at its own first inference of
- * the new stream, whichever plan ran first, and a plan switch alone is none. Never for a
- * handler whose model is stateless, whose calls run on the shared slots and keep nothing
- * between them. NULL: nothing to reset.
+ * (after prepare, after anira_handler_reset) and at the first inference behind a switch
+ * to another variant under ANIRA_VARIANT_STATE_FRESH
+ * (anira_contract_hard_set_variant_state), on the inference thread, with that
+ * inference's context, right before its process. The boundary is the plan's: behind each
+ * of them every plan of the handler is reset at its own first inference, whichever plan
+ * ran first, and a plan switch inside one variant, or any switch under
+ * ANIRA_VARIANT_STATE_KEEP, is none. Never for a handler whose model is stateless, whose
+ * calls run on the shared slots and keep nothing between them. NULL: nothing to reset.
  * @param ctx The context of the first inference of the new stream, the one whose process
  *        follows; ANIRA_ENGINE_CALL_EXCLUSIVE is set.
  * @param prepared What this handler's prepare on this loaded model handed back.
@@ -418,14 +420,15 @@ typedef void (ANIRA_CALL* anira_engine_release_fn)(void* user_data);
  * @brief The query function of an engine, its own GetAvailableProviders: which of the providers
  * its descriptor declares it can serve here, now (a device present, a library loaded).
  * Called before init and any number of times, on the main thread only: at
- * anira_handler_create, where every candidate's provider of the engine is checked
- * against the answer, and at anira_pipeline_capabilities_backends / _edge, which report
- * the engine's rows. anira_handler_prepare, which may run on another thread, never calls
- * it: the handler keeps the answer its create got and checks the plans against that
- * again. It must not take the core's lifecycle lock (no context, handler or thread
- * entry) and may log. A status other than ANIRA_OK fails the calling entry with it,
- * naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable, the
- * rule for an engine without a query.
+ * anira_handler_create, which asks every engine of its pipeline that declares providers,
+ * also one no plan of the handler runs on, and checks every candidate's provider of the
+ * engine against the answer, and at anira_pipeline_capabilities_backends / _edge, which
+ * report the engine's rows. anira_handler_prepare, which may run on another thread,
+ * never calls it: the handler keeps the answer its create got and checks the plans
+ * against that again. It must not take the core's lifecycle lock (no context, handler or
+ * thread entry) and may log. A status other than ANIRA_OK fails the calling entry with
+ * it, naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable,
+ * the rule for an engine without a query.
  * @param info The facts of the core in effect at the call (the log level, the thread count the
  *        context asks for, the context asking); valid until the callback returns.
  * @param user_data The descriptor's user_data.

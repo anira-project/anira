@@ -798,6 +798,25 @@ anira_status ANIRA_CALL decline_miss(anira_handler* /*handler*/,
 }
 }  // namespace
 
+// The state of a variant switch is a field of the Hard half, fresh by default, and the copy a
+// handler snapshots at prepare carries it.
+TEST(AbiContract, TheVariantStateIsAFieldOfTheHardHalf) {
+    anira_contract* hard = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_contract_create_hard(0, 0, 0.0, &hard, &err), ANIRA_OK);
+    EXPECT_EQ(hard->hard()->m_variant_state, ANIRA_VARIANT_STATE_FRESH);
+    EXPECT_EQ(anira_contract_hard_set_variant_state(hard, ANIRA_VARIANT_STATE_KEEP), ANIRA_OK);
+    EXPECT_EQ(hard->hard()->m_variant_state, ANIRA_VARIANT_STATE_KEEP);
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange): the value past the last
+    EXPECT_EQ(anira_contract_hard_set_variant_state(hard, static_cast<anira_variant_state>(2)),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(hard->hard()->m_variant_state, ANIRA_VARIANT_STATE_KEEP)
+        << "a refusal stores nothing";
+    const anira_contract copy = *hard;
+    EXPECT_EQ(copy.hard()->m_variant_state, ANIRA_VARIANT_STATE_KEEP);
+    anira_contract_destroy(hard);
+}
+
 TEST(AbiContract, TheMissFunctionIsAPairOnAHardContract) {
     anira_contract* hard = nullptr;
     anira_contract* async_contract = nullptr;

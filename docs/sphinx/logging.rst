@@ -121,7 +121,10 @@ An ``ANIRA_NONBLOCKING`` entry that refuses does at most three things:
    slot's, a plan index out of range), ``ANIRA_ERROR_INVALID_STATE`` (a ``_wait`` entry without an
    inference thread inside its loop, an accessor asked outside its phase),
    ``ANIRA_ERROR_INVALID_ARGUMENT`` (a NULL buffer, a slot or channel out of range, a malformed host
-   tensor), ``ANIRA_ERROR_NOT_SUPPORTED`` (a host tensor with a flag bit this library does not know).
+   tensor), ``ANIRA_ERROR_NOT_SUPPORTED`` (a host tensor with a flag bit this library does not know),
+   ``ANIRA_ERROR_NOT_FOUND`` (a selection without a plan: ``set_model`` or ``set_backend`` for a
+   variant that has no plan on that backend, ``set_plan`` on the index of a removed plan; the
+   selection stays as it was, :ref:`usage-variant-switch`).
 
 3. It pushes one fixed-size record into the core's lock-free log queue, at Error, flagged
    ``ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION``.
@@ -131,7 +134,11 @@ as a violation: ``ANIRA_ERROR_ENGINE`` from the inference thread (a failed infer
 zeros), and ``ANIRA_ERROR_CAPACITY`` from the scheduler, for a hop it drops because every inference
 slot is busy (the entry still returns its own status, the hop is filled under the miss policy at its
 position, and the site "no free inference queue" logs one Warning per prepare). The same status
-*returned* by an entry (no free ticket slot, a full ring) is back-pressure: the return value only. A
+*returned* by an entry (no free ticket slot, a full ring) is back-pressure: the return value only.
+``ANIRA_ERROR_CONCURRENT_CALL`` depends on who returns it: a driver-thread entry that overlapped
+another one (two threads drive one handler) records it and logs it as a violation, like every other
+refusal; a selection entry that met another one inside the handler (``set_plan``, ``set_model``,
+``set_backend``: a legal overlap) returns it and records nothing. A
 chunk a queue of the core has no room for is recorded too (zeros at its position, logged once per prepare): a prepare reserves room for
 every chunk of its pool, so that takes an inference thread stalled inside its dequeue while the
 handler's other chunks go round, or no memory for a drain's requeue.
