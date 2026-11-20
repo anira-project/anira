@@ -4,9 +4,11 @@
  * on the command line (em_pool_module.mjs: a JavaScript engine that doubles its input, defined on
  * the registry of the Worker's scope) before it enters its loop. The main thread pushes blocks
  * through a Hard handler over that engine and waits for each (anira_handler_process_wait); the
- * blocks come back doubled at the handler's latency. Destroying the handler and the context
- * stops the pool: its Workers leave their loops and are terminated, and the core reports no
- * thread afterwards. Exit code 0 on success; every failed check prints one line.
+ * blocks come back doubled at the handler's latency. Destroying the handler unloads the engine's
+ * model, which both parked Workers are woken for at once (each releases what its engine built
+ * for it); destroying the context stops the pool: its Workers return from their loops and are
+ * terminated, and the core reports no thread and no loop afterwards. Exit code 0 on success;
+ * every failed check prints one line.
  * usage: node anira_em_pool.js <path of em_pool_module.mjs>
  */
 #include <anira/abi/config.h>
@@ -166,6 +168,10 @@ int main(int argc, char** argv) {
     anira_context_destroy(context);
     anira_context_config_destroy(config);
     check(anira_num_inference_threads() == 0u, "the pool stopped with the last context");
+    /* A Worker that left its loop by its own return, not one that died inside it: a thread that
+     * never unwinds stays counted. */
+    check(anira_em_inference_threads_in_loop() == 0u,
+          "every Worker of the pool returned from its loop");
     printf("%s: %d failed check(s)\n", s_failures == 0 ? "PASSED" : "FAILED", s_failures);
     return s_failures == 0 ? 0 : 1;
 }

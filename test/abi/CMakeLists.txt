@@ -60,6 +60,11 @@
 #                         a second instance in a worker_threads Worker, with its own stack
 #                         and thread-local block, inside anira_inference_thread_run_loop
 #                         (the park on the wake word, the notify, the has_exited stop)
+#   anira_em_backoff      the last phase of src/utils/Backoff.h on a Wasm Worker and on the
+#                         main thread (the private header alone, no library)
+# and the further node gates described where they are defined below. Each gate that runs
+# threads links em_gate.pre.js: an abort, or an error no code of a Worker catches, on any of
+# its threads ends the process with a failure.
 
 # The public header set, one list for the gates and the install rule (cmake/public-headers.cmake):
 # the C ABI headers, the platform headers of the registry (`platform:`, beside the umbrellas:
@@ -342,7 +347,8 @@ if(_abi_on_wasm)
     # The runtime that never exits on its own: a -pthread library module (--no-entry) that links
     # the archive with none of AniraWeb's flags (EXIT_RUNTIME at its default) still runs C after
     # a timer callback. Its incoming Module API is narrowed as AniraWeb's is: the default one
-    # names noExitRuntime, which includes the symbol and hides the failure.
+    # names noExitRuntime, which includes the symbol and hides the failure (onAbort is
+    # em_gate.pre.js's, below).
     add_executable(anira_em_runtime em_runtime.c)
     anira_abi_consumer_target(anira_em_runtime C)
     target_link_libraries(anira_em_runtime PRIVATE anira::anira)
@@ -358,7 +364,7 @@ if(_abi_on_wasm)
         -sMALLOC=emmalloc
         -sSTACK_SIZE=8388608
         -sASSERTIONS=0
-        -sINCOMING_MODULE_JS_API=onRuntimeInitialized,print,printErr
+        -sINCOMING_MODULE_JS_API=onRuntimeInitialized,print,printErr,onAbort
         -sNO_DISABLE_EXCEPTION_CATCHING
         "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_runtime.pre.js")
     set_property(TARGET anira_em_runtime APPEND PROPERTY LINK_DEPENDS
@@ -384,6 +390,30 @@ if(_abi_on_wasm)
         -sEXIT_RUNTIME=1
         -sASSERTIONS=1
         -sNO_DISABLE_EXCEPTION_CATCHING)
+    # The last phase of the library's Backoff (src/utils/Backoff.h) on a Wasm Worker, which is
+    # no pthread, and on the main thread: the private header compiled alone, no library, with
+    # Emscripten's assertions, which abort a Wasm Worker inside the libc's sleep.
+    add_executable(anira_em_backoff em_backoff.cpp)
+    set_property(TARGET anira_em_backoff PROPERTY COMPILE_DEFINITIONS "")
+    target_include_directories(anira_em_backoff PRIVATE "${anira_SOURCE_DIR}/src")
+    target_compile_options(anira_em_backoff PRIVATE ${_abi_strict_flags})
+    set_target_properties(anira_em_backoff PROPERTIES
+        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_link_options(anira_em_backoff PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sENVIRONMENT=node
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1)
+    # Every gate that runs threads fails on an abort, and on an error no code of a Worker
+    # catches, in any of them (em_gate.pre.js): a Worker's would otherwise end that Worker alone
+    # and leave the verdict to the status of main, which never hears of it.
+    set(_gate_pre_js "${CMAKE_CURRENT_SOURCE_DIR}/em_gate.pre.js")
+    foreach(_gate IN ITEMS anira_em_smoke anira_em_smoke_thread anira_em_mutex anira_em_pool
+            anira_em_console anira_em_runtime anira_em_oom anira_em_backoff)
+        target_link_options(${_gate} PRIVATE "--pre-js=${_gate_pre_js}")
+        set_property(TARGET ${_gate} APPEND PROPERTY LINK_DEPENDS "${_gate_pre_js}")
+    endforeach()
     # Both gates under node, in one target build_web runs after the build.
     add_custom_target(anira_abi_wasm_gates
         COMMAND ${CMAKE_COMMAND}
@@ -401,8 +431,9 @@ if(_abi_on_wasm)
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_runtime>
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_oom>
             "${anira_SOURCE_DIR}/extras/models/model-pool/gain.model.json"
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_backoff>
         DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread anira_em_mutex anira_em_pool
-            anira_em_console anira_em_runtime anira_em_oom
+            anira_em_console anira_em_runtime anira_em_oom anira_em_backoff
         COMMENT "Running the WebAssembly ABI gates under node: the layout table and the anira_em.h smoke"
         VERBATIM)
     return()

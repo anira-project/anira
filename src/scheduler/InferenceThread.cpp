@@ -342,9 +342,10 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 #endif
         if (execute()) { return; }
 #ifdef ANIRA_INFERENCE_WAKE_WORD
-        // WebAssembly: the last phase parks on the wake word, bounded, instead of the yield and
-        // sleep (which spin on the clock in this libc). Only a Worker runs run_loop(): the
-        // worklet and the main thread, which may not wait, never get here.
+        // WebAssembly: the last phase parks on the wake word, bounded, instead of the Backoff's
+        // own last phase (a wait nobody ends before its 100 us): an enqueue or a stop ends this
+        // one at once. Only a Worker runs run_loop(): the worklet and the main thread, which
+        // may not wait, never get here.
         if (backoff.in_last_phase()) {
             // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) the builtin's int*
             __builtin_wasm_memory_atomic_wait32(reinterpret_cast<int*>(&s_wake),
